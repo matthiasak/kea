@@ -241,6 +241,10 @@ final class Preferences: ObservableObject {
     @Published var bookmarksBar: Bool {
         didSet { store.set(bookmarksBar, forKey: "bookmarks.bar") }
     }
+    /// The bookmarks in a column of their own beside the page. Off unless asked for.
+    @Published var bookmarksSidebar: Bool {
+        didSet { store.set(bookmarksSidebar, forKey: "bookmarks.sidebar") }
+    }
     /// Where a link goes, at the bottom of the page while the pointer is on
     /// it (see StatusLine.swift). On unless turned off.
     @Published var showsLinks: Bool {
@@ -311,18 +315,15 @@ final class Preferences: ObservableObject {
     /// tabs down the side. Across the top every pin is a square.
     var showsPinRows: Bool { listsPins && sidebar }
     /// The AI add-on: summaries of the page and questions about it (see
-    /// AIAssist). Off unless asked for; nothing is sent until you ask.
+    /// AIAssist). On unless turned off; nothing is sent until you ask.
     @Published var ai: Bool {
         didSet {
-            // Never on in a build without it (AI.shipped); a test run's
-            // bench may still turn it on to exercise the code.
-            if ai, !AI.shipped, !Store.testing { ai = false; return }
             store.set(ai, forKey: "ai")
         }
     }
     /// Where its answers come from. None until you choose.
     @Published var aiProvider: AIProvider? {
-        didSet { store.set(aiProvider?.rawValue, forKey: "ai.provider") }
+        didSet { store.set(aiProvider?.id, forKey: "ai.provider") }
     }
     /// The model asked for at each provider, where it isn't the default.
     @Published private(set) var aiModels: [String: String] {
@@ -330,7 +331,7 @@ final class Preferences: ObservableObject {
     }
 
     func aiModel(for provider: AIProvider) -> String {
-        let chosen = (aiModels[provider.rawValue] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let chosen = (aiModels[provider.id] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         return chosen.isEmpty ? provider.defaultModel : chosen
     }
 
@@ -341,7 +342,7 @@ final class Preferences: ObservableObject {
         let looksLikeKey = ["sk-", "AIza", "AQ.", "gsk_", "hf_"].contains { name.hasPrefix($0) } || name.count > 100
         guard name.isEmpty || (!looksLikeKey && name.range(of: #"^[A-Za-z0-9._:/@\-]+$"#, options: .regularExpression) != nil)
         else { return }
-        aiModels[provider.rawValue] = name
+        aiModels[provider.id] = name
     }
 
     /// Two pages share one place in the tab row. Off unless asked for.
@@ -431,8 +432,8 @@ final class Preferences: ObservableObject {
         usesTabGroups = store.bool(forKey: "tabs.groups")
         listsPins = store.bool(forKey: "pins.list")
         splitView = store.bool(forKey: "splitView")
-        ai = AI.shipped && store.bool(forKey: "ai")
-        aiProvider = store.string(forKey: "ai.provider").flatMap(AIProvider.init(rawValue:))
+        ai = store.object(forKey: "ai") as? Bool ?? true
+        aiProvider = store.string(forKey: "ai.provider").flatMap(AIProvider.named)
         aiModels = store.dictionary(forKey: "ai.models") as? [String: String] ?? [:]
         commandBar = store.bool(forKey: "commandbar")
         let history = store.bool(forKey: "swipe.history")
@@ -450,6 +451,7 @@ final class Preferences: ObservableObject {
         peeksLinks = store.object(forKey: "links.peek") as? Bool ?? true
         littleLinks = store.bool(forKey: "links.little")
         bookmarksBar = store.bool(forKey: "bookmarks.bar")
+        bookmarksSidebar = store.bool(forKey: "bookmarks.sidebar")
         alwaysShowsDownloads = store.bool(forKey: "downloads.button")
         let links = store.object(forKey: "links.show") as? Bool ?? true
         showsLinks = links

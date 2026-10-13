@@ -83,13 +83,15 @@ final class AIClient: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
     // MARK: - asking
 
     /// The answer to `messages`, a piece at a time. `system` says what the
-    /// model is for and how to treat the page (see AIPage.system).
+    /// model is for and how to treat the page (see AIPage.system). `thinking`
+    /// caps how many tokens Gemini thinks in first; nil leaves it to the model.
     func stream(_ provider: AIProvider, model: String, system: String, messages: [AIMessage],
-                key: String?) -> AsyncThrowingStream<String, Error> {
+                key: String?, maxTokens: Int = 2048, thinking: Int? = nil) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
-                    let request = try Self.request(provider, model: model, system: system, messages: messages, key: key)
+                    let request = try Self.request(provider, model: model, system: system, messages: messages, key: key,
+                                                   maxTokens: maxTokens, thinking: thinking)
                     let (bytes, response) = try await session.bytes(for: request, delegate: self)
                     guard let http = response as? HTTPURLResponse else { throw AIError.unreadable }
                     guard (200..<300).contains(http.statusCode) else {
@@ -135,7 +137,7 @@ final class AIClient: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
     /// in the address, which ends up in errors and logs — and only once the
     /// address is known to be the provider's own.
     static func request(_ provider: AIProvider, model: String, system: String, messages: [AIMessage],
-                        key: String?) throws -> URLRequest {
+                        key: String?, maxTokens: Int = 2048, thinking: Int? = nil) throws -> URLRequest {
         let url: URL
         var body: [String: Any]
         switch provider.wire {
@@ -149,11 +151,11 @@ final class AIClient: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
             if provider == .openRouter { body["provider"] = ["zdr": true] }
             // A limit on the answer, for every one: OpenAI's own models take
             // it under its newer name.
-            body[provider == .openAI ? "max_completion_tokens" : "max_tokens"] = 2048
+            body[provider == .openAI ? "max_completion_tokens" : "max_tokens"] = maxTokens
         case .anthropic:
             url = provider.base.appendingPathComponent("messages")
             body = [
-                "model": model, "stream": true, "max_tokens": 2048, "system": system,
+                "model": model, "stream": true, "max_tokens": maxTokens, "system": system,
                 "messages": messages.map { ["role": $0.role.rawValue, "content": $0.text] },
             ]
         case .gemini:
@@ -163,10 +165,15 @@ final class AIClient: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
             parts?.queryItems = [URLQueryItem(name: "alt", value: "sse")]
             guard let made = parts?.url else { throw AIError.refusedHost }
             url = made
+            var generation: [String: Any] = ["maxOutputTokens": maxTokens]
+            // Gemini counts its thinking in maxOutputTokens and sends nothing
+            // while it thinks. A budget, not a level: 2.5 models refuse
+            // thinkingLevel, and 3.x models take a budget too.
+            if let thinking { generation["thinkingConfig"] = ["thinkingBudget": thinking] }
             body = [
                 "systemInstruction": ["parts": [["text": system]]],
                 "contents": messages.map { ["role": $0.role == .user ? "user" : "model", "parts": [["text": $0.text]]] },
-                "generationConfig": ["maxOutputTokens": 2048],
+                "generationConfig": generation,
             ]
         }
         guard allowed(url, for: provider) else { throw AIError.refusedHost }
@@ -213,17 +220,35 @@ final class AIClient: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
         return key
     }
 
-    /// The models an app on this Mac has, asked only when Settings shows
-    /// them. Ollama's "cloud" models, which it runs on ollama.com, are left
-    /// out: nothing chosen here leaves this Mac.
-    func localModels(_ provider: AIProvider) async -> [String] {
-        guard provider.isLocal else { return [] }
-        let url = provider == .ollama
+    /// The models a provider lists, asked only when Settings shows them or
+    /// the user asks. An app on this Mac needs no key; Ollama's "cloud"
+    /// models, which it runs on ollama.com, are left out: nothing chosen here
+    /// leaves this Mac. Empty on any failure.
+    func models(_ provider: AIProvider, key: String?) async -> [String] {
+        guard provider != .thisMac else { return [] }
+        var url = provider == .ollama
             ? provider.base.deletingLastPathComponent().appendingPathComponent("api/tags")
             : provider.base.appendingPathComponent("models")
+        var parts = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        switch provider.wire {
+        case .anthropic: parts?.queryItems = [URLQueryItem(name: "limit", value: "1000")]
+        case .gemini: parts?.queryItems = [URLQueryItem(name: "pageSize", value: "1000")]
+        case .openAI: break
+        }
+        if let made = parts?.url { url = made }
         guard Self.allowed(url, for: provider) else { return [] }
         var request = URLRequest(url: url)
-        request.timeoutInterval = 2
+        request.timeoutInterval = provider.isLocal ? 2 : 10
+        if !provider.isLocal {
+            guard let key, !key.isEmpty else { return [] }
+            switch provider.wire {
+            case .anthropic:
+                request.setValue(key, forHTTPHeaderField: "x-api-key")
+                request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+            case .gemini: request.setValue(key, forHTTPHeaderField: "x-goog-api-key")
+            case .openAI: request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+            }
+        }
         guard let (data, response) = try? await session.data(for: request, delegate: self),
               (response as? HTTPURLResponse)?.statusCode == 200,
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
@@ -236,7 +261,15 @@ final class AIClient: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
                 return name
             }
         }
-        return (json["data"] as? [[String: Any]] ?? []).compactMap { $0["id"] as? String }
+        if provider.wire == .gemini {
+            return (json["models"] as? [[String: Any]] ?? []).compactMap { model in
+                guard (model["supportedGenerationMethods"] as? [String])?.contains("generateContent") == true,
+                      let name = model["name"] as? String
+                else { return nil }
+                return name.hasPrefix("models/") ? String(name.dropFirst(7)) : name
+            }.sorted()
+        }
+        return (json["data"] as? [[String: Any]] ?? []).compactMap { $0["id"] as? String }.sorted()
     }
 
     // MARK: - reading

@@ -61,8 +61,7 @@ enum AISignIn {
     /// The callback, about to load in `tab`: taken — true — when it is the
     /// flow's. The tab is closed once the key is kept.
     static func intercept(_ url: URL, mainFrame: Bool, in tab: Tab?, browser: Browser) -> Bool {
-        guard AI.shipped || Store.testing,
-              url.scheme?.lowercased() == "https", url.host()?.lowercased() == callback.host(),
+        guard url.scheme?.lowercased() == "https", url.host()?.lowercased() == callback.host(),
               url.path == callback.path, mainFrame,
               let flow, let tab, tab.id == flow.tab
         else { return false }
@@ -79,7 +78,6 @@ enum AISignIn {
                 let key = try await AIClient.shared.exchange(code: code, verifier: flow.verifier)
                 switch AIKeys.save(key, for: .openRouter) {
                 case .kept: _ = finish(true, nil, tab, browser)
-                case .unavailable: _ = finish(false, "This copy of Search can't keep keys (it isn't the signed release).", tab, browser)
                 case .failed: _ = finish(false, "The keychain refused the key.", tab, browser)
                 }
             } catch {

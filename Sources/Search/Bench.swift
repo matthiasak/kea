@@ -648,6 +648,7 @@ final class Bench {
                 "sidebar": browser.prefs.sidebar,
                 "sidePosition": browser.prefs.sidePosition.rawValue,
                 "sideWidth": Double(browser.prefs.sideWidth),
+                "bookmarksSidebar": browser.prefs.bookmarksSidebar,
                 "appearance": NSApp.appearance?.name.rawValue ?? "system",
                 "key": NSApp.keyWindow.map { "\(type(of: $0)) “\($0.title)”" } ?? "",
                 // What the keyboard goes to in the key window, or the browser's: a find field,
@@ -1195,7 +1196,7 @@ final class Bench {
             guard let title = request["title"] as? String,
                   let folder = browser.bookmarks.roots.first(where: { $0.isFolder && $0.title == title })
             else { answer(["error": "no top-level folder by that title"]); return }
-            browser.bookmarks.askRemove(folder)
+            browser.bookmarks.askRemove([folder])
             answer(["asked": title])
 
         case "import-file-start":
@@ -1227,8 +1228,8 @@ final class Bench {
                 menu.delegate?.menuNeedsUpdate?(menu)
                 menus[item.title] = menu.items.filter { !$0.isSeparatorItem && !$0.isHidden }.map(\.title)
             }
-            answer(["menus": menus, "ai": browser.prefs.ai, "shipped": AI.shipped,
-                    "settingsPages": SettingsPanel.Page.allCases.filter { $0 != .ai || AI.shipped }.map(\.rawValue),
+            answer(["menus": menus, "ai": browser.prefs.ai,
+                    "settingsPages": SettingsPanel.Page.allCases.map(\.rawValue),
                     "settingsPage": browser.settingsPage.rawValue])
 
         case "menu":
@@ -1366,28 +1367,78 @@ final class Bench {
                 AIProvider.mock = url
                 answer(["mock": url.absoluteString])
             case "key":
-                guard let provider = (request["provider"] as? String).flatMap(AIProvider.init(rawValue:)),
+                guard let provider = (request["provider"] as? String).flatMap(AIProvider.named),
                       let key = request["key"] as? String
                 else { answer(["error": "ai key PROVIDER KEY"]); return }
                 let saved = AIKeys.save(key, for: provider)
                 answer(["saved": "\(saved)", "hint": AIKeys.hint(for: provider) ?? ""])
             case "ask":
-                guard let provider = (request["provider"] as? String).flatMap(AIProvider.init(rawValue:)) else {
+                guard let provider = (request["provider"] as? String).flatMap(AIProvider.named) else {
                     answer(["error": "ai ask PROVIDER MODEL TEXT"]); return
                 }
                 let model = request["model"] as? String ?? provider.defaultModel
-                let stream = AIClient.shared.stream(provider, model: model, system: "You are a test.",
-                                                    messages: [AIMessage(role: .user, text: request["text"] as? String ?? "")],
-                                                    key: AIKeys.key(for: provider))
                 Task { @MainActor in
                     var text = "", pieces = 0
                     do {
+                        let stream = AIClient.shared.stream(provider, model: model, system: "You are a test.",
+                                                            messages: [AIMessage(role: .user, text: request["text"] as? String ?? "")],
+                                                            key: await AIKeys.key(for: provider))
                         for try await piece in stream { text += piece; pieces += 1 }
                         answer(["text": text, "pieces": pieces])
                     } catch {
                         answer(["error": error.localizedDescription, "text": text])
                     }
                 }
+            case "catalog":
+                // models.dev's catalog, read from a file or a stand-in on this
+                // Mac instead; then the providers to choose from.
+                if let asked = request["url"] as? String {
+                    guard let url = URL(string: asked), url.isFileURL || ["127.0.0.1", "localhost", "::1"].contains(url.host() ?? "")
+                    else { answer(["error": "ai catalog needs a file or an address on this Mac"]); return }
+                    AICatalog.shared.source = url
+                }
+                Task { @MainActor in
+                    let count = await AICatalog.shared.refresh()
+                    answer(["providers": count, "ids": AIProvider.all.map(\.id)])
+                }
+            case "source":
+                guard let provider = (request["provider"] as? String).flatMap(AIProvider.named),
+                      let source = request["source"] as? String
+                else { answer(["error": "ai source PROVIDER keychain|env:NAME|cmd:COMMAND"]); return }
+                AIKeys.setSource(source.hasPrefix("env:") ? .environment(String(source.dropFirst(4)))
+                                 : source.hasPrefix("cmd:") ? .command(String(source.dropFirst(4))) : .keychain, for: provider)
+                answer(["hint": AIKeys.hint(for: provider) ?? ""])
+            case "models":
+                guard let provider = (request["provider"] as? String).flatMap(AIProvider.named)
+                else { answer(["error": "ai models PROVIDER"]); return }
+                Task { @MainActor in
+                    answer(["models": await AIClient.shared.models(provider, key: await AIKeys.key(for: provider))])
+                }
+            case "organize":
+                // Organize with AI against the stand-in: the proposal for the list as
+                // it is, held as the manager holds it (apply puts it in).
+                guard let provider = (request["provider"] as? String).flatMap(AIProvider.named) else {
+                    answer(["error": "ai organize PROVIDER [MODEL] [TEXT]"]); return
+                }
+                let model = request["model"] as? String ?? browser.prefs.aiModel(for: provider)
+                Task { @MainActor in
+                    do {
+                        guard let proposal = try await AIBookmarks.ask(browser.bookmarks.roots, instruction: request["text"] as? String ?? "",
+                                                                       provider: provider, model: model)
+                        else { answer(["error": "unreadable"]); return }
+                        browser.bookmarkPicks.proposal = proposal
+                        answer(["tree": Bench.tree(proposal.tree), "removed": proposal.removed.map(\.title),
+                                "leftOut": proposal.leftOut, "place": proposal.place])
+                    } catch {
+                        answer(["error": error.localizedDescription])
+                    }
+                }
+            case "apply":
+                browser.bookmarks.undo = Bench.bookmarkUndo
+                Bench.bookmarkUndo.beginUndoGrouping()
+                browser.applyBookmarkProposal()
+                Bench.bookmarkUndo.endUndoGrouping()
+                answer(["tree": Bench.tree(browser.bookmarks.roots), "held": browser.bookmarkPicks.proposal != nil])
             case "signin":
                 // OpenRouter's sign-in, against the stand-in: the tab it opens,
                 // and a moment later whether a key is kept.
@@ -1410,13 +1461,13 @@ final class Bench {
                         "pid": Int(running.pid), "ready": running.ready])
             case "use":
                 // The add-on on, answered by this provider (and model).
-                guard let provider = (request["provider"] as? String).flatMap(AIProvider.init(rawValue:)) else {
+                guard let provider = (request["provider"] as? String).flatMap(AIProvider.named) else {
                     answer(["error": "ai use PROVIDER [MODEL]"]); return
                 }
                 browser.prefs.ai = true
                 browser.prefs.aiProvider = provider
                 if let model = request["model"] as? String { browser.prefs.setAIModel(model, for: provider) }
-                answer(["provider": provider.rawValue, "model": browser.prefs.aiModel(for: provider)])
+                answer(["provider": provider.id, "model": browser.prefs.aiModel(for: provider)])
             case "summarize", "question":
                 // The menu's Summarize Page or Ask About This Page… on a tab,
                 // then — for a question — the question typed and sent.
@@ -1473,8 +1524,43 @@ final class Bench {
                 }
                 answer(["strays": AIPage.strays(in: text, from: read)])
             default:
-                answer(["error": "ai mock URL | key PROVIDER KEY | ask PROVIDER MODEL TEXT | read ID | check TEXT"])
+                answer(["error": "ai mock URL | catalog [URL] | source PROVIDER SOURCE | models PROVIDER | key PROVIDER KEY | ask PROVIDER MODEL TEXT | read ID | check TEXT | organize PROVIDER [MODEL] [TEXT] | apply"])
             }
+
+        case "bookmarks":
+            // The bookmark list's batch operations, and undo of them, on a test
+            // run: tree | move ids into at | remove ids | group ids name |
+            // sort folder by | dedupe | undo | redo. Every one answers with the tree.
+            guard Store.testing else { answer(["error": "bookmarks only works on a --test run"]); return }
+            let bookmarks = browser.bookmarks
+            bookmarks.undo = Bench.bookmarkUndo
+            let ids = (request["ids"] as? [String] ?? []).compactMap(UUID.init(uuidString:))
+            let place = (request["into"] as? String).flatMap(UUID.init(uuidString:))
+            var extra: [String: Any] = [:]
+            // One undo step to a verb, whatever the run loop does between them.
+            let undoing = ["undo", "redo"].contains(request["action"] as? String)
+            if !undoing { Bench.bookmarkUndo.beginUndoGrouping() }
+            defer { if !undoing { Bench.bookmarkUndo.endUndoGrouping() } }
+            switch request["action"] as? String {
+            case "tree": break
+            case "move": bookmarks.move(ids, into: place, at: request["at"] as? Int)
+            case "remove": bookmarks.remove(Set(ids))
+            case "group":
+                extra["made"] = bookmarks.group(Set(ids), named: request["name"] as? String ?? "Group")?.uuidString ?? ""
+            case "sort":
+                bookmarks.sort((request["folder"] as? String).flatMap(UUID.init(uuidString:)),
+                               by: request["by"] as? String == "site" ? .site : .name)
+            case "dedupe":
+                let doubles = bookmarks.duplicates()
+                extra["count"] = doubles.count
+                bookmarks.remove(doubles)
+            case "undo": Bench.bookmarkUndo.undo()
+            case "redo": Bench.bookmarkUndo.redo()
+            default:
+                answer(["error": "bookmarks tree | move | remove | group | sort | dedupe | undo | redo"]); return
+            }
+            extra["tree"] = Bench.tree(bookmarks.roots)
+            answer(extra)
 
         case "notifications":
             // What a test run would have posted, and every site's answer.
@@ -2401,6 +2487,8 @@ final class Bench {
             }
             if let on = request["pages120"] as? Bool { browser.prefs.fastPages = on }
             if let on = request["sidebar"] as? Bool { browser.prefs.sidebar = on }
+            if let on = request["bookmarksSidebar"] as? Bool { browser.prefs.bookmarksSidebar = on }
+            if let on = request["bookmarksBar"] as? Bool { browser.prefs.bookmarksBar = on }
             if let on = request["spaces"] as? Bool { browser.prefs.usesSpaces = on }
             if let on = request["hides"] as? Bool { browser.prefs.sideHides = on }
             if let on = request["folded"] as? Bool { browser.folded = on }
@@ -3088,6 +3176,17 @@ final class Bench {
 
     /// The last page `ai read` read, for `ai check`.
     static var aiRead: AIPage.Read?
+    /// A bookmark tree as the JSON a bench verb answers with.
+    static func tree(_ nodes: [Bookmark]) -> Any {
+        (try? JSONSerialization.jsonObject(with: (try? JSONEncoder().encode(nodes)) ?? Data())) ?? []
+    }
+    /// What `bookmarks undo` and `redo` act on.
+    static var bookmarkUndo: UndoManager = {
+        // Grouped by the verb (see `bookmarks`), not by the run loop's turns.
+        let manager = UndoManager()
+        manager.groupsByEvent = false
+        return manager
+    }()
 
     private func makeRoom() -> NSWindow {
         // Off every screen, and never key or main: it exists so that a web

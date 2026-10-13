@@ -500,9 +500,11 @@ enum SpaceMenu {
 /// bookmarks list borrows `name` for Rename….
 @MainActor
 enum Ask {
-    static func name(_ title: String, placeholder: String, initial: String = "", confirm: String, then: @escaping (String) -> Void) {
+    static func name(_ title: String, placeholder: String, initial: String = "", detail: String? = nil, allowsEmpty: Bool = false,
+                     confirm: String, then: @escaping (String) -> Void) {
         let alert = NSAlert()
         alert.messageText = title
+        if let detail { alert.informativeText = detail }
         let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
         field.placeholderString = placeholder
         field.stringValue = initial
@@ -512,7 +514,32 @@ enum Ask {
         alert.window.initialFirstResponder = field
         show(alert) { ok in
             let name = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-            if ok, !name.isEmpty { then(name) }
+            if ok, allowsEmpty || !name.isEmpty { then(name) }
+        }
+    }
+
+    /// A bookmark's name and address, together. Either may be left empty,
+    /// and then is left as it was.
+    static func bookmark(name: String, address: String, then: @escaping (String, String) -> Void) {
+        let alert = NSAlert()
+        alert.messageText = "Edit Bookmark"
+        let title = NSTextField(frame: NSRect(x: 0, y: 32, width: 260, height: 24))
+        title.placeholderString = "Name"
+        title.stringValue = name
+        let url = NSTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
+        url.placeholderString = "Address"
+        url.stringValue = address
+        let box = NSView(frame: NSRect(x: 0, y: 0, width: 260, height: 56))
+        box.addSubview(title)
+        box.addSubview(url)
+        alert.accessoryView = box
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = title
+        show(alert) { ok in
+            guard ok else { return }
+            then(title.stringValue.trimmingCharacters(in: .whitespacesAndNewlines),
+                 url.stringValue.trimmingCharacters(in: .whitespacesAndNewlines))
         }
     }
 

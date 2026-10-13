@@ -17,23 +17,27 @@ struct SplitStage: View {
         let split = browser.activeSplit
         let shown: [Tab] = split.map { pair in pair.tabs.compactMap { id in browser.tabs.first { $0.id == id } } }
             ?? browser.active.map { [$0] } ?? []
-        ZStack(alignment: .topLeading) {
-            PaneStageView(
-                tabs: shown, split: split, focused: browser.activeID,
-                commit: { id, sizes in browser.setSplitFraction(id, fraction: sizes[0]) },
-                focus: { tab in browser.focusPane(tab) },
-                frames: { frames = $0 },
-                action: { action in
-                    switch action {
-                    case .swap: browser.swapSplit()
-                    case .even: browser.evenSplit()
-                    case .separate: if let tab = browser.active { browser.detachSplit(tab) }
-                    case .closeBoth: browser.closeSplit()
-                    }
-                },
-                hover: { hovered = $0 },
-                find: browser.finding ? browser : nil
-            )
+        PaneStageView(
+            tabs: shown, split: split, focused: browser.activeID,
+            commit: { id, sizes in browser.setSplitFraction(id, fraction: sizes[0]) },
+            focus: { tab in browser.focusPane(tab) },
+            frames: { frames = $0 },
+            action: { action in
+                switch action {
+                case .swap: browser.swapSplit()
+                case .even: browser.evenSplit()
+                case .separate: if let tab = browser.active { browser.detachSplit(tab) }
+                case .closeBoth: browser.closeSplit()
+                }
+            },
+            hover: { hovered = $0 },
+            find: browser.finding ? browser : nil
+        )
+        // Drawn over the stage, never sizing it: laid out from the frames the
+        // stage last reported, they held it at its old size when the room
+        // around it shrank (the bookmarks column or bar coming in), and the
+        // window was drawn shifted by half the difference.
+        .overlay(alignment: .topLeading) {
             ForEach(shown) { tab in
                 if let frame = frames[tab.id] {
                     PaneLayers(browser: browser, tab: tab, paired: shown.count > 1, width: frame.width,

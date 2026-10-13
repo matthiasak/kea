@@ -161,6 +161,8 @@ final class Browser: NSObject, ObservableObject {
     let bookmarks = Shared.bookmarks
     /// The full list, for taking things out.
     @Published var bookmarking = false
+    /// What the full list has picked and is looking for (see BookmarkPicks).
+    let bookmarkPicks = BookmarkPicks()
     /// The dropdown off the button.
     @Published var bookmarksOpen = false
     /// What hangs off the button instead of the list: the card for one
@@ -342,8 +344,7 @@ final class Browser: NSObject, ObservableObject {
     /// The Settings page it opens on next.
     var settingsPage: SettingsPanel.Page {
         get {
-            let page = SettingsPanel.Page(rawValue: Store.settings.string(forKey: "settings.page") ?? "") ?? .general
-            return page == .ai && !AI.shipped ? .general : page
+            SettingsPanel.Page(rawValue: Store.settings.string(forKey: "settings.page") ?? "") ?? .general
         }
         set { Store.settings.set(newValue.rawValue, forKey: "settings.page") }
     }

@@ -229,13 +229,17 @@ struct SearchApp: App {
                 Button(browser.pageKept ? "Edit Bookmark\u{2026}" : "Add This Page") { browser.bookmarkCurrent() }
                     .shortcut("bookmarks.add")
                     .disabled(browser.active?.isBlank ?? true)
-                Button("Show Bookmarks…") { browser.bookmarking = true }
+                Button("Show Bookmarks…") { browser.bookmarking.toggle() }
                     .shortcut("bookmarks.show")
                 Toggle("Show Bookmarks Bar", isOn: Binding(
                     get: { browser.prefs.bookmarksBar },
                     set: { on in withAnimation(Motion.glide) { browser.prefs.bookmarksBar = on } }
                 ))
                 .shortcut("bookmarks.bar")
+                Toggle("Show Bookmarks Sidebar", isOn: Binding(
+                    get: { browser.prefs.bookmarksSidebar },
+                    set: { browser.prefs.bookmarksSidebar = $0 }))
+                    .shortcut("bookmarks.sidebar")
                 // The bookmarks themselves follow, put in by AppKit (see
                 // BookmarkMenu in Bookmarks.swift).
             }
@@ -376,12 +380,20 @@ struct ContentView: View {
             // it and is resized once, not on every frame of the slide: laid out
             // again thirty times a second, the page juddered along its right
             // edge and overshot the window with the spring (see `room`).
-            stage
-                .padding(.leading, sideOnRight ? 0 : roomed.width)
-                .padding(.trailing, sideOnRight ? roomed.width : 0)
-                .padding(.top, roomed.height)
-                .offset(x: sideOnRight ? 0 : chrome.width - roomed.width,
-                        y: chrome.height - roomed.height)
+            HStack(spacing: 0) {
+                if bookmarksColumn, sideOnRight {
+                    BookmarksSidebar(browser: browser, bookmarks: browser.bookmarks, onLeft: true)
+                }
+                stage
+                if bookmarksColumn, !sideOnRight {
+                    BookmarksSidebar(browser: browser, bookmarks: browser.bookmarks, onLeft: false)
+                }
+            }
+            .padding(.leading, sideOnRight ? 0 : roomed.width)
+            .padding(.trailing, sideOnRight ? roomed.width : 0)
+            .padding(.top, roomed.height)
+            .offset(x: sideOnRight ? 0 : chrome.width - roomed.width,
+                    y: chrome.height - roomed.height)
 
             // The column of tabs, in the way that has one. It takes the full
             // height, so the traffic lights sit in its own corner rather than
@@ -458,6 +470,9 @@ struct ContentView: View {
     private var chrome: CGSize {
         CGSize(width: sidebar ? browser.prefs.sideWidth : 0, height: band + (barShown ? BookmarksBar.height : 0))
     }
+
+    /// The bookmarks column is up: asked for, and no video has the screen.
+    private var bookmarksColumn: Bool { browser.prefs.bookmarksSidebar && fullscreenTab == nil }
 
     /// The bookmarks bar is up: asked for, there are bookmarks, and the tabs
     /// aren't folded away or under a video filling the screen.
@@ -554,7 +569,7 @@ struct ContentView: View {
                 close: { browser.tuning = false }
         }
         if browser.bookmarking {
-            sheet { BookmarksPanel(browser: browser, bookmarks: browser.bookmarks) }
+            sheet { BookmarksPanel(browser: browser, bookmarks: browser.bookmarks, picks: browser.bookmarkPicks) }
                 close: { browser.bookmarking = false }
         }
         if browser.welcoming {
@@ -1125,6 +1140,11 @@ struct ContentView: View {
             browser.tabSwitcher.cancel()
             if event.keyCode == 53 { return true }
         }
+
+        // The bookmarks manager's keys, while its search field is empty and has no use for them.
+        if browser.bookmarking, event.window === window, browser.bookmarkPicks.query.isEmpty,
+           browser.bookmarkPicks.proposal == nil,
+           BookmarksPanel.take(event, browser: browser) { return true }
 
         // Escape puts the page back. On a blank tab there is no page to put
         // back, so it belongs to whatever else wants it.

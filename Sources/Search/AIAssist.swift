@@ -82,7 +82,7 @@ final class Assistant: ObservableObject, Identifiable {
     }
 
     private func ask(_ ask: AIPage.Ask) {
-        if !provider.isLocal, !Store.settings.bool(forKey: "ai.told.\(provider.rawValue)") {
+        if !provider.isLocal, !Store.settings.bool(forKey: "ai.told.\(provider.id)") {
             waiting = ask
             notice = AIAssist.notice(for: provider)
             return
@@ -92,7 +92,7 @@ final class Assistant: ObservableObject, Identifiable {
 
     /// The notice read and agreed to: what was asked goes.
     func agree() {
-        Store.settings.set(true, forKey: "ai.told.\(provider.rawValue)")
+        Store.settings.set(true, forKey: "ai.told.\(provider.id)")
         notice = nil
         if let waiting { send(waiting) }
         waiting = nil
@@ -108,13 +108,14 @@ final class Assistant: ObservableObject, Identifiable {
             messages.append(AIMessage(role: .user, text: messages.isEmpty ? AIPage.opening(read, ask, fence: fence) : question))
             turns.append(Turn(question: question))
         }
-        // The key, read now and let go with the request.
-        let key = provider.isLocal ? nil : AIKeys.key(for: provider)
-        let stream = provider == .thisMac
-            ? AIEngine.shared.stream(system: AIPage.system(fence: fence), messages: messages)
-            : AIClient.shared.stream(provider, model: model, system: AIPage.system(fence: fence), messages: messages, key: key)
+        let provider = provider, model = model, system = AIPage.system(fence: fence), messages = messages
         task = Task { @MainActor [weak self] in
             do {
+                // The key, read now and let go with the request.
+                let key = provider.isLocal ? nil : await AIKeys.key(for: provider)
+                let stream = provider == .thisMac
+                    ? AIEngine.shared.stream(system: system, messages: messages)
+                    : AIClient.shared.stream(provider, model: model, system: system, messages: messages, key: key)
                 for try await piece in stream {
                     guard let self, !self.turns.isEmpty else { return }
                     self.turns[self.turns.count - 1].answer += piece
@@ -184,14 +185,37 @@ extension Browser {
     func summarizePage() { startAssistant(summary: true) }
     func askAboutPage() { startAssistant(summary: false) }
 
-    private func startAssistant(summary: Bool) {
-        guard AI.shipped || Store.testing, let tab = active, !tab.isBlank else { return }
+    /// Where the AI runs, and with which model, once Settings has all it
+    /// needs; otherwise Settings › AI opens, saying what is missing, and nil.
+    func readyAI() -> (provider: AIProvider, model: String)? {
         guard prefs.ai, let provider = prefs.aiProvider else {
-            settingsPage = .ai
-            tuning = true
+            settingsPage = .ai; tuning = true
             announce(prefs.ai ? "Choose where the AI runs" : "Turn on AI in Settings › AI")
-            return
+            return nil
         }
+        if provider == .thisMac, AIEngine.shared.state != .ready {
+            settingsPage = .ai; tuning = true
+            announce("The model isn't on this Mac yet")
+            return nil
+        }
+        let model = prefs.aiModel(for: provider)
+        guard !model.isEmpty else {
+            settingsPage = .ai; tuning = true
+            announce("Choose a model for \(provider.name)")
+            return nil
+        }
+        guard provider.isLocal || AIKeys.hint(for: provider) != nil else {
+            settingsPage = .ai; tuning = true
+            announce("No key for \(provider.name) yet")
+            return nil
+        }
+        return (provider, model)
+    }
+
+    private func startAssistant(summary: Bool) {
+        guard let tab = active, !tab.isBlank else { return }
+        guard let ready = readyAI() else { return }
+        let provider = ready.provider, model = ready.model
         // A web page, nothing else: not a file, not an extension's page.
         guard let scheme = tab.pageAddress?.scheme?.lowercased(), scheme == "https" || scheme == "http" else {
             announce("AI works on web pages")
@@ -201,25 +225,6 @@ extension Browser {
         let shy = tab.shy || tab.built.map { !$0.configuration.websiteDataStore.isPersistent } == true
         guard !shy || provider.isLocal else {
             announce("In a private tab, only an AI on this Mac")
-            return
-        }
-        if provider == .thisMac, AIEngine.shared.state != .ready {
-            settingsPage = .ai
-            tuning = true
-            announce("The model isn't on this Mac yet")
-            return
-        }
-        let model = prefs.aiModel(for: provider)
-        guard !model.isEmpty else {
-            settingsPage = .ai
-            tuning = true
-            announce("Choose a model for \(provider.name)")
-            return
-        }
-        guard provider.isLocal || AIKeys.hint(for: provider) != nil else {
-            settingsPage = .ai
-            tuning = true
-            announce("No key for \(provider.name) yet")
             return
         }
         // Asked again on the page the panel is already about: the same
@@ -409,10 +414,21 @@ struct AISettings: View {
     /// Drawn off screen, for a picture: menus and fields stood in for.
     var drawn = false
     @State private var pasted = ""
+    /// A variable's name or a command being typed, not yet in use.
+    @State private var typed = ""
     @State private var hint: String?
+    @State private var source = AIKeySource.keychain
+    @State private var kind = Kind.keychain
+    private enum Kind: Hashable { case keychain, variable, command }
     @State private var models: [String] = []
     @State private var looking = false
     @ObservedObject private var engine = AIEngine.shared
+    /// Watched so the list of providers redraws when the catalog arrives.
+    @ObservedObject private var catalog = AICatalog.shared
+
+    private var choices: [AIProvider] {
+        AIProvider.all.filter { $0 != .thisMac || engine.available || prefs.aiProvider == .thisMac }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -429,7 +445,8 @@ struct AISettings: View {
                         } else {
                         Picker("", selection: Binding(get: { prefs.aiProvider }, set: { prefs.aiProvider = $0 })) {
                             Text("Choose…").tag(AIProvider?.none)
-                            ForEach(AIProvider.allCases.filter { $0 != .thisMac || engine.available || prefs.aiProvider == .thisMac }) { provider in
+                            ForEach(choices) { provider in
+                                if provider == choices.first(where: { !AIProvider.builtIns.contains($0) }) { Divider() }
                                 Text(provider == .thisMac ? provider.name : provider.isLocal ? "\(provider.name), on this Mac" : provider.name)
                                     .tag(AIProvider?.some(provider))
                             }
@@ -447,9 +464,13 @@ struct AISettings: View {
                 .onChange(of: prefs.aiProvider) { _, _ in
                     // A key typed for one provider is never saved for another.
                     pasted = ""
+                    typed = ""
                     refresh()
                 }
-                .onAppear(perform: refresh)
+                .onAppear {
+                    catalog.refreshIfStale()
+                    refresh()
+                }
                 Card {
                     Line("Forget every key", "Deletes them from this Mac's keychain. A key made by signing in with OpenRouter still works until you delete it on openrouter.ai") {
                         Pill("Forget") {
@@ -497,59 +518,151 @@ struct AISettings: View {
         guard let provider = prefs.aiProvider else { return "A provider you have a key with, or an app on this Mac" }
         return provider.isLocal
             ? "Nothing leaves this Mac. Also in private tabs"
-            : "Your key, kept in this Mac's keychain, sent only to \(provider.host). Never from a private tab"
+            : "Your key, sent only to \(provider.host). Never from a private tab"
     }
 
     @ViewBuilder
     private func key(_ provider: AIProvider) -> some View {
-        if let hint {
-            Line("Key", "\(hint), in this Mac's keychain") {
-                Pill("Forget") {
-                    AIKeys.forget(provider)
-                    refresh()
+        Line("Key from", "Where Search finds it when you ask") {
+            Segmented(options: [(Kind.keychain, "Keychain"), (.variable, "Variable"), (.command, "Command")], selection: $kind)
+        }
+        Rule()
+        switch kind {
+        case .keychain:
+            if source == .keychain, let hint {
+                Line("Key", "\(hint), in your keychain") {
+                    Pill("Forget") {
+                        AIKeys.forget(provider)
+                        refresh()
+                    }
+                }
+            } else {
+                Line("Key", provider == .openRouter ? "Paste one, or sign in and OpenRouter makes one for you" : "Paste your API key") {
+                    HStack(spacing: 6) {
+                        SecureField("", text: $pasted, prompt: Text("Key").foregroundStyle(Palette.faint))
+                            .textFieldStyle(.plain)
+                            .font(.system(size: 12))
+                            .frame(width: 130)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 5)
+                            .background(Palette.wash, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                            .onSubmit { save(provider) }
+                        Pill("Save") { save(provider) }
+                        if provider == .openRouter {
+                            Pill("Sign In…") {
+                                browser.tuning = false
+                                AISignIn.start(in: browser)
+                            }
+                        }
+                    }
                 }
             }
-        } else if !AIKeys.available {
-            Line("Key", "This copy of Search can't keep keys safely — it isn't the signed release. An app on this Mac still works") { EmptyView() }
-        } else {
-            Line("Key", provider == .openRouter ? "Paste one, or sign in and OpenRouter makes one for you" : "Paste your API key") {
-                HStack(spacing: 6) {
-                    SecureField("", text: $pasted, prompt: Text("Key").foregroundStyle(Palette.faint))
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 12))
-                        .frame(width: 130)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 5)
-                        .background(Palette.wash, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-                        .onSubmit { save(provider) }
-                    Pill("Save") { save(provider) }
-                    if provider == .openRouter {
-                        Pill("Sign In…") {
-                            browser.tuning = false
-                            AISignIn.start(in: browser)
-                        }
+        case .variable:
+            if case .environment(let name) = source {
+                Line("Key", "From $\(name)") { forgetPill(provider) }
+            } else {
+                Line("Key", "A variable that holds it, read when you ask") {
+                    HStack(spacing: 6) {
+                        field(provider.env.first ?? "API_KEY", $typed, width: 150) { useVariable(provider) }
+                        Pill("Use") { useVariable(provider) }
+                    }
+                }
+            }
+        case .command:
+            if case .command = source {
+                Line("Key", "From a command") { forgetPill(provider) }
+            } else {
+                Line("Key", "A command that prints it, run by your shell when you ask") {
+                    HStack(spacing: 6) {
+                        field("op read op://Private/Gemini/credential", $typed, width: 200) { useCommand(provider) }
+                        Pill("Use") { useCommand(provider) }
                     }
                 }
             }
         }
     }
 
+    private func field(_ prompt: String, _ text: Binding<String>, width: CGFloat, submit: @escaping () -> Void) -> some View {
+        TextField("", text: text, prompt: Text(prompt).foregroundStyle(Palette.faint))
+            .textFieldStyle(.plain)
+            .font(.system(size: 12))
+            .frame(width: width)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background(Palette.wash, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .onSubmit(submit)
+    }
+
+    private func forgetPill(_ provider: AIProvider) -> some View {
+        Pill("Forget") {
+            AIKeys.forget(provider)
+            refresh()
+        }
+    }
+
+    private func useVariable(_ provider: AIProvider) {
+        let name = typed.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard AIKeys.isVariableName(name) else { browser.announce("Not a variable name"); return }
+        AIKeys.setSource(.environment(name), for: provider)
+        typed = ""
+        refresh()
+    }
+
+    private func useCommand(_ provider: AIProvider) {
+        let command = typed.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !command.isEmpty else { return }
+        AIKeys.setSource(.command(command), for: provider)
+        typed = ""
+        refresh()
+    }
+
     private func cloudModel(_ provider: AIProvider) -> some View {
-        Line("Model", "Leave empty for \(provider.defaultModel)") {
+        Line("Model", provider.defaultModel.isEmpty ? "Choose one, or type its name" : "Leave empty for \(provider.defaultModel)") {
             if drawn {
-                Stand(prefs.aiModels[provider.rawValue].flatMap { $0.isEmpty ? nil : $0 } ?? provider.defaultModel, width: 170)
+                Stand(prefs.aiModels[provider.id].flatMap { $0.isEmpty ? nil : $0 } ?? provider.defaultModel, width: 170)
             } else {
-            TextField("", text: Binding(get: { prefs.aiModels[provider.rawValue] ?? "" },
-                                        set: { prefs.setAIModel($0, for: provider) }),
-                      prompt: Text(provider.defaultModel).foregroundStyle(Palette.faint))
-                .textFieldStyle(.plain)
-                .font(.system(size: 12))
-                .frame(width: 170)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 5)
-                .background(Palette.wash, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                HStack(spacing: 6) {
+                    TextField("", text: Binding(get: { prefs.aiModels[provider.id] ?? "" },
+                                                set: { prefs.setAIModel($0, for: provider) }),
+                              prompt: Text(provider.defaultModel).foregroundStyle(Palette.faint))
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 12))
+                        .frame(width: 170)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 5)
+                        .background(Palette.wash, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                    modelMenu(provider)
+                }
             }
         }
+    }
+
+    /// The models to pick from: what the provider listed when asked, else the catalog's.
+    private func modelMenu(_ provider: AIProvider) -> some View {
+        Menu {
+            ForEach(models.isEmpty ? AIProvider.named(provider.id)?.models ?? [] : models, id: \.self) { model in
+                Button(model) { prefs.setAIModel(model, for: provider) }
+            }
+            Divider()
+            Button("Fetch From \(provider.name)") {
+                Task { @MainActor in
+                    let key = await AIKeys.key(for: provider)
+                    models = await AIClient.shared.models(provider, key: key)
+                    if models.isEmpty { browser.announce(key == nil ? "No key for \(provider.name)" : "\(provider.name) listed no models") }
+                }
+            }
+        } label: {
+            Image(systemName: "chevron.up.chevron.down")
+                .font(.system(size: 8.5, weight: .semibold))
+                .foregroundStyle(Palette.muted)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 8)
+                .background(Palette.wash, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                .contentShape(Rectangle())
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
     }
 
     /// A menu or a field, as a picture shows it.
@@ -595,7 +708,6 @@ struct AISettings: View {
         pasted = ""
         switch AIKeys.save(key, for: provider) {
         case .kept: browser.announce("Key kept in the keychain")
-        case .unavailable: browser.announce("This copy of Search can't keep keys")
         case .failed: browser.announce("The key wasn't kept")
         }
         refresh()
@@ -606,11 +718,17 @@ struct AISettings: View {
     private func refresh() {
         guard let provider = prefs.aiProvider else { return }
         hint = provider.isLocal ? nil : AIKeys.hint(for: provider)
+        source = AIKeys.source(for: provider)
+        kind = switch source {
+        case .keychain: .keychain
+        case .environment: .variable
+        case .command: .command
+        }
         models = []
         guard provider.isLocal else { return }
         looking = true
         Task { @MainActor in
-            models = await AIClient.shared.localModels(provider)
+            models = await AIClient.shared.models(provider, key: nil)
             looking = false
         }
     }

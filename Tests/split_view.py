@@ -527,9 +527,34 @@ def case_peek(t):
     t.ok("Split View off: kept as a tab, as before", other and st["activeID"] == other[0] and len(st["splits"]) == 1, (st["splits"], other))
 
 
+def case_chrome(t):
+    """the bookmarks column and bar make room on the stage"""
+    setup(splitView=True)
+    os.makedirs(SUPPORT, exist_ok=True)
+    # The bar shows only with something in it.
+    json.dump([{"id": str(uuid.uuid4()).upper(), "title": "kept", "url": f"{BASE}/kept"}],
+              open(f"{SUPPORT}/bookmarks.json", "w"))
+    launch()
+    a = page("a"); time.sleep(0.5)
+    f0 = frames(sp("state"))[a]
+    cmd({"do": "ui", "bookmarksSidebar": True}); time.sleep(1)
+    f1 = frames(sp("state"))[a]
+    t.ok("the bookmarks column narrows the page by its width, in place",
+         abs((f0["width"] - f1["width"]) - 232) <= 1 and abs(f1["x"] - f0["x"]) <= 1, (f0, f1))
+    cmd({"do": "ui", "bookmarksSidebar": False}); time.sleep(1)
+    f2 = frames(sp("state"))[a]
+    cmd({"do": "ui", "bookmarksBar": True}); time.sleep(1)
+    f3 = frames(sp("state"))[a]
+    # y runs down from the window's top: the bottom edge stays, the top comes down.
+    t.ok("the bookmarks bar takes its height off the page's top",
+         abs((f2["height"] - f3["height"]) - 30) <= 1 and abs((f3["y"] - f2["y"]) - 30) <= 1
+         and abs((f3["y"] + f3["height"]) - (f2["y"] + f2["height"])) <= 1
+         and abs(f3["x"] - f2["x"]) <= 1, (f2, f3))
+
+
 def main():
     t = T()
-    for case in [case_slice1, case_slice1b, case_slice2, case_slice3, case_slice4, case_slice5a, case_slice5b, case_slice6, case_peek]:
+    for case in [case_slice1, case_slice1b, case_slice2, case_slice3, case_slice4, case_slice5a, case_slice5b, case_slice6, case_peek, case_chrome]:
         print(f"— {case.__doc__}")
         try:
             case(t)
