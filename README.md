@@ -3,7 +3,7 @@
 A small, fast, quiet web browser for the Mac (like the NZ bird). Forked from [Search](https://github.com/driceroland/search) by [Office Commun](https://officecommun.com).
 ![Search, with its tabs down the left and a page taking the rest of the window](.github/screenshot.png)
 
-**[Download for macOS →](https://officecommun.com/search)** · macOS 14 or later · free · about 6 MB
+**[Download for macOS →](https://officecommun.com/search)** · macOS 14 or later · free · about 7 MB
 
 Or with [Homebrew](https://brew.sh): `brew install --cask driceroland/tap/search`
 

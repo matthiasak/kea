@@ -137,8 +137,8 @@ extension Browser {
         guard count > 0 else { return announce("No bookmarks to organize") }
         let most = AIBookmarks.most(for: provider)
         guard count <= most else { return announce("\(provider.name) takes up to \(most) bookmarks at once; you have \(count)") }
-        Ask.name("Organize with AI", placeholder: AIBookmarks.standing, detail: AIBookmarks.notice(for: provider, count: count),
-                 allowsEmpty: true, confirm: "Organize") { typed in
+        Ask.name("Organize with AI", detail: AIBookmarks.notice(for: provider, count: count), placeholder: AIBookmarks.standing,
+                 confirm: "Organize", empty: true) { typed in
             let base = self.bookmarks.roots
             picks.proposal = nil
             picks.organizing = "Asking \(provider.name)…"
