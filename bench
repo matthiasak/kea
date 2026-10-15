@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Drive the Search you already have open, from the shell.
+"""Drive the Kea you already have open, from the shell.
 
     ./bench tabs                       every tab, yours and the bench's
     ./bench find TEXT [next N] [back N] [case] [words]
@@ -9,7 +9,7 @@
                                        --test runs only
     ./bench go ID URL                  send a bench tab somewhere else
     ./bench wait ID [SECONDS]          until the page has loaded
-    ./bench sleep ID                   put a tab to sleep now, or say what keeps it awake
+    ./bench sleep ID [critical]        put a tab to sleep now, or say what keeps it awake
     ./bench select ID                  bring a tab to the front — --test runs only
     ./bench resize W H [STEPS]         take the window to W×H in steps, like a drag — --test runs only
     ./bench key ID TEXT                press keys on a tab as real key events — --test runs only
@@ -19,7 +19,7 @@
     ./bench press CODE CHARS [MODS…]   press a key on the whole app (cmd shift ctrl opt, repeat) — --test runs only
     ./bench tap ID SELECTOR [MODS…]    a real mouse click on an element (or text=Words), shift/cmd/opt held — --test runs only
     ./bench text ID                    the page's text
-    ./bench eval ID JS [search]        run JavaScript, print what it returns; search: in Search's own world
+    ./bench eval ID JS [kea]           run JavaScript, print what it returns; kea: in Kea's own world
     ./bench click ID SELECTOR
     ./bench type ID SELECTOR TEXT
     ./bench submit ID SELECTOR         the form around SELECTOR
@@ -70,7 +70,7 @@
                                        each timed until the window has caught up; go: then Return, timed
                                        until the page is loading
     ./bench visible ID                 switched off: it made a window (off screen), and no verb makes one for now
-    ./bench ai mock URL | key PROVIDER KEY | ask PROVIDER MODEL TEXT | read ID | check TEXT | signin | engine [PATH MODELS] | use PROVIDER [MODEL] | summarize ID | question ID TEXT | agree | state | picture DIR
+    ./bench ai mock URL | key PROVIDER KEY | ask PROVIDER MODEL TEXT | read ID | check TEXT | signin | use PROVIDER [MODEL] | summarize ID | question ID TEXT | agree | state | picture DIR
                                        test run: the AI add-on's requests, against a stand-in on this Mac;
                                        what of a page would go to the model, and an answer checked against it
     ./bench answer once|always|no     test run: the card of a page asking for the camera, microphone or location
@@ -102,8 +102,6 @@
                                        any command aims it at the Nth window
     ./bench towindow ID N|new|drop X Y test run: a tab to the Nth window, a new one (Move to Window), or let
                                        go at screen point X Y as a drag out of the row
-    ./bench news PATH [notes] | on     test run: the card after an update, or every version's notes, to a
-                                       PNG; on: the card in the window
     ./bench quit                       test run: quit the app as ⌘Q does
     ./bench middle ID X Y              test run: the middle button clicked at X Y of a tab's page
     ./bench pin ID [off|home]          test run: pin a tab, unpin it, or double-click it (home)
@@ -127,10 +125,10 @@
                                        look light|dark|system, sidebar on|off, side left|right, spaces on|off, hides on|off,
                                        folded on|off, peek on|off, peeklink keep|close, pages120 on|off
 
-Needs Settings › General › "Let a script drive Search" switched on in the
+Needs Settings › General › "Let a script drive Kea" switched on in the
 running app. IDs are the first characters of a tab's id, as `tabs` prints
-them. With --test, talks to a SEARCH_PROBE run instead of the real one;
-with --world NAME, to a SEARCH_PROBE=NAME run, the world "Search (NAME)".
+them. With --test, talks to a KEA_PROBE run instead of the real one;
+with --world NAME, to a KEA_PROBE=NAME run, the world "Kea (NAME)".
 """
 
 import json
@@ -145,7 +143,7 @@ def clean(text):
     return re.sub(r"[\x00-\x1f\x7f\u200e\u200f\u202a-\u202e\u2066-\u2069]", "", str(text or ""))
 
 def folder(world):
-    name = f"Search ({world})" if world else "Search"
+    name = f"Kea ({world})" if world else "Kea"
     return os.path.expanduser(f"~/Library/Application Support/{name}")
 
 def ask(path, request):
@@ -153,8 +151,8 @@ def ask(path, request):
         try:
             s.connect(path)
         except (FileNotFoundError, ConnectionRefusedError):
-            sys.exit("Search isn't listening — is it open, with Settings › General › "
-                     "“Let a script drive Search” on?")
+            sys.exit("Kea isn't listening — is it open, with Settings › General › "
+                     "“Let a script drive Kea” on?")
         s.sendall((json.dumps(request) + "\n").encode())
         chunks = []
         while True:
@@ -198,13 +196,17 @@ def main(argv):
         if not args: sys.exit("usage: bench wait ID [SECONDS]")
         request["id"] = args[0]
         if len(args) > 1: request["seconds"] = float(args[1])
-    elif verb in ("text", "close", "sleep", "select", "visible"):
+    elif verb in ("text", "close", "select", "visible"):
         if len(args) != 1: sys.exit(f"usage: bench {verb} ID")
         request["id"] = args[0]
+    elif verb == "sleep":
+        if len(args) not in (1, 2) or args[1:] not in ([], ["critical"]): sys.exit("usage: bench sleep ID [critical]")
+        request["id"] = args[0]
+        if args[1:] == ["critical"]: request["critical"] = True
     elif verb == "eval":
-        if len(args) not in (2, 3) or (len(args) == 3 and args[2] != "search"): sys.exit("usage: bench eval ID JS [search]")
+        if len(args) not in (2, 3) or (len(args) == 3 and args[2] != "kea"): sys.exit("usage: bench eval ID JS [kea]")
         request["id"], request["js"] = args[0], args[1]
-        if len(args) == 3: request["world"] = "search"
+        if len(args) == 3: request["world"] = "kea"
     elif verb in ("click", "submit", "tap"):
         mods = [a for a in args[2:] if a in ("shift", "cmd", "opt")] if verb == "tap" else []
         if len(args) != 2 + len(mods): sys.exit(f"usage: bench {verb} ID SELECTOR" + (" [shift] [cmd] [opt]" if verb == "tap" else ""))
@@ -425,12 +427,6 @@ def main(argv):
     elif verb == "keyeq":
         if len(args) < 2 or any(a != "shift" for a in args[2:]): sys.exit("usage: bench keyeq CHARS CODE [shift]")
         request["chars"], request["code"], request["mods"] = args[0], int(args[1]), args[2:]
-    elif verb == "news":
-        if not args or (args[0] != "on" and len(args) > 2): sys.exit("usage: bench news PATH [notes] | news on")
-        if args[0] == "on": request["on"] = True
-        else:
-            request["path"] = os.path.abspath(args[0])
-            request["notes"] = args[1:] == ["notes"]
     elif verb == "towindow":
         if len(args) not in (2, 4) or (len(args) == 4 and args[1] != "drop"): sys.exit("usage: bench towindow ID N|new|drop X Y")
         request["id"] = args[0]
@@ -504,7 +500,7 @@ def main(argv):
             elif word == "words": request["words"] = True
             else: sys.exit("usage: bench find TEXT [next N] [back N] [case] [words]")
     elif verb == "ai":
-        usage = "usage: bench ai mock URL | key PROVIDER KEY | ask PROVIDER MODEL TEXT | read ID | check TEXT | signin | engine [PATH MODELS] | use PROVIDER [MODEL] | summarize ID | question ID TEXT | agree | state | picture DIR"
+        usage = "usage: bench ai mock URL | key PROVIDER KEY | ask PROVIDER MODEL TEXT | read ID | check TEXT | signin | use PROVIDER [MODEL] | summarize ID | question ID [TEXT] | agree | close | type TEXT | pick N | submit | eye | pin | chat star|task|delete|open|new [CHAT] | copy [N|all] | state | picture DIR"
         if not args: sys.exit(usage)
         request["action"] = args[0]
         if args[0] == "mock" and len(args) == 2: request["url"] = args[1]
@@ -512,14 +508,21 @@ def main(argv):
         elif args[0] == "ask" and len(args) == 4: request["provider"], request["model"], request["text"] = args[1], args[2], args[3]
         elif args[0] == "read" and len(args) == 2: request["id"] = args[1]
         elif args[0] == "signin" and len(args) == 1: pass
-        elif args[0] == "engine" and len(args) in (1, 3):
-            if len(args) == 3: request["path"], request["models"] = args[1], args[2]
         elif args[0] == "use" and len(args) in (2, 3):
             request["provider"] = args[1]
             if len(args) == 3: request["model"] = args[2]
         elif args[0] == "summarize" and len(args) == 2: request["id"] = args[1]
-        elif args[0] == "question" and len(args) == 3: request["id"], request["text"] = args[1], args[2]
-        elif args[0] in ("agree", "state") and len(args) == 1: pass
+        elif args[0] == "question" and len(args) in (2, 3):
+            request["id"] = args[1]
+            if len(args) == 3: request["text"] = args[2]
+        elif args[0] in ("agree", "state", "close", "submit", "eye", "pin") and len(args) == 1: pass
+        elif args[0] == "type" and len(args) == 2: request["text"] = args[1]
+        elif args[0] == "pick" and len(args) == 2 and args[1].isdigit(): request["index"] = int(args[1])
+        elif args[0] == "chat" and len(args) in (2, 3) and args[1] in ("star", "task", "delete", "open", "new"):
+            request["what"] = args[1]
+            if len(args) == 3: request["chat"] = args[2]
+        elif args[0] == "copy" and (len(args) == 1 or (len(args) == 2 and (args[1] == "all" or args[1].isdigit()))):
+            if len(args) == 2: request["turn"] = "all" if args[1] == "all" else int(args[1])
         elif args[0] == "picture" and len(args) == 2: request["path"] = args[1]
         elif args[0] == "check" and len(args) == 2: request["text"] = args[1]
         else: sys.exit(usage)

@@ -1,7 +1,7 @@
 """Arc's pinned list: what it keeps loose becomes a row, what it filed stays
 a tab in a group (#478).
 
-Build first (`./build.sh`), then `python3 Tests/arc_rows.py`. A made-up Arc
+Build first (`./build.sh release test`), then `python3 Tests/arc_rows.py`. A made-up Arc
 profile holds a favourite, a page loose in its pinned list, and two filed in a
 folder. With pinned rows on, the loose page has to come in as a row under the
 squares and the filed ones as tabs in a group named after the folder, since a

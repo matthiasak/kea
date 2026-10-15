@@ -1,6 +1,6 @@
 """Icons for what Arc's side of an import brings in, in a hidden probe (#416).
 
-Build first (`./build.sh`), then `python3 Tests/arc_icons.py`. A made-up Arc
+Build first (`./build.sh release test`), then `python3 Tests/arc_icons.py`. A made-up Arc
 profile is written into the world's own Import folder, with the one file Arc
 keeps its icons in, and the import is asked for its spaces. What the pins and
 the pinned tabs wear has to be there without a page ever being opened, which

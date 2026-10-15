@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Settings › Tabs › Pinned rows (#183): squares, rows, and the line's Clear.
 
-Build first (`./build.sh`), then `python3 Tests/pin_tiers.py`. It uses the
+Build first (`./build.sh release test`), then `python3 Tests/pin_tiers.py`. It uses the
 split suite's harness: started hidden, no window made or shown, everything
 removed afterwards. What can only be seen (the rows under the squares, the
 line, and Clear under the pointer) is checked by hand.

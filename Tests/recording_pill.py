@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The recording pill (RecordingIndicator.swift), in a hidden probe.
 
-Build first (`./build.sh`), then `python3 Tests/recording_pill.py`. The pill's
+Build first (`./build.sh release test`), then `python3 Tests/recording_pill.py`. The pill's
 model is exercised through ./bench as ExtensionCapture drives it; the pill
 itself never reaches a screen in a test run, which is checked too.
 """

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """A sign-in with a password box alone, in a hidden probe.
 
-Build first (`./build.sh`), then `python3 Tests/password_only.py`. A local
+Build first (`./build.sh release test`), then `python3 Tests/password_only.py`. A local
 page on 127.0.0.1:8830 stands in for a private dashboard's access code:
 one <input type="password" autocomplete="current-password" autofocus> in a form, no name box, sent by
 fetch, and on success the page swaps itself for the dashboard with

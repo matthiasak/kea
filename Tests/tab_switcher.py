@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The ⌃Tab switcher and the pointer, in a hidden probe (#358, by oddharsh).
 
-Build first (`./build.sh`), then `python3 Tests/tab_switcher.py`. ⌃Tab is
+Build first (`./build.sh release test`), then `python3 Tests/tab_switcher.py`. ⌃Tab is
 pressed through the app and a click is sent through it too, so the window's
 event monitor sees them as it sees a hand's; no window is made or shown.
 """

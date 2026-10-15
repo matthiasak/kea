@@ -16,7 +16,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-source = (ROOT / "Sources/Search/LiveRate.swift").read_text()
+source = (ROOT / "Sources/Kea/LiveRate.swift").read_text()
 script = source.split('static let script = """', 1)[1].split('"""', 1)[0]
 
 CHECKS = r"""

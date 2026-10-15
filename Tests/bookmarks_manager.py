@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The bookmark manager's batch operations: move, group, sort, dedupe, remove, undo.
 
-Build first (`./build.sh`), then `python3 Tests/bookmarks_manager.py`. Drives
+Build first (`./build.sh release test`), then `python3 Tests/bookmarks_manager.py`. Drives
 the model through the bench's `bookmarks` verb: several bookmarks moved at
 once land in the order the list reads them, a folder can't be moved into
 itself, and every change can be undone and redone. Nothing is drawn.

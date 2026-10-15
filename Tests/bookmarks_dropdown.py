@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The bookmark button's list, sized for the tree, in a hidden probe.
 
-Build first (`./build.sh`), then `python3 Tests/bookmarks_dropdown.py`. A
+Build first (`./build.sh release test`), then `python3 Tests/bookmarks_dropdown.py`. A
 tree like one brought in from Dia — one folder of 109 with a folder of 22
 inside it — is taken in from a file, and the list is laid out off every
 screen (bench `dropdown`); no popover or window is opened. The popover

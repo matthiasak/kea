@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """A bookmark without a name, and the icons of bookmarks in folders.
 
-Build first (`./build.sh`), then `python3 Tests/bookmark_names.py`. The app
+Build first (`./build.sh release test`), then `python3 Tests/bookmark_names.py`. The app
 is started hidden in a world of its own, with a few bookmarks written to its
 file — named ones, some whose name is empty, a folder and a folder inside
 it — and icons kept for some of their sites only. Asked for on X: a bookmark

@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """Text replacements in pages, checked in a hidden probe.
 
-Build first (`./build.sh`), then run `python3 Tests/text_replacement.py`.
+Build first (`./build.sh release test`), then run `python3 Tests/text_replacement.py`.
 
 WebKit keeps its text checker's switches in the app's *standard* defaults,
 the domain named by the bundle id, which a probe of the real app shares with
-the Search someone is using: turning Text Replacement off here would turn it
+the Kea someone is using: turning Text Replacement off here would turn it
 off there. So the build is copied, under a bundle id of its own, and the copy
-runs hidden in a world of its own (SEARCH_PROBE). Its settings, its standard
+runs hidden in a world of its own (KEA_PROBE). Its settings, its standard
 defaults, its WebKit folders and the copy itself are removed afterwards.
 
 What is typed is the shortcut macOS puts in every Mac's Text Replacements,
@@ -30,15 +30,15 @@ from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-BUILT = ROOT / "build" / "Search.app"
+BUILT = ROOT / "build" / "Kea.app"
 HOME = os.path.expanduser("~")
-ID = "com.officecommun.search.textcheck"
+ID = "app.kea.browser.textcheck"
 W = f"tr-{hashlib.sha1(str(ROOT).encode()).hexdigest()[:8]}"
-SUPPORT = f"{HOME}/Library/Application Support/Search ({W})"
-SUITE = f"com.officecommun.search.test.{W}"
+SUPPORT = f"{HOME}/Library/Application Support/Kea ({W})"
+SUITE = f"app.kea.browser.test.{W}"
 SOCK = f"{SUPPORT}/bench.sock"
-COPY = Path(tempfile.mkdtemp(prefix="tr-probe-")) / "Search.app"
-EXE = str(COPY / "Contents" / "MacOS" / "Search")
+COPY = Path(tempfile.mkdtemp(prefix="tr-probe-")) / "Kea.app"
+EXE = str(COPY / "Contents" / "MacOS" / "Kea")
 
 PAGE = b"""<!doctype html><title>typing</title>
 <input id=i autocomplete=off><textarea id=t></textarea>"""
@@ -84,7 +84,7 @@ def make_copy():
     plist = str(COPY / "Contents" / "Info.plist")
     subprocess.run(["plutil", "-replace", "CFBundleIdentifier", "-string", ID, plist], check=True)
     (COPY / "Contents" / "embedded.provisionprofile").unlink(missing_ok=True)
-    subprocess.run(["codesign", "--force", "--deep", "-s", "-", "--entitlements", str(ROOT / "Search.entitlements"), str(COPY)],
+    subprocess.run(["codesign", "--force", "--deep", "-s", "-", "--entitlements", str(ROOT / "Kea.entitlements"), str(COPY)],
                    check=True, capture_output=True)
 
 def cmd(req):
@@ -114,7 +114,7 @@ def typed(t, tab, field, text):
 def launch():
     """The copy, hidden, never brought forward → a bench tab on the page."""
     if os.path.exists(SOCK): os.remove(SOCK)
-    subprocess.run(["open", "-n", "-g", "-j", "--env", f"SEARCH_PROBE={W}", str(COPY)], check=True)
+    subprocess.run(["open", "-n", "-g", "-j", "--env", f"KEA_PROBE={W}", str(COPY)], check=True)
     for _ in range(150):
         if os.path.exists(SOCK): break
         time.sleep(0.1)

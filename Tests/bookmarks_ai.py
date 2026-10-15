@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Organize with AI: the bookmark list sent to a stand-in provider, its answer read.
 
-Build first (`./build.sh`), then `python3 Tests/bookmarks_ai.py`. Drives the
+Build first (`./build.sh release test`), then `python3 Tests/bookmarks_ai.py`. Drives the
 bench's `ai organize` and `ai apply` against a stand-in on this Mac: invented,
 repeated and left-out numbers, empty folders and chatter around the JSON are
 handled; Apply is one undoable change, and refused when the list changed since.

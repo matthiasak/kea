@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Split View, checked through Search's own model in a hidden probe.
+"""Split View, checked through Kea's own model in a hidden probe.
 
-Build first (`./build.sh` or `./build.sh debug`), then run
+Build first (`./build.sh release test` or `./build.sh debug test`), then run
 `python3 Tests/split_view.py`. The app is started hidden in a world of its
-own (SEARCH_PROBE=split-tests-<checkout>, see use()), driven through
+own (KEA_PROBE=split-tests-<checkout>, see use()), driven through
 ./bench's socket, and quit;
 its settings and files are removed afterwards. Nothing here makes, shows or
 brings forward a window: what can only be seen — dragging onto a page's
@@ -26,7 +26,7 @@ from pathlib import Path
 
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 ROOT = Path(__file__).resolve().parents[1]
-APP = str(ROOT / "build" / "Search.app")
+APP = str(ROOT / "build" / "Kea.app")
 HOME = os.path.expanduser("~")
 def use(name):
     """This checkout's own world for a suite: the name, then a tag made from
@@ -36,8 +36,8 @@ def use(name):
     wants a world apart from the split suite's calls it with its own name."""
     global W, SUPPORT, SUITE, SOCK
     W = f"{name}-{hashlib.sha1(str(ROOT).encode()).hexdigest()[:8]}"
-    SUPPORT = f"{HOME}/Library/Application Support/Search ({W})"
-    SUITE = f"com.officecommun.search.test.{W}"
+    SUPPORT = f"{HOME}/Library/Application Support/Kea ({W})"
+    SUITE = f"app.kea.browser.test.{W}"
     SOCK = f"{SUPPORT}/bench.sock"
 use("split-tests")
 class H(BaseHTTPRequestHandler):
@@ -54,19 +54,19 @@ class H(BaseHTTPRequestHandler):
 srv = ThreadingHTTPServer(("127.0.0.1", 0), H); threading.Thread(target=srv.serve_forever, daemon=True).start()
 BASE = f"http://127.0.0.1:{srv.server_port}"
 # Only ever a probe of this world: the one this run started, or one a run
-# before left holding this world's socket. Never the Search someone is using,
+# before left holding this world's socket. Never the Kea someone is using,
 # even one running from this very build (see running()).
 started = set()
 def running(): return set(subprocess.run(["pgrep", "-f", APP + "/Contents/MacOS"], capture_output=True, text=True).stdout.split())
 def holding(): return set(subprocess.run(["lsof", "-t", "--", SOCK], capture_output=True, text=True).stdout.split()) if os.path.exists(SOCK) else set()
 def pids(): return sorted((started & running()) | (holding() & running()))
-WEBKIT = f"{HOME}/Library/WebKit/com.officecommun.search"
+WEBKIT = f"{HOME}/Library/WebKit/app.kea.browser"
 def stores():
     """The WebKit stores this world's runs made, where WebKit keeps them and
     named as the app names them (Store.probeStore, Spaces.store): its
     websites', its extensions', and one for each of its spaces with sign-ins
     of its own, read from its own list of spaces and of spaces it was still
-    erasing. Only those: a real Search's spaces keep their stores beside
+    erasing. Only those: a real Kea's spaces keep their stores beside
     them, and a store is never guessed at by its look."""
     h = 2166136261
     for byte in W.encode(): h = ((h ^ byte) * 16777619) & 0xFFFFFFFF
@@ -86,12 +86,12 @@ def stores():
         if id != FIRST_SPACE:
             found.append(f"{WEBKIT}/WebsiteDataStore/{id}")
     return found
-# The real Search's folder, beside whose stores these are removed.
-REAL = f"{HOME}/Library/Application Support/Search"
+# The real Kea's folder, beside whose stores these are removed.
+REAL = f"{HOME}/Library/Application Support/Kea"
 FIRST_SPACE = "00000000-0000-0000-0000-000000000001"
 def guarded():
     """Store ids no wipe removes, whatever stores() names: every space of the
-    real Search's own list, and the first space's fixed id. A wrong hash, or
+    real Kea's own list, and the first space's fixed id. A wrong hash, or
     a test world's list holding a real space's id, then never reaches a real
     space's sign-ins: rm -rf runs in the folder where those live."""
     ids = {FIRST_SPACE}
@@ -106,20 +106,20 @@ def wipe():
     keep = guarded()
     for path in stores():
         if os.path.basename(path).lower() in keep:
-            print(f"wipe: not removing {path}: the real Search's spaces use that id", file=sys.stderr)
+            print(f"wipe: not removing {path}: the real Kea's spaces use that id", file=sys.stderr)
             continue
         subprocess.run(["rm", "-rf", path])
     subprocess.run(["rm", "-rf", SUPPORT]); subprocess.run(["defaults", "delete", SUITE], capture_output=True)
 def probe(pid):
     names = subprocess.run(["lsof", "-a", "-U", "-p", pid, "-Fn"], capture_output=True, text=True).stdout
-    return any(n.startswith("n") and "/Search (" in n and n.endswith("/bench.sock") for n in names.splitlines())
+    return any(n.startswith("n") and "/Kea (" in n and n.endswith("/bench.sock") for n in names.splitlines())
 def main_checkout():
     git = lambda *a: subprocess.run(["git", "-C", str(ROOT), "rev-parse", *a], capture_output=True, text=True).stdout.strip()
     return git("--git-dir") != "" and Path(git("--absolute-git-dir")) == Path(ROOT, git("--git-common-dir")).resolve()
-# Someone's own Search running from this build: no probe starts beside it
+# Someone's own Kea running from this build: no probe starts beside it
 # from here. Run the tests from a worktree of your own instead.
 if main_checkout() and any(not probe(p) for p in running()):
-    sys.exit(f"{APP} is in use by a Search that isn't a probe. Run the tests from a worktree (git worktree add).")
+    sys.exit(f"{APP} is in use by a Kea that isn't a probe. Run the tests from a worktree (git worktree add).")
 def setup(**prefs):
     for p in pids(): subprocess.run(["kill", p])
     started.clear()
@@ -127,9 +127,10 @@ def setup(**prefs):
     for k in ["bench", "welcomed"]: subprocess.run(["defaults", "write", SUITE, k, "-bool", "true"])
     for k, v in prefs.items(): subprocess.run(["defaults", "write", SUITE, k, "-bool", "true" if v else "false"])
 def launch():
+    if not os.path.exists(APP): subprocess.run([str(ROOT / "build.sh"), "release", "test"], cwd=str(ROOT), check=True)
     if os.path.exists(SOCK): os.remove(SOCK)
     before = running()
-    subprocess.run(["open", "-n", "-g", "-j", "--env", f"SEARCH_PROBE={W}", APP])
+    subprocess.run(["open", "-n", "-g", "-j", "--env", f"KEA_PROBE={W}", APP])
     for _ in range(150):
         if os.path.exists(SOCK): break
         time.sleep(0.1)

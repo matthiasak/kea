@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Sign-ins that ask for the name first, in a hidden probe.
 
-Build first (`./build.sh`), then `python3 Tests/identifier_first.py`. Local
+Build first (`./build.sh release test`), then `python3 Tests/identifier_first.py`. Local
 pages on 127.0.0.1:8803 stand in for impots.gouv.fr, Google and the rest: a
 first page with the name box alone, a second with the password alone. Two
 made-up accounts go into this world's own keychain items (its label, never

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Settings › General › Start with a fresh window (#406), in a hidden probe.
 
-Build first (`./build.sh`), then `python3 Tests/fresh_window.py`. It uses the
+Build first (`./build.sh release test`), then `python3 Tests/fresh_window.py`. It uses the
 split suite's harness: started hidden, no window made or shown, everything
 removed afterwards. windows.json's trimming isn't run live, since a failure
 there would open a second window.

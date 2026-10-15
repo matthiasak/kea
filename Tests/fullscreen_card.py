@@ -2,14 +2,14 @@
 """The column and the page's card, whole again after a page's full screen,
 in a hidden probe.
 
-Build first (`./build.sh`), then `python3 Tests/fullscreen_card.py`.
+Build first (`./build.sh release test`), then `python3 Tests/fullscreen_card.py`.
 Nothing goes full screen: the page's own word that it is going, and that it
-is back (Forms.swift, "fullscreen"), is sent from Search's world, as in
+is back (Forms.swift, "fullscreen"), is sent from Kea's world, as in
 full_screen_chrome.py. With Split View on, the pages' frames from the full
 screen used to hold the stage at the whole window's width afterwards, and
 the window's content, too wide, was centred in the window: the column cut
-off at the left, the page past the right edge, the card's gap gone (Drice,
-10 Oct 2026, after a YouTube video's full screen). Checked here: where the
+off at the left, the page past the right edge, the card's gap gone (after a
+YouTube video's full screen). Checked here: where the
 page is, before and after, alone and as one of a pair, and that the
 column, not the page, is under a point in the column. The real full
 screen, a video's own, is checked by hand on a release candidate.
@@ -25,8 +25,8 @@ sv.use("fullscreen-card")
 
 
 def immerse(tab, on):
-    sv.cmd({"do": "eval", "id": tab, "world": "search",
-            "js": f"window.webkit.messageHandlers.officeForms.postMessage({{kind: 'fullscreen', on: {'true' if on else 'false'}}}); 1"})
+    sv.cmd({"do": "eval", "id": tab, "world": "kea",
+            "js": f"window.webkit.messageHandlers.keaForms.postMessage({{kind: 'fullscreen', on: {'true' if on else 'false'}}}); 1"})
     time.sleep(1.5)
 
 

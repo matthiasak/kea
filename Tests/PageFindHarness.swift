@@ -3,8 +3,8 @@ import Darwin
 import Foundation
 import WebKit
 
-/// Search's own world, as the app defines it (Web.swift).
-enum Web { @MainActor static let world = WKContentWorld.world(name: "Search") }
+/// Kea's own world, as the app defines it (Web.swift).
+enum Web { @MainActor static let world = WKContentWorld.world(name: "Kea") }
 
 @MainActor
 private final class PageFindHarness: NSObject, NSApplicationDelegate {
@@ -134,7 +134,7 @@ private final class PageFindHarness: NSObject, NSApplicationDelegate {
         let wrapsForward = await update("orchid")
         expect(wrapsForward, count: 17, index: 1, "Next wraps from the last hit to the first")
         let painted = (try? await evaluate(
-            "[CSS.highlights.get('search-find-match')?.size ?? 0, CSS.highlights.get('search-find-current')?.size ?? 0]"
+            "[CSS.highlights.get('kea-find-match')?.size ?? 0, CSS.highlights.get('kea-find-current')?.size ?? 0]"
         )) as? [Int]
         check((painted?[0] ?? 0) > 1 && painted?[1] == 1, "Matches are painted, the current one on its own (got \(painted ?? []))")
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The floating video's isolation (Float.swift, Isolate.on) on local pages.
 
-Build first (`./build.sh`), then `python3 Tests/float_video.py`. Each page
+Build first (`./build.sh release test`), then `python3 Tests/float_video.py`. Each page
 holds a playing video under an ancestor that makes a box of its own for
 fixed elements (a transform, a filter, containment…), is drawn only when on
 screen, or is faded out. The isolation script is run on an ordinary tab of
@@ -62,7 +62,7 @@ def main():
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     base = f"http://127.0.0.1:{server.server_port}"
-    source = (ROOT / "Sources/Search/Float.swift").read_text()
+    source = (ROOT / "Sources/Kea/Float.swift").read_text()
     start = source.index('static let on = """') + len('static let on = """')
     isolate = source[start:source.index('"""', start)].strip().replace("\\\\", "\\")
     t = sv.T()
@@ -71,7 +71,7 @@ def main():
         for name in CASES:
             tab = sv.sp("open", url=f"{base}/{name}.html")["resultID"]
             time.sleep(1.5)
-            said = sv.cmd({"do": "eval", "id": tab, "js": isolate, "world": "search"}).get("value")
+            said = sv.cmd({"do": "eval", "id": tab, "js": isolate, "world": "kea"}).get("value")
             time.sleep(0.4)
             p = json.loads(sv.cmd({"do": "eval", "id": tab, "js": PROBE}).get("value"))
             fills = abs(p["x"]) < 1 and abs(p["y"]) < 1 and abs(p["w"] - p["iw"]) < 1 and abs(p["h"] - p["ih"]) < 1

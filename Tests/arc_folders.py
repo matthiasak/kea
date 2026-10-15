@@ -1,6 +1,6 @@
 """Arc's folders survive an import made with tab groups off (#478).
 
-Build first (`./build.sh`), then `python3 Tests/arc_folders.py`. A made-up Arc
+Build first (`./build.sh release test`), then `python3 Tests/arc_folders.py`. A made-up Arc
 profile is written into the world's own Import folder, with two folders of
 pinned pages, and the import is asked for its spaces with tab groups off. The
 names have to be in the session all the same, so that turning groups on later

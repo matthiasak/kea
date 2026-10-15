@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """A link's right-click menu, in a hidden probe.
 
-Build first (`./build.sh`), then `python3 Tests/link_menu.py`. The right
+Build first (`./build.sh release test`), then `python3 Tests/link_menu.py`. The right
 button is pressed on a link through the page's own view, and the item is
 chosen as the menu comes up (the bench's linkmenu), so WebKit makes the tab
 as it does for a hand; no window is made or shown.

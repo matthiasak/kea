@@ -1,6 +1,6 @@
 """A favourite already pinned doesn't come in a second time (#482).
 
-Build first (`./build.sh`), then `python3 Tests/arc_pins.py`. A made-up Arc
+Build first (`./build.sh release test`), then `python3 Tests/arc_pins.py`. A made-up Arc
 profile is brought in twice, with a pin sent wandering in between, the way a
 site does when it answers somewhere else: Gmail pinned at mail.google.com and
 found at mail.google.com/mail/u/0/. The second import must add nothing.
@@ -63,7 +63,7 @@ def wander(to):
 
 
 def pin_by_hand(home):
-    """A pin of your own, not from Arc, as if pinned in Search before."""
+    """A pin of your own, not from Arc, as if pinned in Kea before."""
     path = f"{sv.SUPPORT}/pins.json"
     kept = json.load(open(path))
     row = next(iter(kept.values()))

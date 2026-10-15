@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """A login with no name beside a named one on the same site, in a hidden probe.
 
-Build first (`./build.sh`), then `python3 Tests/password_only_mixed.py`. A
+Build first (`./build.sh release test`), then `python3 Tests/password_only_mixed.py`. A
 password box alone saves its password under no name, and the keychain keeps
 such an item with no account at all. Vault then names it by an empty
 account when it reads, saves or forgets it: this checks that the empty
