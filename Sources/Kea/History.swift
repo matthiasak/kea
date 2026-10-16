@@ -44,7 +44,7 @@ struct Suggestion: Identifiable, Equatable {
     }
 }
 
-private struct Visit: Codable {
+struct Visit: Codable {
     var url: String
     var key: String
     var title: String
@@ -253,12 +253,56 @@ final class History: ObservableObject {
         save()
     }
 
+    func exported() -> [Visit] {
+        ensureIndexed()
+        let now = Date()
+        return visits.values
+            .sorted { History.score($0, now: now) > History.score($1, now: now) }
+            .prefix(2_000)
+            .sorted { $0.key < $1.key }
+    }
+
+    func absorb(_ list: [Visit]) {
+        ensureIndexed()
+        var changed = false
+        for v in list {
+            if let seen = visits[v.key],
+               seen.count >= v.count,
+               seen.last >= v.last,
+               (!seen.title.isEmpty || v.title.isEmpty) {
+                continue
+            }
+            guard let url = URL(string: v.url) else { continue }
+            take(url, title: v.title, count: v.count, last: v.last)
+            changed = true
+        }
+        if changed { save() }
+    }
+
+    func forget(before date: Date) {
+        ensureIndexed()
+        let keys = visits.values.filter { $0.last <= date }.map(\.key)
+        guard !keys.isEmpty else { return }
+        for key in keys {
+            visits[key] = nil
+            forgetText(for: key)
+        }
+        save()
+    }
+
+    func forget(_ key: String, before date: Date) {
+        ensureIndexed()
+        guard (visits[key]?.last ?? .distantFuture) <= date else { return }
+        forget(key)
+    }
+
     func forget() {
         indexed = true
         visits = [:]
         pageText = [:]
         visitedHosts = []
         save()
+        Sync.shared.historyCleared()
     }
 
     /// Everywhere you have been, newest first, for the window that shows it.
@@ -310,6 +354,7 @@ final class History: ObservableObject {
         visits[key] = nil
         forgetText(for: key)
         save()
+        Sync.shared.historyForgot(key)
     }
 
     /// The last eight places, newest first; worked out again only once the

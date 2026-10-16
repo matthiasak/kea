@@ -130,6 +130,18 @@ final class Links: NSObject, NSApplicationDelegate {
         }
     }
 
+    func application(_ application: NSApplication, willContinueUserActivityWithType userActivityType: String) -> Bool {
+        userActivityType == NSUserActivityTypeBrowsingWeb
+    }
+
+    func application(_ application: NSApplication, continue userActivity: NSUserActivity,
+                     restorationHandler: @escaping ([any NSUserActivityRestoring]) -> Void) -> Bool {
+        guard !Store.testing, userActivity.activityType == NSUserActivityTypeBrowsingWeb, let url = userActivity.webpageURL,
+              url.scheme?.lowercased().hasPrefix("http") == true else { return false }
+        Links.take(url)
+        return true
+    }
+
     /// The Dock icon clicked with the window closed: bring the window back
     /// rather than doing nothing, which is what a hidden-title-bar SwiftUI
     /// window does by default.
@@ -173,6 +185,8 @@ final class Links: NSObject, NSApplicationDelegate {
         // Only the first window's arrival starts the delivery; the others
         // find it running.
         guard deliver == nil else { return }
+        PanelWindow.followBookmarks()
+        Sync.shared.start()
         deliver = { url in
             // The window in front's browser, or a window brought back for it:
             // the link lands where you are, not in the first window.

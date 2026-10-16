@@ -33,6 +33,21 @@ enum Pins {
 
     private static var file: URL { Store.file("pins.json") }
 
+    static var all: [UUID: [PinDef]] {
+        load()
+        return bySpace
+    }
+
+    static func replaceAll(_ map: [UUID: [PinDef]]) {
+        load()
+        let touched = Set(bySpace.keys).union(map.keys)
+        bySpace = map.filter { !$0.value.isEmpty }
+        save()
+        for space in touched {
+            NotificationCenter.default.post(name: changed, object: nil, userInfo: ["space": space])
+        }
+    }
+
     static func defs(_ space: UUID) -> [PinDef] {
         load()
         return bySpace[space] ?? []

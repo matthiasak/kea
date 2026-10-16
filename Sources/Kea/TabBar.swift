@@ -1090,6 +1090,7 @@ struct TabMenu: View {
             browser.copyMarkdownLink()
         }
         .disabled(tab.isBlank)
+        SendToDevice(browser: browser, tab: tab)
         Button(tab.muted ? "Unmute Tab" : "Mute Tab") { tab.toggleMute() }
         // Its page let go of now, as it would be after ten minutes unseen:
         // the row keeps its title and picture, and it loads again when gone

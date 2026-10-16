@@ -333,6 +333,11 @@ final class Browser: NSObject, ObservableObject {
     @Published var finding = false
     /// Ubi Chat's column, while it is open (see AIAssist).
     @Published var assisting: Assistant?
+    /// The panel let out over the page, if one is (SidePanels.swift).
+    @Published var expandedPanel: SidePanel?
+    /// Ubi Chat in a window of its own, while it is popped out.
+    var chatWindow: PanelWindow?
+    var handoffActivity: NSUserActivity?
     /// The Settings page it opens on next.
     var settingsPage: SettingsPanel.Page {
         get {
@@ -1581,6 +1586,14 @@ final class Browser: NSObject, ObservableObject {
             .sink { [weak self] note in
                 guard let self, (note.object as? Browser) !== self, let space = note.userInfo?["space"] as? UUID else { return }
                 pinsChanged(in: space)
+            }
+            .store(in: &bag)
+        followChatWindow().store(in: &bag)
+        $activeID.removeDuplicates().receive(on: RunLoop.main).sink { [weak self] _ in self?.handOff() }.store(in: &bag)
+        NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)
+            .sink { [weak self] note in
+                guard let self, (note.object as? NSWindow) === self.window else { return }
+                self.handOff()
             }
             .store(in: &bag)
 
@@ -4855,6 +4868,7 @@ extension Browser: WKNavigationDelegate, WKUIDelegate {
         Favicons.shared.fetch(for: tab)
         guard !tab.shy, !tab.bench else { return }
         history.record(url, title: tab.title)
+        handOff()
         // A site's home page that says where its search is (OpenSearch):
         // with Search a site on, it joins the list (see SiteSearch.learn).
         if prefs.searchesSites, url.scheme == "https", url.path.isEmpty || url.path == "/" {

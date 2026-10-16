@@ -17,9 +17,6 @@ struct SideBar: View {
     @Namespace private var pill
 
     @State private var landing = false
-    /// The width the column had when the edge was picked up.
-    @State private var grabbed: CGFloat?
-    @State private var onEdge = false
 
     /// A pin, picked up out of the grid — a separate state from the loose
     /// rows above, since the two gestures never happen at once but move on
@@ -106,7 +103,9 @@ struct SideBar: View {
         .overlay(alignment: innerEdge) {
             if !onFrame { Rectangle().fill(Palette.hairline).frame(width: 1) }
         }
-        .overlay(alignment: innerEdge) { edge }
+        .overlay(alignment: innerEdge) {
+            EdgeHandle(width: $prefs.sideWidth, range: Metrics.sideMin...Metrics.sideMax, standard: Metrics.side, growsRight: !onRight)
+        }
         .onDrop(of: [.url, .text], isTargeted: $landing) { providers in
             browser.take(providers)
         }
@@ -118,35 +117,6 @@ struct SideBar: View {
         // The last square made the first row changes nothing in the row's
         // order; only how many of each there are.
         .animation(Motion.settle, value: browser.listedPins.count)
-    }
-
-    /// The column's edge: pull it to make the column wider or narrower,
-    /// double-click it to put it back. The hairline darkens under the pointer
-    /// so the edge says it can be taken before it is.
-    private var edge: some View {
-        Rectangle()
-            .fill(Palette.ink.opacity(onEdge || grabbed != nil ? 0.18 : 0))
-            .frame(width: onEdge || grabbed != nil ? 2 : 1)
-            .frame(width: 9)
-            .contentShape(Rectangle())
-            .onHover { over in
-                onEdge = over
-                if over { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() }
-            }
-            .gesture(
-                DragGesture(minimumDistance: 1, coordinateSpace: .global)
-                    .onChanged { value in
-                        if grabbed == nil { grabbed = prefs.sideWidth }
-                        let delta = onRight ? -value.translation.width : value.translation.width
-                        let wanted = (grabbed ?? prefs.sideWidth) + delta
-                        prefs.sideWidth = min(Metrics.sideMax, max(Metrics.sideMin, wanted))
-                    }
-                    .onEnded { _ in grabbed = nil }
-            )
-            .modifier(OneClick(double: true) {
-                withAnimation(Motion.settle) { prefs.sideWidth = Metrics.side }
-            })
-            .animation(Motion.quick, value: onEdge)
     }
 
     // MARK: - the spaces, as pages

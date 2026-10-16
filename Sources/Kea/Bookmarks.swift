@@ -577,6 +577,14 @@ final class Bookmarks: ObservableObject {
     /// `incoming` into `nodes`, level by level: a folder into the folder of
     /// the same name, a page only if the same address isn't already at
     /// that level.
+    nonisolated static func union(_ remote: [Bookmark], _ local: [Bookmark]) -> [Bookmark] {
+        var nodes = remote
+        var added = 0, already = 0
+        var ids: [Bookmark.ID] = []
+        merge(local, into: &nodes, added: &added, already: &already, ids: &ids)
+        return nodes
+    }
+
     nonisolated private static func merge(_ incoming: [Bookmark], into nodes: inout [Bookmark], added: inout Int, already: inout Int, ids: inout [Bookmark.ID]) {
         var folders: [String: Int] = [:]
         for (index, node) in nodes.enumerated() where node.isFolder {
@@ -1500,13 +1508,19 @@ struct BookmarksSidebar: View {
     @ObservedObject var bookmarks: Bookmarks
     /// On the window's left edge, so the line between it and the page is on its right.
     let onLeft: Bool
-    @State private var expanded: Set<Bookmark.ID>
+    let width: CGFloat?
+    let expanded: Bool
+    let popped: Bool
+    @State private var opened: Set<Bookmark.ID>
 
-    init(browser: Browser, bookmarks: Bookmarks, onLeft: Bool) {
+    init(browser: Browser, bookmarks: Bookmarks, onLeft: Bool, width: CGFloat? = Metrics.side, expanded: Bool = false, popped: Bool = false) {
         self.browser = browser
         self.bookmarks = bookmarks
         self.onLeft = onLeft
-        _expanded = State(initialValue: BookmarksDropdown.opening(bookmarks.roots))
+        self.width = width
+        self.expanded = expanded
+        self.popped = popped
+        _opened = State(initialValue: BookmarksDropdown.opening(bookmarks.roots))
     }
 
     var body: some View {
@@ -1517,11 +1531,17 @@ struct BookmarksSidebar: View {
                     .foregroundStyle(Palette.muted)
                 Spacer(minLength: 0)
                 Quick("Manage") { browser.bookmarking = true }
+                if !popped {
+                    Door(icon: expanded ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right",
+                         help: expanded ? "Back to Sidebar Width" : "Expand") { browser.toggleExpanded(.bookmarks) }
+                }
+                PanelMenu(browser: browser, panel: .bookmarks, onLeft: onLeft, popped: popped) { EmptyView() }
                 Door(icon: "xmark", help: "Hide Bookmarks Sidebar") { browser.prefs.bookmarksSidebar = false }
             }
             .padding(.leading, 12)
             .padding(.trailing, 6)
             .padding(.vertical, 6)
+            .modifier(PanelHeaderGesture(browser: browser, panel: .bookmarks, active: !popped))
             if bookmarks.isEmpty {
                 Text("No bookmarks yet. Pocket this page with ⇧⌘B.")
                     .font(.system(size: 12))
@@ -1529,7 +1549,7 @@ struct BookmarksSidebar: View {
                     .padding(12)
             } else {
                 ScrollView {
-                    BookmarkOutline(bookmarks: bookmarks, expanded: $expanded, open: { url in
+                    BookmarkOutline(bookmarks: bookmarks, expanded: $opened, open: { url in
                         browser.pickBookmark(url)
                     }, openInNewTab: { url in
                         browser.pickBookmark(url, inNewTab: true)
@@ -1538,11 +1558,21 @@ struct BookmarksSidebar: View {
                 }
             }
         }
-        .frame(width: Metrics.side)
+        .frame(maxWidth: expanded ? 760 : .infinity)
+        .frame(width: width)
+        .frame(maxWidth: width == nil ? .infinity : nil)
         .frame(maxHeight: .infinity, alignment: .top)
         .background(Palette.ground)
         .overlay(alignment: onLeft ? .trailing : .leading) {
-            Rectangle().fill(Palette.hairline).frame(width: 1)
+            if width != nil {
+                Rectangle().fill(Palette.hairline).frame(width: 1)
+            }
+        }
+        .overlay(alignment: onLeft ? .trailing : .leading) {
+            if width != nil {
+                EdgeHandle(width: Binding(get: { browser.prefs.marksWidth }, set: { browser.setPanelWidth(.bookmarks, $0) }),
+                           range: SidePanel.bookmarks.range, standard: Metrics.side, growsRight: onLeft)
+            }
         }
     }
 }

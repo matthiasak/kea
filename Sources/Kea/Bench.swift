@@ -2556,6 +2556,124 @@ final class Bench {
         case "split":
             splitCommand(request, browser: browser, answer)
 
+        case "sync":
+            guard Store.testing else { answer(["error": "sync only works on a --test run"]); return }
+            func syncState() -> [String: Any] {
+                let s = Sync.shared
+                let devs: [[String: Any]] = s.devices.map { d in
+                    [
+                        "id": d.id.uuidString,
+                        "name": d.name,
+                        "tabs": d.pages.map { ["url": $0.url.absoluteString, "title": $0.title] },
+                    ]
+                }
+                return [
+                    "place": s.place.rawValue,
+                    "device": s.device.uuidString,
+                    "name": s.name,
+                    "status": s.status,
+                    "ready": s.ready,
+                    "devices": devs,
+                ]
+            }
+            switch request["action"] as? String ?? "state" {
+            case "state":
+                answer(syncState())
+            case "setup":
+                if let name = request["name"] as? String { Sync.shared.name = name }
+                if let folder = request["folder"] as? String {
+                    Sync.shared.chooseFolder(URL(fileURLWithPath: folder))
+                } else if let endpoint = request["endpoint"] as? String,
+                          let bucket = request["bucket"] as? String,
+                          let access = request["access"] as? String,
+                          let secret = request["secret"] as? String {
+                    if let err = Sync.shared.useBucket(endpoint: endpoint, bucket: bucket, access: access, secret: secret) {
+                        answer(["error": err])
+                        return
+                    }
+                } else {
+                    answer(["error": "sync setup needs folder or endpoint+bucket+access+secret"])
+                    return
+                }
+                guard let pass = request["passphrase"] as? String else {
+                    answer(["error": "sync setup needs passphrase"])
+                    return
+                }
+                Task { @MainActor in
+                    if let err = await Sync.shared.use(passphrase: pass) {
+                        answer(["error": err])
+                    } else {
+                        answer(["ok": true])
+                    }
+                }
+            case "now":
+                Task { @MainActor in
+                    await Sync.shared.now()
+                    answer(syncState())
+                }
+            case "send":
+                guard let tab = find(request, in: browser) else { answer(missing(request)); return }
+                guard let to = request["to"] as? String,
+                      let dev = Sync.shared.devices.first(where: { $0.name == to })
+                else {
+                    answer(["error": "no device named \(request["to"] ?? "")"])
+                    return
+                }
+                Sync.shared.send(tab, to: dev, from: browser)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                    answer(["sent": true])
+                }
+            default:
+                answer(["error": "unknown sync action"])
+            }
+
+        case "run":
+            guard Store.testing else { answer(["error": "run only works on a --test run"]); return }
+            guard let id = request["command"] as? String, let command = Command.named(id) else {
+                answer(["error": "run needs a command id"])
+                return
+            }
+            command.run(browser)
+            answer(["ran": id])
+
+        case "panels":
+            guard Store.testing else { answer(["error": "panels only works on a --test run"]); return }
+            for panel in [SidePanel.chat, .bookmarks] {
+                guard let spec = request[panel.rawValue] as? [String: Any] else { continue }
+                if let w = (spec["width"] as? NSNumber)?.doubleValue {
+                    browser.setPanelWidth(panel, CGFloat(w))
+                }
+                if let side = spec["side"] as? String {
+                    let chosen: SidebarPosition? = side == "left" ? .left : side == "right" ? .right : nil
+                    if panel == .chat { browser.prefs.chatSide = chosen } else { browser.prefs.marksSide = chosen }
+                }
+                if let exp = spec["expanded"] as? Bool, (browser.expandedPanel == panel) != exp {
+                    browser.toggleExpanded(panel)
+                }
+                if let pop = spec["popped"] as? Bool {
+                    if browser.expandedPanel == panel && pop { browser.expandedPanel = nil }
+                    if panel == .chat { browser.prefs.chatPopped = pop } else { browser.prefs.marksPopped = pop }
+                }
+            }
+            func state(_ panel: SidePanel) -> [String: Any] {
+                let open = panel == .chat ? browser.assisting != nil : browser.prefs.bookmarksSidebar
+                let width = panel == .chat ? browser.prefs.chatWidth : browser.prefs.marksWidth
+                let popped = panel == .chat ? browser.prefs.chatPopped : browser.prefs.marksPopped
+                let winFrame = panel == .chat ? browser.chatWindow?.frame : PanelWindow.bookmarks?.frame
+                let winVal: Any = winFrame.map { [Double($0.origin.x), Double($0.origin.y), Double($0.size.width), Double($0.size.height)] } ?? NSNull()
+                return [
+                    "open": open,
+                    "width": Double(width),
+                    "side": browser.panelOnLeft(panel) ? "left" : "right",
+                    "expanded": browser.expandedPanel == panel,
+                    "popped": popped,
+                    "window": winVal,
+                ]
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                answer(["chat": state(.chat), "bookmarks": state(.bookmarks)])
+            }
+
         case "ui":
             // Open or close the app's own panels, to reproduce what a person
             // did without a person.
@@ -2617,7 +2735,7 @@ final class Bench {
 
         default:
             answer(["error": "unknown command “\(verb)”", "commands": [
-                "tabs", "open", "go", "close", "wait", "sleep", "select", "text", "eval", "click", "type", "submit", "shot", "probe", "key", "textcheck", "resize", "hit", "film", "float", "window", "pages", "picture", "place", "group", "tospace", "field", "bookmark", "marks", "menu", "keyeq", "fill", "pin", "middle", "windows", "quit", "towindow", "pull", "space", "split", "strip", "column", "fold", "consent", "site", "little", "ui", "import", "import-preview", "import-file", "import-file-start", "import-file-status", "import-file-cancel", "remove-folder", "accounts", "find", "answer", "visible", "ai", "notifications",
+                "tabs", "open", "go", "close", "wait", "sleep", "select", "text", "eval", "click", "type", "submit", "shot", "probe", "key", "textcheck", "resize", "hit", "film", "float", "window", "pages", "picture", "place", "group", "tospace", "field", "bookmark", "marks", "menu", "keyeq", "fill", "pin", "middle", "windows", "quit", "towindow", "pull", "space", "split", "strip", "column", "fold", "consent", "site", "little", "sync", "run", "panels", "ui", "import", "import-preview", "import-file", "import-file-start", "import-file-status", "import-file-cancel", "remove-folder", "accounts", "find", "answer", "visible", "ai", "notifications",
             ]])
         }
     }

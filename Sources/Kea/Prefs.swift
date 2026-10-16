@@ -245,6 +245,29 @@ final class Preferences: ObservableObject {
     @Published var bookmarksSidebar: Bool {
         didSet { store.set(bookmarksSidebar, forKey: "bookmarks.sidebar") }
     }
+    @Published var chatWidth: CGFloat {
+        didSet { store.set(Double(chatWidth), forKey: "ai.width") }
+    }
+    @Published var marksWidth: CGFloat {
+        didSet { store.set(Double(marksWidth), forKey: "bookmarks.width") }
+    }
+    /// nil: away from the tab column, where it always was
+    @Published var chatSide: SidebarPosition? {
+        didSet { store.set(chatSide?.rawValue, forKey: "ai.side") }
+    }
+    /// nil: away from the tab column, where it always was
+    @Published var marksSide: SidebarPosition? {
+        didSet { store.set(marksSide?.rawValue, forKey: "bookmarks.side") }
+    }
+    @Published var chatPopped: Bool {
+        didSet { store.set(chatPopped, forKey: "ai.popped") }
+    }
+    @Published var marksPopped: Bool {
+        didSet { store.set(marksPopped, forKey: "bookmarks.popped") }
+    }
+    @Published var handoff: Bool {
+        didSet { store.set(handoff, forKey: "handoff") }
+    }
     /// Where a link goes, at the bottom of the page while the pointer is on
     /// it (see StatusLine.swift). On unless turned off.
     @Published var showsLinks: Bool {
@@ -454,6 +477,13 @@ final class Preferences: ObservableObject {
         littleLinks = store.bool(forKey: "links.little")
         bookmarksBar = store.bool(forKey: "bookmarks.bar")
         bookmarksSidebar = store.bool(forKey: "bookmarks.sidebar")
+        chatWidth = min(Metrics.chatMax, max(Metrics.chatMin, CGFloat(store.object(forKey: "ai.width") as? Double ?? Double(Metrics.chat))))
+        marksWidth = min(Metrics.sideMax, max(Metrics.sideMin, CGFloat(store.object(forKey: "bookmarks.width") as? Double ?? Double(Metrics.side))))
+        chatSide = store.string(forKey: "ai.side").flatMap(SidebarPosition.init)
+        marksSide = store.string(forKey: "bookmarks.side").flatMap(SidebarPosition.init)
+        chatPopped = store.bool(forKey: "ai.popped")
+        marksPopped = store.bool(forKey: "bookmarks.popped")
+        handoff = store.object(forKey: "handoff") as? Bool ?? true
         alwaysShowsDownloads = store.bool(forKey: "downloads.button")
         let links = store.object(forKey: "links.show") as? Bool ?? true
         showsLinks = links

@@ -168,6 +168,12 @@ enum Metrics {
     static let side: CGFloat = 232
     static let sideMin: CGFloat = 176
     static let sideMax: CGFloat = 440
+    /// Ubi Chat's column, until pulled wider or narrower.
+    static let chat: CGFloat = 380
+    static let chatMin: CGFloat = 300
+    static let chatMax: CGFloat = 720
+    /// The narrowest page the side panels leave in a small window.
+    static let pageMin: CGFloat = 320
 }
 
 // One spring for anything that moves between two places, one for anything that

@@ -252,11 +252,19 @@ final class ShortcutStore: ObservableObject {
     private var manifest: [String: Override] = [:]
 
     private init() {
+        changed = Self.read()
+    }
+
+    func reload() {
+        changed = Self.read()
+    }
+
+    private static func read() -> [String: Override] {
         // Read with the same rules the Settings box keeps: a key that isn't
         // ours to give stays the Mac's, whatever the file says.
         let saved = Store.settings.data(forKey: "shortcuts")
             .flatMap { try? JSONDecoder().decode([String: Override].self, from: $0) } ?? [:]
-        changed = saved.filter { id, override in
+        return saved.filter { id, override in
             override.key.map { !KeyCombo.isReserved($0) && !(id.hasPrefix("ext:") && KeyCombo.isBrowserOnly($0)) } ?? true
         }
     }

@@ -1,7 +1,7 @@
 import SwiftUI
 
 // Ubi Chat: the AI add-on as you meet it, a column beside the page. One chat
-// at a time in each window, kept on this Mac only (Chats.swift), a private
+// at a time in each window, kept on your own Macs only (Chats.swift, Sync.swift), a private
 // tab's never. A question goes with the page in front unless its eye is
 // closed and with the pages pinned to the chat, fenced as the websites'
 // words to read and never as orders (see AIPage); anything in the answer the
@@ -346,7 +346,7 @@ enum AIAssist {
     static func notice(for provider: AIProvider) -> String {
         var text = "When you ask, Kea sends your question, the chat so far, and the text and addresses of the pages you share to \(provider.host)"
         text += provider == .openRouter ? ", which passes them to the model's provider." : "."
-        text += " Their terms and privacy policy apply. Nothing is sent until you ask, and never from a private tab. Your chats are kept on this Mac only, and you can delete them."
+        text += " Their terms and privacy policy apply. Nothing is sent until you ask, and never from a private tab. Your chats are kept on this Mac, and on your other Macs if Sync carries them, sealed with your passphrase. You can delete them."
         switch provider {
         case .gemini:
             text += "\n\nOn Gemini's free tier, outside the EEA, Switzerland and the UK, Google may use this to improve its products, and people may read it. Don't use it on sensitive pages."
@@ -370,7 +370,7 @@ extension Browser {
         return made
     }
     func summarizePage() { openChat().summarize() }
-    func closeAssistant() { assisting?.stop(); assisting = nil }
+    func closeAssistant() { assisting?.stop(); assisting = nil; if expandedPanel == .chat { expandedPanel = nil } }
 
     /// Where the AI runs, and with which model, once Settings has all it
     /// needs; otherwise Settings › AI opens, saying what is missing, and nil.
@@ -402,8 +402,11 @@ struct AssistantPanel: View {
     @ObservedObject var assistant: Assistant
     let onLeft: Bool
     var drawn = false
+    /// nil: as wide as it is given — let out over the page, or in its own window
+    var width: CGFloat? = Metrics.chat
+    var expanded = false
+    var popped = false
     @FocusState private var typing: Bool
-    static let width: CGFloat = 380
 
     var body: some View {
         let suggestions = assistant.suggestions
@@ -421,8 +424,12 @@ struct AssistantPanel: View {
                     Door(icon: "list.bullet", on: assistant.listing, help: "Chats") { assistant.listing.toggle() }
                 }
                 Door(icon: "square.and.pencil", help: "New Chat") { assistant.new() }
+                if !drawn, !popped {
+                    Door(icon: expanded ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right",
+                         help: expanded ? "Back to Sidebar Width" : "Expand") { browser.toggleExpanded(.chat) }
+                }
                 if !drawn {
-                    Menu {
+                    PanelMenu(browser: browser, panel: .chat, onLeft: onLeft, popped: popped) {
                         if !assistant.shy {
                             Button(assistant.chat.starred ? "Unstar" : "Star") {
                                 assistant.edit(assistant.chat.id) { $0.starred.toggle() }
@@ -440,22 +447,15 @@ struct AssistantPanel: View {
                                 assistant.delete(assistant.chat.id)
                             }
                         }
-                    } label: {
-                        Image(systemName: "ellipsis")
-                            .font(.system(size: 11))
-                            .foregroundStyle(Palette.muted)
-                            .frame(width: 26, height: 26)
-                            .contentShape(Rectangle())
+                        Divider()
                     }
-                    .menuStyle(.button)
-                    .buttonStyle(.plain)
-                    .menuIndicator(.hidden)
                 }
                 Door(icon: "xmark", help: "Close   esc") { browser.closeAssistant() }
             }
             .padding(.leading, 14)
             .padding(.trailing, 6)
             .padding(.vertical, 6)
+            .modifier(PanelHeaderGesture(browser: browser, panel: .chat, active: !drawn && !popped))
 
             if assistant.listing {
                 ChatList(assistant: assistant, chats: Shared.chats, drawn: drawn)
@@ -562,11 +562,21 @@ struct AssistantPanel: View {
                     .padding(.bottom, 10)
             }
         }
-        .frame(width: AssistantPanel.width)
+        .frame(maxWidth: expanded ? 760 : .infinity)
+        .frame(width: width)
+        .frame(maxWidth: width == nil ? .infinity : nil)
         .frame(maxHeight: .infinity, alignment: .top)
         .background(Palette.ground)
         .overlay(alignment: onLeft ? .trailing : .leading) {
-            Rectangle().fill(Palette.hairline).frame(width: 1)
+            if width != nil {
+                Rectangle().fill(Palette.hairline).frame(width: 1)
+            }
+        }
+        .overlay(alignment: onLeft ? .trailing : .leading) {
+            if width != nil, !drawn {
+                EdgeHandle(width: Binding(get: { browser.prefs.chatWidth }, set: { browser.setPanelWidth(.chat, $0) }),
+                           range: SidePanel.chat.range, standard: Metrics.chat, growsRight: onLeft)
+            }
         }
         .onAppear { if !drawn { typing = true } }
     }
@@ -761,7 +771,7 @@ struct AssistantPanel: View {
 
         var body: some View {
             if chats.all.isEmpty {
-                Text("No chats yet. They stay in the nest — on this Mac only.")
+                Text("No chats yet. They stay in the nest — on your own Macs only.")
                     .font(.system(size: 12))
                     .foregroundStyle(Palette.muted)
                     .padding(12)

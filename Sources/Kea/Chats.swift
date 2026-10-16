@@ -1,6 +1,6 @@
 import AppKit
 
-// Ubi Chat's chats, kept on this Mac only (chats.json in Kea's folder;
+// Ubi Chat's chats, kept on your own Macs only (chats.json in Kea's folder, carried sealed by Sync;
 // a private tab's chat is never written), and what goes with a question.
 
 struct ChatPin: Codable, Identifiable, Equatable {

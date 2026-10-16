@@ -98,7 +98,7 @@ def main():
         after = right_edge(a)
         t.ok("the column takes 380 points from the page", before and after and abs(before - after - 380) < 2, (before, after))
         st = ai("state")
-        t.ok("a first question waits on the notice", "kept on this Mac only" in st["notice"] and not seen, st["notice"])
+        t.ok("a first question waits on the notice", "kept on this Mac, and on your other Macs if Sync carries them" in st["notice"] and not seen, st["notice"])
         ai("agree")
         st = answered(1)
         path, body = seen[-1]

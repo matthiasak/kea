@@ -228,6 +228,7 @@ struct KeaApp: App {
                 Button("Copy as Markdown Link") { browser.copyMarkdownLink() }
                     .shortcut("tabs.copyMarkdown")
                     .disabled(browser.active?.isBlank ?? true)
+                if let tab = browser.active { SendToDevice(browser: browser, tab: tab) }
                 Button("Paste and Go") { browser.pasteAndGo() }
                     .shortcut("tabs.pasteAndGo")
                 Divider()
@@ -270,6 +271,7 @@ struct KeaApp: App {
                         }
                     }
                 }
+                OtherMacs(browser: browser)
                 Divider()
                 Button("Show History…") { browser.recalling = true }
                     .shortcut("history.show")
@@ -290,6 +292,26 @@ struct KeaApp: App {
                     .shortcut("app.passwords")
             }
             CommandGroup(replacing: .help) {}
+        }
+    }
+}
+
+private struct OtherMacs: View {
+    let browser: Browser
+    @ObservedObject var sync = Sync.shared
+    var body: some View {
+        if sync.kinds.contains(.tabs), sync.devices.contains(where: { !$0.pages.isEmpty }) {
+            Section("Tabs from Other Macs") {
+                ForEach(sync.devices.filter { !$0.pages.isEmpty }) { device in
+                    Menu(device.name) {
+                        ForEach(device.pages, id: \.self) { page in
+                            Button { browser.open(page.url, foreground: true) } label: { MenuLine(title: page.title, url: page.url) }
+                        }
+                        Divider()
+                        Button("Open All") { for page in device.pages { browser.open(page.url, foreground: false, atEnd: true, mayWait: true) } }
+                    }
+                }
+            }
         }
     }
 }
@@ -376,6 +398,7 @@ struct ContentView: View {
     @State private var room: CGSize?
     @State private var roomTicket = 0
     @State private var immersionRevision = 0
+    @State private var windowWidth: CGFloat = 0
 
 
     /// The window: room at the top, one stage for the page, and the row when
@@ -402,21 +425,21 @@ struct ContentView: View {
             // top and on the column's side in the room (see chrome). Two pages
             // side by side are a card each (see PaneStage).
             HStack(spacing: 0) {
-                // Ubi Chat's column at the window's far edge, outside the bookmarks':
-                // it stays from tab to tab, and in Split View beside both pages.
-                if chatColumn, sideOnRight, let assistant = browser.assisting {
-                    AssistantPanel(browser: browser, assistant: assistant, onLeft: true)
+                // Each panel on the side it was put (SidePanels.swift): Ubi Chat outermost, then the bookmarks, then the page.
+                if chatShown, chatOnLeft, let assistant = browser.assisting {
+                    AssistantPanel(browser: browser, assistant: assistant, onLeft: true, width: chatWidth)
                 }
-                if bookmarksColumn, sideOnRight {
-                    BookmarksSidebar(browser: browser, bookmarks: browser.bookmarks, onLeft: true)
+                if marksShown, marksOnLeft {
+                    BookmarksSidebar(browser: browser, bookmarks: browser.bookmarks, onLeft: true, width: marksWidth)
                 }
                 stage
                     .modifier(CardEdge(on: cards && !browser.prefs.splitView))
-                if bookmarksColumn, !sideOnRight {
-                    BookmarksSidebar(browser: browser, bookmarks: browser.bookmarks, onLeft: false)
+                    .overlay { letOut }
+                if marksShown, !marksOnLeft {
+                    BookmarksSidebar(browser: browser, bookmarks: browser.bookmarks, onLeft: false, width: marksWidth)
                 }
-                if chatColumn, !sideOnRight, let assistant = browser.assisting {
-                    AssistantPanel(browser: browser, assistant: assistant, onLeft: false)
+                if chatShown, !chatOnLeft, let assistant = browser.assisting {
+                    AssistantPanel(browser: browser, assistant: assistant, onLeft: false, width: chatWidth)
                 }
             }
             .padding(.leading, sideOnRight ? farGap : 0)
@@ -453,6 +476,7 @@ struct ContentView: View {
             }
         }
         .ignoresSafeArea()
+        .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { windowWidth = $0 }
         .background { fullscreenWatch }
         .animation(Motion.glide, value: browser.prefs.sidebar)
         .animation(Motion.glide, value: browser.prefs.sidePosition)
@@ -508,6 +532,22 @@ struct ContentView: View {
     private var bookmarksColumn: Bool { browser.prefs.bookmarksSidebar && fullscreenTab == nil }
     /// Ubi Chat is open, and no video has the screen.
     private var chatColumn: Bool { browser.assisting != nil && fullscreenTab == nil }
+    private var chatOnLeft: Bool { browser.panelOnLeft(.chat) }
+    private var marksOnLeft: Bool { browser.panelOnLeft(.bookmarks) }
+    /// In its column: open, not in a window of its own, and not let out over the page.
+    private var chatShown: Bool { chatColumn && !browser.prefs.chatPopped && browser.expandedPanel != .chat }
+    private var marksShown: Bool { bookmarksColumn && !browser.prefs.marksPopped && browser.expandedPanel != .bookmarks }
+    /// What the side panels may take: the window, less the tab column and the narrowest page worth showing. Before the window is measured, what was asked for.
+    private var panelRoom: CGFloat { windowWidth == 0 ? .infinity : max(0, windowWidth - chrome.width - Metrics.pageMin) }
+    private var chatWidth: CGFloat { min(browser.prefs.chatWidth, max(Metrics.chatMin, panelRoom)) }
+    private var marksWidth: CGFloat { min(browser.prefs.marksWidth, max(Metrics.sideMin, panelRoom - (chatShown ? chatWidth : 0))) }
+    @ViewBuilder private var letOut: some View {
+        if browser.expandedPanel == .chat, chatColumn, !browser.prefs.chatPopped, let assistant = browser.assisting {
+            AssistantPanel(browser: browser, assistant: assistant, onLeft: chatOnLeft, width: nil, expanded: true)
+        } else if browser.expandedPanel == .bookmarks, bookmarksColumn, !browser.prefs.marksPopped {
+            BookmarksSidebar(browser: browser, bookmarks: browser.bookmarks, onLeft: marksOnLeft, width: nil, expanded: true)
+        }
+    }
 
     /// The page as a card on the window's ground: with the tabs down the
     /// side, the column out or folded away, and no page filling the screen.
@@ -1204,6 +1244,10 @@ struct ContentView: View {
             if browser.closePanel() { return true }
             if browser.suggesting != nil {
                 browser.dropChoice()
+                return true
+            }
+            if let panel = browser.expandedPanel, panel == .chat ? browser.assisting != nil : browser.prefs.bookmarksSidebar {
+                browser.toggleExpanded(panel)
                 return true
             }
             if browser.assisting != nil {
