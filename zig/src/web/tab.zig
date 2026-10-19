@@ -43,7 +43,7 @@ pub const Tab = struct {
     browser_ctx: ?*anyopaque = null,
     on_change: ?*const fn (ctx: ?*anyopaque, tab: *Tab) void = null,
     on_new_tab: ?*const fn (ctx: ?*anyopaque, url: []const u8) void = null,
-    on_opensearch: ?*const fn (ctx: ?*anyopaque, host: []const u8, title: []const u8, href: []const u8) void = null,
+    on_opensearch: ?*const fn (ctx: ?*anyopaque, tab: *Tab, href: []const u8) void = null,
 
     web: ?objc.Object = null,
     delegate: ?objc.Object = null,
@@ -406,9 +406,7 @@ fn didReceiveMessage(obj: objc.Object, _: objc.SEL, _: objc.Object, msg: objc.Ob
     if (!objc.msg(objc.BOOL, body, "isKindOfClass:", .{objc.class("NSDictionary")})) return;
     const kind = objc.fromNSString(objc.msg(?objc.Object, body, "objectForKey:", .{objc.nsString("kind")}));
     if (std.mem.eql(u8, kind, "opensearch")) {
-        const host = objc.fromNSString(objc.msg(?objc.Object, body, "objectForKey:", .{objc.nsString("host")}));
-        const title = objc.fromNSString(objc.msg(?objc.Object, body, "objectForKey:", .{objc.nsString("title")}));
         const href = objc.fromNSString(objc.msg(?objc.Object, body, "objectForKey:", .{objc.nsString("href")}));
-        if (t.on_opensearch) |cb| cb(t.browser_ctx, host, title, href);
+        if (t.on_opensearch) |cb| cb(t.browser_ctx, t, href);
     }
 }

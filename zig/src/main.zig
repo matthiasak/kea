@@ -9,15 +9,38 @@ pub fn main(init: std.process.Init) !void {
     defer app.destroy();
     const k = try kea.Kea.create(app.gpa, app, .{});
     defer k.destroy();
+    app.options.ctx = k;
+    app.options.on_terminate = onTerminate;
     _ = try k.newBrowser();
     try app.run();
 }
 
+fn onTerminate(ctx: ?*anyopaque) void {
+    const k: *kea.Kea = @ptrCast(@alignCast(ctx.?));
+    k.flush();
+}
+
 test {
+    _ = @import("data/json.zig");
+    _ = @import("data/disk.zig");
     _ = @import("data/store.zig");
     _ = @import("data/prefs.zig");
+    _ = @import("data/kea_import.zig");
     _ = @import("data/history.zig");
+    _ = @import("data/url.zig");
+    _ = @import("data/registrable.zig");
+    _ = @import("data/keywords.zig");
+    _ = @import("model/address.zig");
+    _ = @import("model/engine.zig");
     _ = @import("data/bookmarks.zig");
+    _ = @import("data/site_search.zig");
+    _ = @import("data/loot.zig");
+    _ = @import("data/curtain.zig");
+    _ = @import("data/chats_store.zig");
+    _ = @import("data/session.zig");
+    _ = @import("data/windows_file.zig");
+    _ = @import("data/pins.zig");
+    _ = @import("data/spaces.zig");
     _ = @import("web/tab.zig");
     _ = @import("web/stage_host.zig");
     _ = @import("model/browser.zig");

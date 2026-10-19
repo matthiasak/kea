@@ -28,7 +28,7 @@ pub const Fixture = struct {
         errdefer temp.deinit(gpa);
         const k = try app.Kea.create(gpa, null, .{ .root = temp.root, .suite = temp.suite, .headless = true });
         errdefer k.destroy();
-        if (opts.sidebar) |on| k.prefs.setSidebar(on);
+        if (opts.sidebar) |on| k.prefs.set("sidebar", on);
         const b = try k.newBrowser();
         for (0..opts.tabs) |i| {
             var buf: [64]u8 = undefined;

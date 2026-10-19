@@ -1,0 +1,1 @@
+{"example.com":[{"selector":"#cookie-bar","label":"div#cookie-bar","note":"320x60 top-left","date":781692800},{"selector":"div.promo > a[href=\"\/x\"]","label":"a","date":781692801.25}],"news.site":[{"selector":".nag","label":"div.nag","note":"","date":781692802}]}

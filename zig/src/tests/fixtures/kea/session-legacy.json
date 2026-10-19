@@ -1,0 +1,1 @@
+{"tabs":[{"url":"https://a.com/","title":"A","groupID":"not-a-uuid","listed":"yes","future":1},{"url":"https://b.com/","title":"B"},{"url":"https://c.com/","title":"C"}],"active":0,"groups":"garbage","splits":[{"left":0,"right":1,"fraction":0.25},{"tabs":[1,2],"axis":"diagonal"}]}

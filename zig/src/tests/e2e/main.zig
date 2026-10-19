@@ -103,7 +103,7 @@ pub const Harness = struct {
     pub fn readFile(h: *Harness, name: []const u8) ?[]u8 {
         const p = h.temp.path(h.gpa, name) catch return null;
         defer h.gpa.free(p);
-        return app.store.readFileAlloc(h.gpa, p);
+        return app.disk.read(h.gpa, p);
     }
 };
 

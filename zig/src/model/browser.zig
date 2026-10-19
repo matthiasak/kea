@@ -11,9 +11,12 @@ const Store = @import("../data/store.zig").Store;
 const Prefs = @import("../data/prefs.zig").Prefs;
 const History = @import("../data/history.zig").History;
 const Bookmarks = @import("../data/bookmarks.zig").Bookmarks;
-const SiteEntry = @import("../data/bookmarks.zig").SiteEntry;
+const SearchSite = @import("../data/site_search.zig").SearchSite;
+const Parts = @import("../data/url.zig").Parts;
 const Tab = @import("../web/tab.zig").Tab;
 const StageHost = @import("../web/stage_host.zig").StageHost;
+const session = @import("../data/session.zig");
+const Uuid = @import("../data/json.zig").Uuid;
 
 pub const PaneFocus = enum { left, right };
 
@@ -40,6 +43,8 @@ pub const Browser = struct {
     closed_tabs: std.ArrayList(ClosedTab) = .empty,
     next_tab_id: u64 = 1,
     active_id: u64 = 0,
+    /// Restoring the session: nothing is written until it's done.
+    restoring: bool = false,
 
     // Split View state
     split_right_id: ?u64 = null,
@@ -54,7 +59,7 @@ pub const Browser = struct {
     // Omnibox state
     omni_open: bool = false,
     omni_buf: ui.TextBuffer = .{},
-    omni_chip: ?SiteEntry = null,
+    omni_chip: ?SearchSite = null,
     omni_selected: usize = 0,
     omni_offer: [256]u8 = undefined,
     omni_offer_len: usize = 0,
@@ -94,7 +99,7 @@ pub const Browser = struct {
     }
 
     pub fn destroy(self: *Browser) void {
-        self.saveSession();
+        self.flushSession();
         if (self.stage_host) |sh| sh.destroy();
         for (self.tabs.items) |t| t.destroy();
         self.tabs.deinit(self.gpa);
@@ -177,7 +182,7 @@ pub const Browser = struct {
             self.focused_pane = .left;
         }
         if (initial_url.len > 0 and !shy) {
-            self.history.record(initial_url, t.title(), nowEpoch());
+            self.history.record(initial_url, t.title());
         }
         self.saveSession();
         self.redraw();
@@ -323,7 +328,7 @@ pub const Browser = struct {
         const t = self.activeTab() orelse self.openTab(target_url, true, false);
         t.load(target_url);
         self.omni_buf.set(target_url);
-        if (!t.shy) self.history.record(target_url, t.title(), nowEpoch());
+        if (!t.shy) self.history.record(target_url, t.title());
         self.saveSession();
         self.redraw();
     }
@@ -335,7 +340,7 @@ pub const Browser = struct {
         // Check if user typed `<site> ` or `<site>\t` to activate a SiteSearch chip
         if (self.prefs.searches_sites and self.omni_chip == null and text.len >= 3 and (text[text.len - 1] == ' ' or text[text.len - 1] == '\t')) {
             const word = std.mem.trim(u8, text, " \t");
-            if (self.bookmarks.matchSite(word)) |site| {
+            if (self.kea.site_search.match(word)) |site| {
                 self.omni_chip = site;
                 self.omni_buf.clear();
                 self.omni_typed_len = 0;
@@ -344,12 +349,15 @@ pub const Browser = struct {
             }
         }
 
-        if (self.history.offer(text, nowEpoch())) |off| {
-            self.omni_offer_len = @min(off.len, self.omni_offer.len);
-            @memcpy(self.omni_offer[0..self.omni_offer_len], off[0..self.omni_offer_len]);
-        } else {
-            self.omni_offer_len = 0;
-        }
+        // History's completion: what was typed, then the rest of the best match.
+        self.omni_offer_len = 0;
+        const sugs = self.history.suggestions(self.gpa, text, 5) catch return;
+        defer self.gpa.free(sugs);
+        const rest = (self.history.completion(text, sugs) catch null) orelse return;
+        if (text.len + rest.len > self.omni_offer.len) return;
+        @memcpy(self.omni_offer[0..text.len], text);
+        @memcpy(self.omni_offer[text.len..][0..rest.len], rest);
+        self.omni_offer_len = text.len + rest.len;
     }
 
     pub fn announce(self: *Browser, msg: []const u8) void {
@@ -360,55 +368,66 @@ pub const Browser = struct {
         self.redraw();
     }
 
+    /// Kept for the next launch (`Session.write`), on the disk queue.
     pub fn saveSession(self: *Browser) void {
-        var out: std.ArrayList(u8) = .empty;
-        defer out.deinit(self.gpa);
-        out.appendSlice(self.gpa, "{\"tabs\":[") catch return;
-        for (self.tabs.items, 0..) |t, i| {
-            if (t.shy) continue;
-            if (i > 0) out.append(self.gpa, ',') catch return;
-            const entry = std.fmt.allocPrint(self.gpa, "{{\"url\":\"{s}\",\"title\":\"{s}\",\"pinned\":{s}}}", .{
-                t.url(),
-                t.title(),
-                if (t.pinned) "true" else "false",
-            }) catch continue;
-            defer self.gpa.free(entry);
-            out.appendSlice(self.gpa, entry) catch return;
+        self.writeSession(false);
+    }
+
+    /// Quitting: written now, on this thread.
+    pub fn flushSession(self: *Browser) void {
+        self.writeSession(true);
+    }
+
+    /// `Browser.session`: kept tabs only, `active` the one in front or, when
+    /// that one isn't kept, the kept one just before it.
+    fn writeSession(self: *Browser, now: bool) void {
+        if (self.restoring) return;
+        var entries: std.ArrayList(session.Entry) = .empty;
+        defer entries.deinit(self.gpa);
+        var active: i64 = 0;
+        for (self.tabs.items) |t| {
+            if (t.id == self.active_id) active = @max(0, @as(i64, @intCast(entries.items.len)) - @intFromBool(!kept(t)));
+            if (!kept(t)) continue;
+            entries.append(self.gpa, .{
+                .url = t.url(),
+                .title = t.title(),
+                // ponytail: letter from the title until P4 ports Tab.pin.
+                .pin = if (t.pinned) monogram(t.title()) else null,
+                .home = if (t.pinned) t.url() else null,
+            }) catch return;
         }
-        out.appendSlice(self.gpa, "]}") catch return;
-        self.store.writeAtomic("session.json", out.items);
+        session.write(self.store, Uuid.first, .{ .tabs = entries.items, .active = active }, now);
+    }
+
+    /// Not a private tab, and only with a web address (`Browser.kept`).
+    fn kept(t: *const Tab) bool {
+        return !t.shy and std.mem.startsWith(u8, t.url(), "http");
+    }
+
+    fn monogram(title: []const u8) []const u8 {
+        const letters = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+        for (title) |ch| if (std.mem.indexOfScalar(u8, letters, std.ascii.toUpper(ch))) |i| return letters[i .. i + 1];
+        return "K";
     }
 
     fn restoreSession(self: *Browser) void {
-        const data = self.store.read("session.json") orelse return;
-        defer self.gpa.free(data);
-        const parsed = std.json.parseFromSlice(std.json.Value, self.gpa, data, .{}) catch {
-            self.store.quarantine("session.json");
-            return;
-        };
-        defer parsed.deinit();
-        if (parsed.value != .object) {
-            self.store.quarantine("session.json");
-            return;
+        const shape = session.read(self.store, Uuid.first);
+        defer shape.deinit();
+        self.restoring = true;
+        defer self.restoring = false;
+        for (shape.value.tabs, 0..) |e, i| {
+            const t = self.openTab(e.url, i == shape.value.active, false);
+            t.setTitle(e.title);
+            t.pinned = e.pin != null;
         }
-        const tabs_v = parsed.value.object.get("tabs") orelse return;
-        if (tabs_v != .array) return;
-        for (tabs_v.array.items) |item| {
-            if (item != .object) continue;
-            const u_v = item.object.get("url") orelse continue;
-            if (u_v != .string) continue;
-            const t = self.openTab(u_v.string, false, false);
-            if (item.object.get("title")) |tv| if (tv == .string) t.setTitle(tv.string);
-            if (item.object.get("pinned")) |pv| if (pv == .bool) {
-                t.pinned = pv.bool;
-            };
-        }
+        // No tab in front (Start with a fresh window): an empty one beside the pins.
+        if (shape.value.active < 0) _ = self.openTab("", true, false);
     }
 
     fn onTabChanged(ctx: ?*anyopaque, tab: *Tab) void {
         const self: *Browser = @ptrCast(@alignCast(ctx orelse return));
         if (!tab.shy and tab.url().len > 0) {
-            self.history.record(tab.url(), tab.title(), nowEpoch());
+            self.history.record(tab.url(), tab.title());
             if (tab.title().len > 0) self.history.retitle(tab.url(), tab.title());
         }
         self.redraw();
@@ -419,12 +438,15 @@ pub const Browser = struct {
         _ = self.openTab(target_url, true, false);
     }
 
-    fn onTabOpenSearch(ctx: ?*anyopaque, host: []const u8, title: []const u8, _: []const u8) void {
+    /// A site's own https home page that says where its search is: with
+    /// Search a site on, never from a private tab (Browser.swift:4891-4900).
+    fn onTabOpenSearch(ctx: ?*anyopaque, tab: *Tab, href: []const u8) void {
         const self: *Browser = @ptrCast(@alignCast(ctx orelse return));
-        if (host.len == 0) return;
-        var tmpl_buf: [512]u8 = undefined;
-        const tmpl = std.fmt.bufPrint(&tmpl_buf, "https://{s}/search?q=%s", .{host}) catch return;
-        self.bookmarks.learnSite(host, if (title.len > 0) title else host, tmpl, true);
+        if (tab.shy or !self.prefs.searches_sites) return;
+        const page = tab.url();
+        const p = Parts.parse(page) orelse return;
+        if (!p.schemeIs("https") or !(p.path.len == 0 or std.mem.eql(u8, p.path, "/"))) return;
+        _ = self.kea.site_search.learn(page, href);
     }
 };
 
@@ -435,8 +457,4 @@ fn resolveAddress(buf: *[2048]u8, input: []const u8) []const u8 {
         return std.fmt.bufPrint(buf, "{s}{s}", .{ scheme, input }) catch input;
     }
     return std.fmt.bufPrint(buf, "https://duckduckgo.com/?q={s}", .{input}) catch input;
-}
-
-pub fn nowEpoch() f64 {
-    return 1_760_000_000.0 + ui.clock.now();
 }

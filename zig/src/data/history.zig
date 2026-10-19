@@ -1,413 +1,466 @@
-//! History engine: canonical URL identity (`strip("www.")`, credential removal,
-//! root query/fragment normalization), `log1p(count) * exp(-days/30)` standing,
-//! boundary-aware ranking (`rank`), autocomplete `offer`, `suggestions`,
-//! `retitle`, `forgetHost`, `flush`, and the full HistoryRegression suite.
+//! Where you have been, so the field can finish the address for you
+//! (`History.swift`): `history.json`, a plain array of `Visit`, written
+//! 1.5 s after a visit at most 2000 strong, best-scored first.
 const std = @import("std");
+const objc = @import("nanoui").objc;
+const json = @import("json.zig");
 const Store = @import("store.zig").Store;
+const url_mod = @import("url.zig");
+const text_mod = @import("history_text.zig");
+const Parts = url_mod.Parts;
 
-pub const Visit = struct {
-    url: []u8,
-    key: []u8,
-    title: []u8,
-    count: i64,
-    last: f64,
+pub const Visit = text_mod.Visit;
+pub const PageText = text_mod.PageText;
+pub const Suggestion = text_mod.Suggestion;
+pub const Trace = text_mod.Trace;
+pub const identity = text_mod.identity;
+pub const kept = text_mod.kept;
+pub const rank = text_mod.rank;
+pub const score = text_mod.score;
+const most_visits = text_mod.most_visits;
+
+pub const file_name = "history.json";
+/// What the file keeps at most.
+pub const cap = 2000;
+
+const Entry = struct {
+    /// Strings on the history's gpa; the map key is `visit.key`.
+    visit: Visit,
+    /// Null until indexed (see `ensureIndexed`).
+    text: ?PageText = null,
 };
 
-pub const Suggestion = struct {
-    title: []const u8,
-    url: []const u8,
-    score: f64,
-};
+/// A coalesced save in flight; `history` is cleared when a write overtakes it.
+const Pending = struct { history: ?*History };
 
+/// Every `[]const u8` this hands out borrows from the history and holds
+/// until it next changes.
 pub const History = struct {
     gpa: std.mem.Allocator,
-    store: *const Store,
-    visits: std.ArrayList(Visit) = .empty,
-    indexed: bool = false,
+    store: *Store,
+    visits: std.StringArrayHashMapUnmanaged(Entry) = .empty,
+    /// Hosts (without www) with indexed pages, counted.
+    visited_hosts: std.StringHashMapUnmanaged(u32) = .empty,
+    indexed: bool = true,
+    saving: ?*Pending = null,
+    /// `recent()`; its addresses are owned here.
+    recent_cache: ?[]Trace = null,
 
-    pub fn init(gpa: std.mem.Allocator, store: *const Store) History {
-        return .{ .gpa = gpa, .store = store };
+    /// In place, since a save in flight points back here; loads the file.
+    pub fn init(self: *History, gpa: std.mem.Allocator, store: *Store) void {
+        self.* = .{ .gpa = gpa, .store = store };
+        self.load();
     }
 
     pub fn deinit(self: *History) void {
-        self.clearMem();
+        if (self.saving) |p| p.history = null;
+        self.clear();
         self.visits.deinit(self.gpa);
+        self.visited_hosts.deinit(self.gpa);
     }
 
-    fn clearMem(self: *History) void {
-        for (self.visits.items) |v| {
-            self.gpa.free(v.url);
-            self.gpa.free(v.key);
-            self.gpa.free(v.title);
-        }
+    fn clear(self: *History) void {
+        self.changed();
+        for (self.visits.values()) |e| self.freeEntry(e);
         self.visits.clearRetainingCapacity();
+        var it = self.visited_hosts.keyIterator();
+        while (it.next()) |h| self.gpa.free(h.*);
+        self.visited_hosts.clearRetainingCapacity();
     }
 
+    fn freeEntry(self: *History, e: Entry) void {
+        self.gpa.free(e.visit.url);
+        self.gpa.free(e.visit.key);
+        self.gpa.free(e.visit.title);
+        if (e.text) |t| t.deinit(self.gpa);
+    }
+
+    /// Swift's `visits` `didSet`.
+    fn changed(self: *History) void {
+        const cache = self.recent_cache orelse return;
+        for (cache) |t| self.gpa.free(t.address);
+        self.gpa.free(cache);
+        self.recent_cache = null;
+    }
+
+    fn dupe(self: *History, s: []const u8) ![]u8 {
+        return self.gpa.dupe(u8, s);
+    }
+
+    fn replace(self: *History, field: *[]const u8, s: []const u8) !void {
+        const copy = try self.dupe(s);
+        self.gpa.free(field.*);
+        field.* = copy;
+    }
+
+    fn put(self: *History, v: Visit) !*Entry {
+        const owned: Visit = .{ .url = try self.dupe(v.url), .key = try self.dupe(v.key), .title = try self.dupe(v.title), .count = v.count, .last = v.last };
+        const gop = try self.visits.getOrPut(self.gpa, owned.key);
+        gop.value_ptr.* = .{ .visit = owned };
+        return gop.value_ptr;
+    }
+
+    fn drop(self: *History, key: []const u8) void {
+        const kv = self.visits.fetchSwapRemove(key) orelse return;
+        self.forgetText(kv.value.text);
+        self.freeEntry(.{ .visit = kv.value.visit });
+    }
+
+    /// Builds the search index the first time something needs it.
     pub fn ensureIndexed(self: *History) void {
         if (self.indexed) return;
         self.indexed = true;
-        const data = self.store.read("history.json") orelse return;
-        defer self.gpa.free(data);
-        const parsed = std.json.parseFromSlice(std.json.Value, self.gpa, data, .{}) catch {
-            self.store.quarantine("history.json");
+        self.rehomeCredits() catch {};
+        for (self.visits.values()) |*e| self.remember(e, null);
+    }
+
+    fn remember(self: *History, e: *Entry, page: ?[]const u8) void {
+        var t = (text_mod.pageText(self.gpa, page orelse e.visit.url) catch null) orelse return;
+        const title = url_mod.lower(self.gpa, e.visit.title) catch {
+            t.deinit(self.gpa);
             return;
         };
-        defer parsed.deinit();
-        if (parsed.value != .array) {
-            self.store.quarantine("history.json");
-            return;
-        }
-        var dirty = false;
-        for (parsed.value.array.items) |item| {
-            if (item != .object) continue;
-            const obj = item.object;
-            const url_v = obj.get("url") orelse continue;
-            if (url_v != .string) continue;
-            const title_v = obj.get("title");
-            const title_s = if (title_v != null and title_v.? == .string) title_v.?.string else "";
-            const count_v = obj.get("count");
-            const raw_count: i64 = if (count_v != null and count_v.? == .integer) count_v.?.integer else 1;
-            const count: i64 = @min(@max(0, raw_count), 1_000_000);
-            if (count != raw_count) dirty = true;
-            const last_v = obj.get("last");
-            const last: f64 = if (last_v != null and last_v.? == .float) last_v.?.float else if (last_v != null and last_v.? == .integer) @floatFromInt(last_v.?.integer) else 0;
-
-            const clean_url = sanitizeUrl(self.gpa, url_v.string) orelse continue;
-            defer self.gpa.free(clean_url);
-            if (!std.mem.eql(u8, clean_url, url_v.string)) dirty = true;
-            const canon_key = identity(self.gpa, clean_url) orelse continue;
-            defer self.gpa.free(canon_key);
-            if (obj.get("key")) |kv| {
-                if (kv == .string and !std.mem.eql(u8, kv.string, canon_key)) dirty = true;
-            }
-            self.upsert(clean_url, canon_key, title_s, count, last, true);
-        }
-        if (dirty) self.flush();
-    }
-
-    fn upsert(self: *History, url: []const u8, key: []const u8, title: []const u8, count: i64, last: f64, merge_counts: bool) void {
-        for (self.visits.items) |*v| {
-            if (std.mem.eql(u8, v.key, key)) {
-                if (last >= v.last) {
-                    self.gpa.free(v.url);
-                    v.url = self.gpa.dupe(u8, url) catch v.url;
-                    v.last = last;
-                    if (title.len > 0) {
-                        self.gpa.free(v.title);
-                        v.title = self.gpa.dupe(u8, title) catch v.title;
-                    }
-                } else if (v.title.len == 0 and title.len > 0) {
-                    self.gpa.free(v.title);
-                    v.title = self.gpa.dupe(u8, title) catch v.title;
-                }
-                v.count = if (merge_counts) @min(1_000_000, v.count + count) else @max(v.count, count);
+        self.gpa.free(t.title);
+        t.title = title;
+        self.forgetText(e.text);
+        e.text = t;
+        if (t.host.len == 0) return;
+        const gop = self.visited_hosts.getOrPut(self.gpa, t.host) catch return;
+        if (gop.found_existing) {
+            gop.value_ptr.* += 1;
+        } else {
+            gop.key_ptr.* = self.dupe(t.host) catch {
+                self.visited_hosts.removeByPtr(gop.key_ptr);
                 return;
+            };
+            gop.value_ptr.* = 1;
+        }
+    }
+
+    /// Releases `text`'s host; frees `text`.
+    fn forgetText(self: *History, text: ?PageText) void {
+        const t = text orelse return;
+        defer t.deinit(self.gpa);
+        if (t.host.len == 0) return;
+        const kv = self.visited_hosts.getEntry(t.host) orelse return;
+        kv.value_ptr.* -= 1;
+        if (kv.value_ptr.* > 0) return;
+        const owned = kv.key_ptr.*;
+        self.visited_hosts.removeByPtr(kv.key_ptr);
+        self.gpa.free(owned);
+    }
+
+    fn setTitle(self: *History, e: *Entry, title: []const u8) !void {
+        try self.replace(&e.visit.title, title);
+        if (e.text) |*t| {
+            const low = try url_mod.lower(self.gpa, title);
+            self.gpa.free(t.title);
+            t.title = low;
+        }
+    }
+
+    // MARK: - writing
+
+    pub fn record(self: *History, page: []const u8, title: []const u8) void {
+        self.recordAt(page, title, json.now()) catch {};
+    }
+
+    fn recordAt(self: *History, raw: []const u8, title: []const u8, now: json.SwiftDate) !void {
+        self.ensureIndexed();
+        if (!text_mod.isWeb(raw)) return;
+        const page = try kept(self.gpa, raw) orelse return;
+        defer self.gpa.free(page);
+        const key = try identity(self.gpa, page);
+        defer self.gpa.free(key);
+        if (key.len == 0) return;
+        self.changed();
+
+        // Reading a deep page is also another visit to the site, so three
+        // letters offer the front page rather than last week's article.
+        if (!text_mod.isHomePath(Parts.parse(page).?.path)) {
+            if (try text_mod.homepage(self.gpa, page)) |home_url| {
+                defer self.gpa.free(home_url);
+                const root = try identity(self.gpa, home_url);
+                defer self.gpa.free(root);
+                const home = self.visits.getPtr(root) orelse
+                    try self.put(.{ .url = home_url, .key = root, .title = "", .count = 0, .last = now });
+                home.visit.count = @min(most_visits, home.visit.count + 1);
+                home.visit.last = now;
+                self.remember(home, home_url);
             }
         }
-        self.visits.append(self.gpa, .{
-            .url = self.gpa.dupe(u8, url) catch return,
-            .key = self.gpa.dupe(u8, key) catch return,
-            .title = self.gpa.dupe(u8, title) catch return,
-            .count = @min(1_000_000, @max(0, count)),
-            .last = last,
-        }) catch {};
+
+        if (self.visits.getPtr(key)) |seen| {
+            seen.visit.count = @min(most_visits, seen.visit.count + 1);
+            seen.visit.last = now;
+            try self.replace(&seen.visit.url, page);
+            if (title.len > 0) try self.replace(&seen.visit.title, title);
+            self.remember(seen, page);
+        } else {
+            const e = try self.put(.{ .url = page, .key = key, .title = title, .count = 1, .last = now });
+            self.remember(e, page);
+        }
+        self.save();
     }
 
-    pub fn record(self: *History, raw_url: []const u8, title: []const u8, now_s: f64) void {
+    /// Somewhere another browser has been, counted as it was counted there.
+    /// Call `settle` after a batch.
+    pub fn take(self: *History, raw: []const u8, title: []const u8, count: i64, last: json.SwiftDate) void {
+        self.takeVisit(raw, title, count, last) catch {};
+    }
+
+    fn takeVisit(self: *History, raw: []const u8, title: []const u8, count: i64, last: json.SwiftDate) !void {
         self.ensureIndexed();
-        if (!isWebUrl(raw_url)) return;
-        const clean_url = sanitizeUrl(self.gpa, raw_url) orelse return;
-        defer self.gpa.free(clean_url);
-        const key = identity(self.gpa, clean_url) orelse return;
+        if (!text_mod.isWeb(raw)) return;
+        const page = try kept(self.gpa, raw) orelse return;
+        defer self.gpa.free(page);
+        const key = try identity(self.gpa, page);
         defer self.gpa.free(key);
-        self.upsert(clean_url, key, title, 1, now_s, true);
+        if (key.len == 0) return;
+        self.changed();
+        if (self.visits.getPtr(key)) |seen| {
+            // The larger of the two, not their sum: the same browser brought
+            // in again must not count every visit twice.
+            seen.visit.count = @min(most_visits, @max(seen.visit.count, count));
+            if (last > seen.visit.last) seen.visit.last = last;
+            if (seen.visit.title.len == 0) try self.setTitle(seen, title);
+        } else {
+            const e = try self.put(.{ .url = page, .key = key, .title = title, .count = @min(@max(count, 0), most_visits), .last = last });
+            self.remember(e, page);
+        }
     }
 
-    pub fn take(self: *History, raw_url: []const u8, title: []const u8, count: i64, last: f64) void {
-        self.ensureIndexed();
-        if (!isWebUrl(raw_url)) return;
-        const clean_url = sanitizeUrl(self.gpa, raw_url) orelse return;
-        defer self.gpa.free(clean_url);
-        const key = identity(self.gpa, clean_url) orelse return;
-        defer self.gpa.free(key);
-        self.upsert(clean_url, key, title, @max(0, count), last, false);
+    /// After a batch of `take`s.
+    pub fn settle(self: *History) void {
+        self.save();
     }
 
-    pub fn retitle(self: *History, raw_url: []const u8, title: []const u8) void {
+    /// A page's title usually lands a beat after the page does.
+    pub fn retitle(self: *History, page: []const u8, title: []const u8) void {
         if (title.len == 0) return;
-        const key = identity(self.gpa, raw_url) orelse return;
+        const key = identity(self.gpa, page) catch return;
         defer self.gpa.free(key);
-        for (self.visits.items) |*v| {
-            if (std.mem.eql(u8, v.key, key)) {
-                if (std.ascii.eqlIgnoreCase(v.title, title) and std.mem.eql(u8, v.title, title)) return;
-                self.gpa.free(v.title);
-                v.title = self.gpa.dupe(u8, title) catch return;
-                return;
-            }
-        }
+        const seen = self.visits.getPtr(key) orelse return;
+        if (std.mem.eql(u8, seen.visit.title, title)) return;
+        self.changed();
+        self.setTitle(seen, title) catch return;
+        self.save();
     }
 
-    pub fn forgetHost(self: *History, host_in: []const u8) void {
+    /// The best `cap` by score, ordered by key; on `alloc`, strings borrowed.
+    pub fn exported(self: *History, alloc: std.mem.Allocator) ![]Visit {
         self.ensureIndexed();
-        const want = stripWww(host_in);
-        var i: usize = self.visits.items.len;
-        while (i > 0) {
-            i -= 1;
-            const v = self.visits.items[i];
-            const h = hostOfKey(v.key);
-            if (std.ascii.eqlIgnoreCase(h, want)) {
-                self.gpa.free(v.url);
-                self.gpa.free(v.key);
-                self.gpa.free(v.title);
-                _ = self.visits.orderedRemove(i);
-            }
-        }
-        self.flush();
-    }
-
-    pub fn clear(self: *History) void {
-        self.clearMem();
-        self.indexed = true;
-        self.flush();
-    }
-
-    pub fn flush(self: *History) void {
-        if (!self.indexed) return;
-        var out: std.ArrayList(u8) = .empty;
-        defer out.deinit(self.gpa);
-        out.appendSlice(self.gpa, "[") catch return;
-        for (self.visits.items, 0..) |v, idx| {
-            if (idx > 0) out.appendSlice(self.gpa, ",") catch return;
-            out.appendSlice(self.gpa, "{\"url\":") catch return;
-            appendJsonStr(&out, self.gpa, v.url);
-            out.appendSlice(self.gpa, ",\"key\":") catch return;
-            appendJsonStr(&out, self.gpa, v.key);
-            out.appendSlice(self.gpa, ",\"title\":") catch return;
-            appendJsonStr(&out, self.gpa, v.title);
-            const tail = std.fmt.allocPrint(self.gpa, ",\"count\":{d},\"last\":{d:.3}}}", .{ v.count, v.last }) catch return;
-            defer self.gpa.free(tail);
-            out.appendSlice(self.gpa, tail) catch return;
-        }
-        out.appendSlice(self.gpa, "]") catch return;
-        self.store.writeAtomic("history.json", out.items);
-    }
-
-    /// Inline address bar autocomplete: returns the rest of the best-matching
-    /// visited host or path (stripping leading `www.` so typing `ex` offers `example.com`).
-    pub fn offer(self: *History, typed: []const u8, now_s: f64) ?[]const u8 {
-        self.ensureIndexed();
-        const q = std.mem.trim(u8, typed, " \t\r\n");
-        if (q.len == 0 or std.mem.indexOfScalar(u8, q, ' ') != null) return null;
-        var best_key: ?[]const u8 = null;
-        var best_score: f64 = -1e9;
-        for (self.visits.items) |v| {
-            if (v.count <= 0) continue;
-            if (asciiStartsWithIgnoreCase(v.key, q)) {
-                const sc = scoreVisit(v, q, now_s);
-                if (sc > best_score) {
-                    best_score = sc;
-                    best_key = v.key;
-                }
-            }
-        }
-        const k = best_key orelse return null;
-        if (std.mem.indexOfScalar(u8, q, '/') == null) {
-            if (std.mem.indexOfScalar(u8, k, '/')) |slash| {
-                return k[0..slash];
-            }
-        }
-        return k;
-    }
-
-    pub fn suggestions(self: *History, alloc: std.mem.Allocator, query: []const u8, limit: usize, now_s: f64) []Suggestion {
-        self.ensureIndexed();
-        const q = std.mem.trim(u8, query, " \t\r\n");
-        if (q.len == 0) return &.{};
-        var list: std.ArrayList(Suggestion) = .empty;
-        for (self.visits.items) |v| {
-            if (v.count <= 0) continue;
-            const r = rankVisit(v, q);
-            if (r == null) continue;
-            const sc = standing(v.count, v.last, now_s) + r.? + (if (isHomepageKey(v.key)) @as(f64, 5) else 0);
-            // Dedup by case-insensitive key/title
-            var dup = false;
-            for (list.items) |*existing| {
-                if (std.ascii.eqlIgnoreCase(existing.url, v.url) or (v.title.len > 0 and std.ascii.eqlIgnoreCase(existing.title, v.title))) {
-                    if (sc > existing.score) existing.* = .{ .title = v.title, .url = v.url, .score = sc };
-                    dup = true;
-                    break;
-                }
-            }
-            if (!dup) list.append(alloc, .{ .title = v.title, .url = v.url, .score = sc }) catch {};
-        }
-        std.mem.sort(Suggestion, list.items, {}, struct {
-            fn lt(_: void, a: Suggestion, b: Suggestion) bool {
-                return a.score > b.score;
+        const list = try self.best(alloc, json.now());
+        std.mem.sort(Visit, list, {}, struct {
+            fn lt(_: void, a: Visit, b: Visit) bool {
+                return std.mem.lessThan(u8, a.key, b.key);
             }
         }.lt);
-        if (list.items.len > limit) list.items.len = limit;
-        return list.toOwnedSlice(alloc) catch &.{};
+        return list;
+    }
+
+    /// Visits from another Mac, kept where they say more than ours.
+    pub fn absorb(self: *History, list: []const Visit) void {
+        self.ensureIndexed();
+        var any = false;
+        for (list) |v| {
+            if (self.visits.get(v.key)) |e| {
+                const seen = e.visit;
+                if (seen.count >= v.count and seen.last >= v.last and (seen.title.len > 0 or v.title.len == 0)) continue;
+            }
+            if (Parts.parse(v.url) == null) continue;
+            self.take(v.url, v.title, v.count, v.last);
+            any = true;
+        }
+        if (any) self.save();
+    }
+
+    /// Every visit last made at or before `date`.
+    pub fn forgetBefore(self: *History, date: json.SwiftDate) void {
+        self.ensureIndexed();
+        var keys: std.ArrayList([]const u8) = .empty;
+        defer keys.deinit(self.gpa);
+        for (self.visits.values()) |e| if (e.visit.last <= date) keys.append(self.gpa, e.visit.key) catch return;
+        if (keys.items.len == 0) return;
+        self.changed();
+        for (keys.items) |key| self.drop(key);
+        self.save();
+    }
+
+    /// `key`, if it was last visited at or before `date`.
+    pub fn forgetKeyBefore(self: *History, key: []const u8, date: json.SwiftDate) void {
+        self.ensureIndexed();
+        const e = self.visits.get(key) orelse return;
+        if (e.visit.last <= date) self.forget(key);
+    }
+
+    /// Everything.
+    pub fn forgetAll(self: *History) void {
+        self.indexed = true;
+        self.clear();
+        self.save();
+    }
+
+    pub fn forget(self: *History, key: []const u8) void {
+        self.ensureIndexed();
+        self.changed();
+        self.drop(key);
+        self.save();
+    }
+
+    pub const everything = @import("history_read.zig").everything;
+    pub const recent = @import("history_read.zig").recent;
+    pub const suggestions = @import("history_read.zig").suggestions;
+    pub const completion = @import("history_read.zig").completion;
+
+    // MARK: - the file
+
+    fn load(self: *History) void {
+        const parsed = self.store.load([]Visit, file_name) orelse return;
+        defer parsed.deinit();
+        var cleaned = false;
+        for (parsed.value) |saved| {
+            self.loadOne(saved, &cleaned) catch return;
+        }
+        self.indexed = false;
+        // And written without names and passwords now, not at the next visit.
+        if (cleaned) self.save();
+    }
+
+    fn loadOne(self: *History, saved: Visit, cleaned: *bool) !void {
+        var v = saved;
+        // A count edited by hand is held to a sane range, so adding can't overflow.
+        v.count = @min(@max(v.count, 0), most_visits);
+        var page: ?[]u8 = null;
+        var key: ?[]u8 = null;
+        defer if (page) |p| self.gpa.free(p);
+        defer if (key) |k_| self.gpa.free(k_);
+        if (Parts.parse(v.url) != null) {
+            page = try kept(self.gpa, v.url);
+            if (!std.mem.eql(u8, page.?, v.url)) {
+                v.url = page.?;
+                cleaned.* = true;
+            }
+            key = try identity(self.gpa, saved.url);
+            v.key = key.?;
+        }
+        // Keys written by an older Kea can meet under the new rule: merged.
+        if (self.visits.getPtr(v.key)) |e| try self.merge(&e.visit, v) else _ = try self.put(v);
+    }
+
+    /// The same page twice: visits added up, the latest date, a title if
+    /// either had one. `b` is borrowed.
+    fn merge(self: *History, a: *Visit, b: Visit) !void {
+        const a_newer = a.last >= b.last;
+        const sum = std.math.add(i64, a.count, b.count) catch most_visits;
+        if (!a_newer) {
+            try self.replace(&a.url, b.url);
+            if (b.title.len > 0) try self.replace(&a.title, b.title);
+            a.last = b.last;
+        } else if (a.title.len == 0) try self.replace(&a.title, b.title);
+        a.count = @min(most_visits, sum);
+    }
+
+    /// Before 1.0.4, every deep page also credited https:// and its host
+    /// without www, whatever the page was on. Such a credit, with no title and
+    /// nothing else on its own origin, moves to the front door its pages used.
+    fn rehomeCredits(self: *History) !void {
+        var arena = std.heap.ArenaAllocator.init(self.gpa);
+        defer arena.deinit();
+        const a = arena.allocator();
+        // Visits per front door, by host without www, from the deeper pages.
+        var doors: std.StringHashMapUnmanaged(std.StringArrayHashMapUnmanaged(i64)) = .empty;
+        for (self.visits.values()) |e| {
+            const p = Parts.parse(e.visit.url) orelse continue;
+            const host = p.hostName() orelse continue;
+            if (text_mod.isHomePath(p.path)) continue;
+            const home = try text_mod.homepage(a, e.visit.url) orelse continue;
+            const low = try url_mod.lower(a, host);
+            const bare = if (std.mem.startsWith(u8, low, "www.")) low[4..] else low;
+            const gop = try doors.getOrPut(a, bare);
+            if (!gop.found_existing) gop.value_ptr.* = .empty;
+            const door = try gop.value_ptr.getOrPut(a, try identity(a, home));
+            if (!door.found_existing) door.value_ptr.* = 0;
+            door.value_ptr.* +|= e.visit.count;
+        }
+        const keys = try a.alloc([]const u8, self.visits.count());
+        for (self.visits.keys(), keys) |key, *o| o.* = try a.dupe(u8, key);
+        for (keys) |key| {
+            const credit = (self.visits.get(key) orelse continue).visit;
+            if (credit.title.len != 0) continue;
+            const p = Parts.parse(credit.url) orelse continue;
+            if (!std.mem.eql(u8, p.scheme orelse "", "https") or p.port != null or p.query != null or !text_mod.isHomePath(p.path)) continue;
+            const host = try url_mod.lower(a, p.hostName() orelse continue);
+            if (std.mem.startsWith(u8, host, "www.")) continue;
+            const used = doors.get(host) orelse continue;
+            if (used.contains(key)) continue;
+            // The most used, and of those the first by name.
+            var door: []const u8 = "";
+            var most: i64 = -1;
+            var it = used.iterator();
+            while (it.next()) |d| if (d.value_ptr.* > most or (d.value_ptr.* == most and std.mem.lessThan(u8, d.key_ptr.*, door))) {
+                door = d.key_ptr.*;
+                most = d.value_ptr.*;
+            };
+            if (Parts.parse(door) == null) continue;
+            self.changed();
+            const moved: Visit = .{ .url = door, .key = door, .title = "", .count = credit.count, .last = credit.last };
+            self.drop(key);
+            if (self.visits.getPtr(door)) |e| try self.merge(&e.visit, moved) else _ = try self.put(moved);
+        }
+    }
+
+    /// Coalesced: a busy minute of browsing writes the file once, not
+    /// thirty times, and never on the main thread.
+    fn save(self: *History) void {
+        if (self.saving != null) return;
+        const p = std.heap.c_allocator.create(Pending) catch return self.write(false);
+        p.* = .{ .history = self };
+        self.saving = p;
+        objc.dispatchAfter(1_500 * std.time.ns_per_ms, p, fire);
+    }
+
+    fn fire(ctx: ?*anyopaque) callconv(.c) void {
+        const p: *Pending = @ptrCast(@alignCast(ctx.?));
+        defer std.heap.c_allocator.destroy(p);
+        if (p.history) |h| h.write(false);
+    }
+
+    /// A visit still waiting out `save`'s moment, written now: for the way out.
+    pub fn flush(self: *History) void {
+        if (self.saving != null) self.write(true);
+    }
+
+    fn write(self: *History, now: bool) void {
+        if (self.saving) |p| p.history = null;
+        self.saving = null;
+        // A cap, so the file can't grow without end: what goes is what has
+        // been visited least and longest ago.
+        const list = self.best(self.gpa, json.now()) catch return;
+        defer self.gpa.free(list);
+        self.store.save(file_name, list, now);
+    }
+
+    /// Up to `cap` visits, best score first; on `alloc`, strings borrowed.
+    fn best(self: *History, alloc: std.mem.Allocator, now: json.SwiftDate) ![]Visit {
+        const list = try alloc.alloc(Visit, self.visits.count());
+        for (self.visits.values(), list) |e, *v| v.* = e.visit;
+        std.mem.sort(Visit, list, now, struct {
+            fn gt(t: json.SwiftDate, a: Visit, b: Visit) bool {
+                return score(a, t) > score(b, t);
+            }
+        }.gt);
+        if (list.len <= cap) return list;
+        return alloc.realloc(list, cap);
     }
 };
 
-pub fn isWebUrl(u: []const u8) bool {
-    return asciiStartsWithIgnoreCase(u, "https://") or asciiStartsWithIgnoreCase(u, "http://");
-}
-
-pub fn stripWww(h: []const u8) []const u8 {
-    if (h.len > 4 and asciiStartsWithIgnoreCase(h, "www.")) return h[4..];
-    return h;
-}
-
-/// Removes user:pass@ credentials from a URL before it ever touches memory or disk.
-pub fn sanitizeUrl(gpa: std.mem.Allocator, raw: []const u8) ?[]u8 {
-    const sch_end = std.mem.indexOf(u8, raw, "://") orelse return null;
-    const scheme = raw[0..sch_end];
-    if (!std.ascii.eqlIgnoreCase(scheme, "http") and !std.ascii.eqlIgnoreCase(scheme, "https")) return null;
-    const rest = raw[sch_end + 3 ..];
-    const auth_end = std.mem.indexOfAny(u8, rest, "/?#") orelse rest.len;
-    const auth = rest[0..auth_end];
-    const host_port = if (std.mem.lastIndexOfScalar(u8, auth, '@')) |at| auth[at + 1 ..] else auth;
-    if (host_port.len == 0) return null;
-    const tail = if (auth_end < rest.len) rest[auth_end..] else "/";
-    var out = std.ArrayList(u8).empty;
-    for (scheme) |ch| out.append(gpa, std.ascii.toLower(ch)) catch return null;
-    out.appendSlice(gpa, "://") catch return null;
-    for (host_port) |ch| out.append(gpa, std.ascii.toLower(ch)) catch return null;
-    out.appendSlice(gpa, tail) catch return null;
-    return out.toOwnedSlice(gpa) catch null;
-}
-
-/// Canonical identity key: lowercased `host[:port]` (without `www.`) + path + query + fragment,
-/// except root `/` with no path keeps only `host[:port]` (unless query/fragment on non-root or root with query).
-pub fn identity(gpa: std.mem.Allocator, raw: []const u8) ?[]u8 {
-    const sch_end = std.mem.indexOf(u8, raw, "://") orelse return null;
-    const rest = raw[sch_end + 3 ..];
-    const auth_end = std.mem.indexOfAny(u8, rest, "/?#") orelse rest.len;
-    const auth = rest[0..auth_end];
-    const host_port_raw = if (std.mem.lastIndexOfScalar(u8, auth, '@')) |at| auth[at + 1 ..] else auth;
-    const host_port = stripWww(host_port_raw);
-    if (host_port.len == 0) return null;
-    var tail = if (auth_end < rest.len) rest[auth_end..] else "";
-    if (std.mem.eql(u8, tail, "/")) tail = "";
-    var out = std.ArrayList(u8).empty;
-    for (host_port) |ch| out.append(gpa, std.ascii.toLower(ch)) catch return null;
-    if (tail.len > 0) {
-        if (tail[0] != '/') out.append(gpa, '/') catch return null;
-        out.appendSlice(gpa, tail) catch return null;
-    }
-    return out.toOwnedSlice(gpa) catch null;
-}
-
-fn hostOfKey(key: []const u8) []const u8 {
-    const end = std.mem.indexOfAny(u8, key, "/:?#") orelse key.len;
-    return key[0..end];
-}
-
-fn isHomepageKey(key: []const u8) bool {
-    return std.mem.indexOfScalar(u8, key, '/') == null;
-}
-
-fn standing(count: i64, last: f64, now_s: f64) f64 {
-    const c_f: f64 = @floatFromInt(@max(0, count));
-    const days = @max(0.0, (now_s - last) / 86_400.0);
-    return std.math.log1p(c_f) * @exp(-days / 30.0) * 15.0;
-}
-
-pub fn rankVisit(v: Visit, q: []const u8) ?f64 {
-    if (asciiStartsWithIgnoreCase(v.key, q)) return 100;
-    // Subdomain boundary (`docs.example.com` for `example`)
-    const host = hostOfKey(v.key);
-    var pos: usize = 0;
-    while (std.mem.indexOfScalarPos(u8, host, pos, '.')) |dot| {
-        const after = host[dot + 1 ..];
-        if (asciiStartsWithIgnoreCase(after, q)) {
-            // If `after` has no dot left, it's just the TLD (`.com`): penalize unless full host match
-            if (std.mem.indexOfScalar(u8, after, '.') == null) return -15;
-            return 85;
-        }
-        pos = dot + 1;
-    }
-    if (asciiStartsWithIgnoreCase(v.title, q)) return 70;
-    if (wordBoundaryMatch(v.title, q) or wordBoundaryMatch(v.key, q)) return 60;
-    if (asciiContainsIgnoreCase(v.title, q) or asciiContainsIgnoreCase(v.key, q)) return 40;
-    return null;
-}
-
-fn scoreVisit(v: Visit, q: []const u8, now_s: f64) f64 {
-    const r = rankVisit(v, q) orelse -1000;
-    return standing(v.count, v.last, now_s) + r + (if (isHomepageKey(v.key)) @as(f64, 5) else 0);
-}
-
-fn asciiStartsWithIgnoreCase(hay: []const u8, needle: []const u8) bool {
-    if (hay.len < needle.len) return false;
-    return std.ascii.eqlIgnoreCase(hay[0..needle.len], needle);
-}
-
-fn asciiContainsIgnoreCase(hay: []const u8, needle: []const u8) bool {
-    if (needle.len == 0) return true;
-    if (hay.len < needle.len) return false;
-    var i: usize = 0;
-    while (i + needle.len <= hay.len) : (i += 1) {
-        if (std.ascii.eqlIgnoreCase(hay[i .. i + needle.len], needle)) return true;
-    }
-    return false;
-}
-
-fn wordBoundaryMatch(hay: []const u8, needle: []const u8) bool {
-    if (hay.len < needle.len or needle.len == 0) return false;
-    var i: usize = 1;
-    while (i + needle.len <= hay.len) : (i += 1) {
-        const prev = hay[i - 1];
-        if (!std.ascii.isAlphanumeric(prev) and std.ascii.eqlIgnoreCase(hay[i .. i + needle.len], needle)) return true;
-    }
-    return false;
-}
-
-fn appendJsonStr(out: *std.ArrayList(u8), gpa: std.mem.Allocator, s: []const u8) void {
-    out.append(gpa, '"') catch return;
-    for (s) |ch| {
-        switch (ch) {
-            '"' => out.appendSlice(gpa, "\\\"") catch return,
-            '\\' => out.appendSlice(gpa, "\\\\") catch return,
-            '\n' => out.appendSlice(gpa, "\\n") catch return,
-            '\r' => out.appendSlice(gpa, "\\r") catch return,
-            '\t' => out.appendSlice(gpa, "\\t") catch return,
-            else => out.append(gpa, ch) catch return,
-        }
-    }
-    out.append(gpa, '"') catch return;
-}
-
-test "HistoryRegression: canonical identity, credentials, ranking, and flush" {
-    const gpa = std.testing.allocator;
-    var store = try Store.init(gpa, "/tmp/kea-zig-hist-test", null);
-    defer store.deinit();
-
-    var h = History.init(gpa, &store);
-    defer h.deinit();
-    h.indexed = true;
-
-    // 1. Canonical identity keeps port, query, and fragment
-    h.record("https://www.Example.com:8080/Path?a=1#frag", "Port One", 1000);
-    h.record("https://example.com:9090/Path?a=1#frag", "Port Two", 1001);
-    try std.testing.expectEqual(@as(usize, 2), h.visits.items.len);
-
-    // 2. Credentials never reach memory or disk
-    h.record("https://user:secretPass123@secure.example.org/vault", "Vault", 1002);
-    h.flush();
-    const raw_json = store.read("history.json").?;
-    defer gpa.free(raw_json);
-    try std.testing.expect(std.mem.indexOf(u8, raw_json, "secretPass123") == null);
-    try std.testing.expect(std.mem.indexOf(u8, raw_json, "https://secure.example.org/vault") != null);
-
-    // 3. Completion finishes www sites without www
-    h.record("https://www.wikipedia.org/wiki/Zig", "Zig Wiki", 1005);
-    const off = h.offer("wiki", 1005).?;
-    try std.testing.expectEqualStrings("wikipedia.org", off);
-
-    // 4. Ranking prefers prefix > subdomain > word boundary > TLD
-    const v_prefix: Visit = .{ .url = @constCast("https://com.example.org"), .key = @constCast("com.example.org"), .title = @constCast("Com"), .count = 2, .last = 1000 };
-    const v_tld: Visit = .{ .url = @constCast("https://other.com"), .key = @constCast("other.com"), .title = @constCast("Other"), .count = 2, .last = 1000 };
-    try std.testing.expect(rankVisit(v_prefix, "com").? > rankVisit(v_tld, "com").?);
+test {
+    std.testing.refAllDecls(@This());
+    std.testing.refAllDecls(History);
+    std.testing.refAllDecls(@import("history_read.zig"));
+    std.testing.refAllDecls(text_mod);
+    _ = @import("history_text.zig");
+    _ = @import("history_read.zig");
+    _ = @import("history_tests.zig");
 }

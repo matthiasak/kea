@@ -57,7 +57,7 @@ pub fn view(b: *Browser, c: *ui.Context) void {
     if (!b.prefs.sidebar) {
         drawTopBar(b, c, pal);
     }
-    if (b.prefs.shows_bookmarks_bar) {
+    if (b.prefs.bookmarks_bar) {
         drawBookmarksBar(b, c, pal);
     }
 
@@ -103,18 +103,19 @@ fn handleShortcuts(b: *Browser, c: *ui.Context) void {
     } else if (c.shortcut(.{ .key = 'f', .cmd = true })) {
         b.find_open = !b.find_open;
     } else if (c.shortcut(.{ .key = 's', .cmd = true, .ctrl = true })) {
-        b.prefs.setSidebar(!b.prefs.sidebar);
+        b.prefs.set("sidebar", !b.prefs.sidebar);
         b.syncStageHost();
     } else if (c.shortcut(.{ .key = 'b', .cmd = true, .ctrl = true })) {
         b.marks_open = !b.marks_open;
         b.syncStageHost();
     } else if (c.shortcut(.{ .key = 'b', .cmd = true, .shift = true })) {
-        b.prefs.shows_bookmarks_bar = !b.prefs.shows_bookmarks_bar;
-        b.prefs.setBool("bookmarks.bar", b.prefs.shows_bookmarks_bar);
+        b.prefs.set("bookmarks_bar", !b.prefs.bookmarks_bar);
     } else if (c.shortcut(.{ .key = 'd', .cmd = true })) {
         if (b.activeTab()) |t| {
-            const added = b.bookmarks.toggleUrl(t.title(), t.url());
-            b.announce(if (added) "Bookmark added" else "Bookmark removed");
+            if (b.bookmarks.bookmarkFor(t.url())) |kept| {
+                b.bookmarks.remove(&.{kept.id});
+                b.announce("Bookmark removed");
+            } else if (b.bookmarks.add(t.url(), t.title()) != null) b.announce("Bookmark added");
         }
     } else if (c.shortcut(.{ .key = '[', .cmd = true })) {
         if (b.activeTab()) |t| t.goBack();
@@ -230,7 +231,7 @@ fn drawBookmarksBar(b: *Browser, c: *ui.Context, pal: Palette) void {
         .gap = 6,
     });
     defer ui.end(c);
-    for (b.bookmarks.items.items, 0..) |bm, idx| {
+    for (b.bookmarks.roots, 0..) |bm, idx| {
         ui.key(c, c.print("bm-bar-{d}", .{idx}));
         if (ui.button(c, bm.title, .{ .variant = .ghost, .size = 12, .icon = "bookmark" }).clicked) {
             if (bm.url) |u| b.goUrl(u);

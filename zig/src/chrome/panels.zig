@@ -4,8 +4,7 @@ const std = @import("std");
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
 const Browser = @import("../model/browser.zig").Browser;
-const nowEpoch = @import("../model/browser.zig").nowEpoch;
-const Bookmarks = @import("../data/bookmarks.zig").Bookmarks;
+const Bookmark = @import("../data/bookmarks.zig").Bookmark;
 const Palette = @import("window_view.zig").Palette;
 
 pub fn drawEdgeHandle(b: *Browser, c: *ui.Context, pal: Palette, width_ptr: *f32, min_w: f32, max_w: f32, std_w: f32, grows_right: bool, name: []const u8) void {
@@ -52,7 +51,7 @@ pub fn drawMarksPanel(b: *Browser, c: *ui.Context, pal: Palette, on_left: bool) 
         ui.spacer(c);
         if (ui.button(c, "", .{ .variant = .ghost, .icon = "arrow.left.and.right", .size = 12 }).clicked) {
             const cur = b.prefs.effectiveMarksSide();
-            b.prefs.setMarksSide(if (cur == .left) .right else .left);
+            b.prefs.set("marks_side", if (cur == .left) .right else .left);
         }
         if (ui.button(c, "", .{ .variant = .ghost, .icon = "arrow.up.left.and.arrow.down.right", .size = 12 }).clicked) {
             b.marks_expanded = !b.marks_expanded;
@@ -65,17 +64,31 @@ pub fn drawMarksPanel(b: *Browser, c: *ui.Context, pal: Palette, on_left: bool) 
 
         _ = ui.textField(c, &b.marks_filter_buf, .{ .placeholder = "Search bookmarks", .width = .fill });
         ui.scroll(c, .{ .width = .fill, .grow = 1, .gap = 4 });
-        for (b.bookmarks.items.items, 0..) |bm, idx| {
-            if (!Bookmarks.matchesQuery(bm, b.marks_filter_buf.text())) continue;
-            ui.key(c, c.print("bm-side-{d}", .{idx}));
-            if (ui.button(c, bm.title, .{ .width = .fill, .variant = .ghost, .size = 12.5, .icon = "bookmark" }).clicked) {
-                if (bm.url) |u| b.goUrl(u);
-            }
-        }
+        const q = b.marks_filter_buf.text();
+        if (std.mem.trim(u8, q, " ").len == 0) {
+            var idx: usize = 0;
+            drawMarkRows(b, c, b.bookmarks.roots, &idx);
+        } else for (b.bookmarks.matches(c.alloc(), q) catch &.{}, 0..) |m, idx| drawMarkRow(b, c, m.node, idx);
         ui.end(c);
     }
     ui.end(c);
     if (on_left) drawEdgeHandle(b, c, pal, &b.prefs.marks_width, 176, 420, 260, true, "marks-edge");
+}
+
+/// Every site and folder, folders opened, as one list.
+fn drawMarkRows(b: *Browser, c: *ui.Context, nodes: []const Bookmark, idx: *usize) void {
+    for (nodes) |*bm| {
+        drawMarkRow(b, c, bm, idx.*);
+        idx.* += 1;
+        drawMarkRows(b, c, bm.children orelse &.{}, idx);
+    }
+}
+
+fn drawMarkRow(b: *Browser, c: *ui.Context, bm: *const Bookmark, idx: usize) void {
+    ui.key(c, c.print("bm-side-{d}", .{idx}));
+    if (ui.button(c, bm.title, .{ .width = .fill, .variant = .ghost, .size = 12.5, .icon = "bookmark" }).clicked) {
+        if (bm.url) |u| b.goUrl(u);
+    }
 }
 
 pub fn drawOmniboxOverlay(b: *Browser, c: *ui.Context, pal: Palette) void {
@@ -108,7 +121,7 @@ pub fn drawOmniboxOverlay(b: *Browser, c: *ui.Context, pal: Palette) void {
         }
     }
 
-    const sugs = b.history.suggestions(c.alloc(), b.omni_buf.text(), 5, nowEpoch());
+    const sugs = b.history.suggestions(c.alloc(), b.omni_buf.text(), 5) catch &.{};
     for (sugs, 0..) |sg, idx| {
         ui.key(c, c.print("omni-sug-{d}", .{idx}));
         if (ui.button(c, if (sg.title.len > 0) sg.title else sg.url, .{ .width = .fill, .variant = .ghost, .icon = "clock", .size = 12.5 }).clicked) {

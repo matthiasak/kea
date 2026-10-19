@@ -8,7 +8,7 @@ const Case = @import("main.zig").Case;
 const Harness = @import("main.zig").Harness;
 
 pub const cases = [_]Case{
-    .{ .name = "corrupt session.json is quarantined", .run = quarantine },
+    .{ .name = "corrupt session.json is quarantined as .unreadable-<n>.json", .run = quarantine },
     .{ .name = "a tab loads and gets its title", .run = loadsTitle },
     .{ .name = "split halves the hole width", .run = splitHalves },
     .{ .name = "bookmarks panel shrinks the hole by its width + 9", .run = marksPanel },
@@ -33,14 +33,26 @@ fn finished(t: *app.Tab) bool {
     return !t.loading and t.progress >= 1;
 }
 
+fn unixNow() i64 {
+    return @intFromFloat(@floor(app.json.toUnix(app.json.now())));
+}
+
 fn quarantine(h: *Harness) !void {
     const p = try h.temp.path(h.gpa, "session.json");
     defer h.gpa.free(p);
-    try h.expect(app.store.writeFile(p, "{broken json"), "could not write session.json", .{});
+    var d = app.disk.Disk.init(h.gpa);
+    d.write(p, try h.gpa.dupe(u8, "{broken json"), true);
+    d.deinit();
+    const before = unixNow();
     _ = try h.start();
-    const kept = h.readFile("session.json.corrupt");
-    defer if (kept) |k| h.gpa.free(k);
-    try h.expect(kept != null and std.mem.eql(u8, kept.?, "{broken json"), "session.json.corrupt missing or changed", .{});
+    var n = before;
+    while (n <= unixNow()) : (n += 1) {
+        var buf: [64]u8 = undefined;
+        const kept = h.readFile(try std.fmt.bufPrint(&buf, "session.unreadable-{d}.json", .{n})) orelse continue;
+        defer h.gpa.free(kept);
+        return h.expect(std.mem.eql(u8, kept, "{broken json"), "session.unreadable-{d}.json changed", .{n});
+    }
+    return h.fail("no session.unreadable-<n>.json", .{});
 }
 
 fn loadsTitle(h: *Harness) !void {
@@ -62,6 +74,7 @@ fn splitHalves(h: *Harness) !void {
     b.selectTab(left.id);
     h.frame();
     const single = b.active_page_frame.w;
+    b.prefs.set("split_view", true); // off unless asked for, as in Swift
     b.pairSplit(right.id);
     h.frame();
     const split = b.active_page_frame.w;
@@ -72,7 +85,7 @@ fn splitHalves(h: *Harness) !void {
 
 fn marksPanel(h: *Harness) !void {
     const b = try h.start();
-    b.prefs.setSidebar(true);
+    b.prefs.set("sidebar", true);
     h.frame();
     const before = b.active_page_frame.w;
     h.press("b", 11, true, true); // ⌃⌘B
@@ -96,6 +109,7 @@ fn omniOffer(h: *Harness) !void {
 
 fn siteChip(h: *Harness) !void {
     const b = try h.start();
+    b.prefs.set("searches_sites", true); // off unless asked for, as in Swift
     b.omni_open = true;
     b.omni_buf.set("github ");
     b.updateOmniTyped("github ");
@@ -140,6 +154,7 @@ fn closeSplitTab(h: *Harness) !void {
     const left = try openLoaded(h, b, "kea-test://site/page?title=Left");
     const right = try openLoaded(h, b, "kea-test://site/page?title=Right");
     b.selectTab(left.id);
+    b.prefs.set("split_view", true);
     b.pairSplit(right.id);
     h.frame();
     const freed = left.web.?;

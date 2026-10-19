@@ -8,8 +8,11 @@ const Store = @import("../data/store.zig").Store;
 const Prefs = @import("../data/prefs.zig").Prefs;
 const History = @import("../data/history.zig").History;
 const Bookmarks = @import("../data/bookmarks.zig").Bookmarks;
+const SiteSearch = @import("../data/site_search.zig").SiteSearch;
+const Pins = @import("../data/pins.zig").Pins;
 const Browser = @import("../model/browser.zig").Browser;
 const window_view = @import("../chrome/window_view.zig");
+const kea_import = @import("../data/kea_import.zig");
 
 /// The app's name wherever Swift's strings name Kea the app.
 pub const app_name = "KeaZig";
@@ -35,11 +38,15 @@ pub const Kea = struct {
     prefs: Prefs,
     history: History,
     bookmarks: Bookmarks,
+    site_search: SiteSearch,
+    pins: Pins,
     browsers: std.ArrayList(*Browser) = .empty,
 
     pub fn create(gpa: std.mem.Allocator, ui_app: ?*nanoui.App, opts: Options) !*Kea {
         const self = try gpa.create(Kea);
         errdefer gpa.destroy(self);
+        // Before any store loads: the store makes KeaZig's folder.
+        if (opts.root == null and ui_app != null) kea_import.offer(gpa, opts.suite);
         self.* = .{
             .gpa = gpa,
             .ui_app = ui_app,
@@ -48,10 +55,17 @@ pub const Kea = struct {
             .prefs = undefined,
             .history = undefined,
             .bookmarks = undefined,
+            .site_search = undefined,
+            .pins = undefined,
         };
-        self.prefs = Prefs.init(&self.store);
-        self.history = History.init(gpa, &self.store);
+        self.prefs = Prefs.init(gpa, &self.store, .{
+            .testing = opts.root != null,
+            .app = if (ui_app) |a| a.nsapp else null,
+        });
+        self.history.init(gpa, &self.store);
         self.bookmarks = Bookmarks.init(gpa, &self.store);
+        self.site_search = SiteSearch.init(gpa, &self.store);
+        self.pins = Pins.init(gpa, &self.store);
         // Hidden runs get no Dock icon and never take focus.
         if (opts.hidden) if (ui_app) |a| {
             _ = objc.msg(objc.BOOL, a.nsapp, "setActivationPolicy:", .{@as(objc.NSInteger, 2)});
@@ -70,12 +84,28 @@ pub const Kea = struct {
             }
         }
         self.browsers.deinit(self.gpa);
-        self.history.flush();
+        self.browsers = .empty;
+        self.flush();
+        self.pins.deinit();
+        self.site_search.deinit();
         self.bookmarks.deinit();
         self.history.deinit();
         self.prefs.deinit();
         self.store.deinit();
         self.gpa.destroy(self);
+    }
+
+    /// What quitting must not lose (`applicationWillTerminate`, Links.swift:52-60):
+    /// the last visit still waiting out History's moment, then every write on its way.
+    pub fn flush(self: *Kea) void {
+        for (self.browsers.items) |b| b.flushSession();
+        self.history.flush();
+        self.store.disk.drain();
+    }
+
+    /// The list of spaces changed (`Spaces.changed`): every window follows.
+    pub fn spacesChanged(self: *Kea) void {
+        for (self.browsers.items) |b| b.redraw();
     }
 
     /// A new browser, in its own window unless headless.

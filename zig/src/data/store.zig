@@ -1,151 +1,237 @@
-//! Storage paths (`opts.root`, else `~/Library/Application Support/KeaZig`),
-//! the defaults suite, corrupt JSON quarantine (`*.corrupt`), and atomic writes.
+//! Where KeaZig keeps things (`Store` in Store.swift): its folder
+//! (`opts.root`, else `~/Library/Application Support/KeaZig`), its defaults
+//! (`opts.suite`, else the app's standard defaults), and the `Disk` every file
+//! is written through.
 const std = @import("std");
-const c = struct {
-    pub const FILE = opaque {};
-    pub const SEEK_SET: c_int = 0;
-    pub const SEEK_END: c_int = 2;
-    pub const F_OK: c_int = 0;
-    pub extern "c" fn getenv(name: [*:0]const u8) ?[*:0]const u8;
-    pub extern "c" fn mkdir(path: [*]const u8, mode: u16) c_int;
-    pub extern "c" fn fopen(path: [*]const u8, mode: [*:0]const u8) ?*FILE;
-    pub extern "c" fn fclose(stream: *FILE) c_int;
-    pub extern "c" fn fseek(stream: *FILE, offset: c_long, whence: c_int) c_int;
-    pub extern "c" fn ftell(stream: *FILE) c_long;
-    pub extern "c" fn fread(ptr: [*]u8, size: usize, nitems: usize, stream: *FILE) usize;
-    pub extern "c" fn fwrite(ptr: [*]const u8, size: usize, nitems: usize, stream: *FILE) usize;
-    pub extern "c" fn rename(old: [*]const u8, new: [*]const u8) c_int;
-    pub extern "c" fn unlink(path: [*]const u8) c_int;
-    pub extern "c" fn access(path: [*]const u8, mode: c_int) c_int;
-};
+const nanoui = @import("nanoui");
+const objc = nanoui.objc;
+const json = @import("json.zig");
+const disk = @import("disk.zig");
+const Disk = disk.Disk;
 
-pub fn cPath(buf: *[1024]u8, s: []const u8) ?[*]const u8 {
-    if (s.len >= buf.len) return null;
-    @memcpy(buf[0..s.len], s);
-    buf[s.len] = 0;
-    return buf;
-}
+extern "c" fn getenv(name: [*:0]const u8) ?[*:0]const u8;
+
 pub const Store = struct {
     gpa: std.mem.Allocator,
     folder: []u8,
-    /// NSUserDefaults suite (tests); null is the app's standard defaults.
-    suite: ?[]u8 = null,
+    /// Retained `NSUserDefaults`.
+    defaults: objc.Object,
+    disk: Disk,
 
     pub fn init(gpa: std.mem.Allocator, root: ?[]const u8, suite: ?[]const u8) !Store {
         const folder = if (root) |r| try gpa.dupe(u8, r) else blk: {
-            const home: []const u8 = if (c.getenv("HOME")) |h| std.mem.span(h) else "/tmp";
+            const home: []const u8 = if (getenv("HOME")) |h| std.mem.span(h) else "/tmp";
             break :blk try std.fmt.allocPrint(gpa, "{s}/Library/Application Support/KeaZig", .{home});
         };
-        errdefer gpa.free(folder);
-        ensureDir(folder);
-        return .{
-            .gpa = gpa,
-            .folder = folder,
-            .suite = if (suite) |s| try gpa.dupe(u8, s) else null,
-        };
+        disk.makePath(gpa, folder);
+        const pool = objc.Pool.push();
+        defer pool.pop();
+        const defaults = if (suite) |s|
+            objc.msg(objc.Object, objc.alloc("NSUserDefaults"), "initWithSuiteName:", .{objc.nsString(s)})
+        else
+            objc.retain(objc.msg(objc.Object, objc.class("NSUserDefaults"), "standardUserDefaults", .{}));
+        return .{ .gpa = gpa, .folder = folder, .defaults = defaults, .disk = Disk.init(gpa) };
     }
 
     pub fn deinit(self: *Store) void {
+        self.disk.deinit();
+        objc.release(self.defaults);
         self.gpa.free(self.folder);
-        if (self.suite) |s| self.gpa.free(s);
     }
 
-    pub fn path(self: *const Store, name: []const u8) ![]u8 {
-        return std.fmt.allocPrint(self.gpa, "{s}/{s}", .{ self.folder, name });
+    /// `<folder>/<name>`; the caller frees it.
+    pub fn file(self: *const Store, name: []const u8) ![]u8 {
+        return std.fs.path.join(self.gpa, &.{ self.folder, name });
     }
 
-    pub fn read(self: *const Store, name: []const u8) ?[]u8 {
-        const p = self.path(name) catch return null;
+    /// `<folder>/<sub>`, created; the caller frees it.
+    pub fn folderFor(self: *const Store, sub: []const u8) ![]u8 {
+        const p = try self.file(sub);
+        disk.makePath(self.gpa, p);
+        return p;
+    }
+
+    /// A file in the folder (or an absolute path), or null when it can't be read.
+    pub fn readFile(self: *const Store, name: []const u8) ?[]u8 {
+        if (std.fs.path.isAbsolute(name)) return disk.read(self.gpa, name);
+        const p = self.file(name) catch return null;
         defer self.gpa.free(p);
-        return readFileAlloc(self.gpa, p);
+        return disk.read(self.gpa, p);
     }
 
-    pub fn writeAtomic(self: *const Store, name: []const u8, data: []const u8) void {
-        ensureDir(self.folder);
-        const final_p = self.path(name) catch return;
-        defer self.gpa.free(final_p);
-        const tmp_p = std.fmt.allocPrint(self.gpa, "{s}.tmp", .{final_p}) catch return;
-        defer self.gpa.free(tmp_p);
-        if (writeFile(tmp_p, data)) {
-            var b1: [1024]u8 = undefined;
-            var b2: [1024]u8 = undefined;
-            const p1 = cPath(&b1, tmp_p) orelse return;
-            const p2 = cPath(&b2, final_p) orelse return;
-            _ = c.rename(p1, p2);
-        }
+    /// `name` decoded; null when missing, and set aside when it won't decode.
+    pub fn load(self: *Store, comptime T: type, name: []const u8) ?std.json.Parsed(T) {
+        const bytes = self.readFile(name) orelse return null;
+        defer self.gpa.free(bytes);
+        return json.decode(T, self.gpa, bytes) catch {
+            self.quarantine(name);
+            return null;
+        };
     }
 
-    /// Moves an unreadable JSON file to `<name>.corrupt` so a subsequent save
-    /// never overwrites the user's broken file without leaving a copy.
-    pub fn quarantine(self: *const Store, name: []const u8) void {
-        const src = self.path(name) catch return;
-        defer self.gpa.free(src);
-        const dst = std.fmt.allocPrint(self.gpa, "{s}.corrupt", .{src}) catch return;
-        defer self.gpa.free(dst);
-        var b1: [1024]u8 = undefined;
-        var b2: [1024]u8 = undefined;
-        const p1 = cPath(&b1, src) orelse return;
-        const p2 = cPath(&b2, dst) orelse return;
-        _ = c.unlink(p2);
-        _ = c.rename(p1, p2);
-    }
-
-    pub fn exists(self: *const Store, name: []const u8) bool {
-        const p = self.path(name) catch return false;
+    /// Sets `name` aside as `<name>.unreadable-<unix seconds>.json`.
+    pub fn quarantine(self: *Store, name: []const u8) void {
+        const p = self.file(name) catch return;
         defer self.gpa.free(p);
-        var b1: [1024]u8 = undefined;
-        const pz = cPath(&b1, p) orelse return false;
-        return c.access(pz, c.F_OK) == 0;
+        disk.quarantine(self.gpa, p);
+    }
+
+    /// `value` encoded here and written in its turn (see `Disk.write`).
+    pub fn save(self: *Store, name: []const u8, value: anytype, now: bool) void {
+        const bytes = json.encode(self.gpa, value) catch return;
+        self.write(name, bytes, now);
+    }
+
+    /// Already-encoded `bytes` (on `gpa`, freed by the disk) to `name`.
+    pub fn write(self: *Store, name: []const u8, bytes: []u8, now: bool) void {
+        const p = self.file(name) catch return self.gpa.free(bytes);
+        defer self.gpa.free(p);
+        self.disk.write(p, bytes, now);
+    }
+
+    // MARK: defaults
+
+    pub fn hasKey(self: *const Store, key: []const u8) bool {
+        const pool = objc.Pool.push();
+        defer pool.pop();
+        return objc.msg(?objc.Object, self.defaults, "objectForKey:", .{objc.nsString(key)}) != null;
+    }
+
+    /// null when the key is absent, so callers keep Swift's own defaults.
+    /// Called as `store.bool(key)`; only the declaration needs `@"bool"`.
+    pub fn @"bool"(self: *const Store, key: []const u8) ?bool {
+        if (!self.hasKey(key)) return null;
+        const pool = objc.Pool.push();
+        defer pool.pop();
+        return objc.msg(objc.BOOL, self.defaults, "boolForKey:", .{objc.nsString(key)});
+    }
+
+    pub fn int(self: *const Store, key: []const u8) ?i64 {
+        if (!self.hasKey(key)) return null;
+        const pool = objc.Pool.push();
+        defer pool.pop();
+        return objc.msg(objc.NSInteger, self.defaults, "integerForKey:", .{objc.nsString(key)});
+    }
+
+    pub fn double(self: *const Store, key: []const u8) ?f64 {
+        if (!self.hasKey(key)) return null;
+        const pool = objc.Pool.push();
+        defer pool.pop();
+        return objc.msg(f64, self.defaults, "doubleForKey:", .{objc.nsString(key)});
+    }
+
+    /// A copy on `gpa`, or null when absent or not a string.
+    pub fn string(self: *const Store, key: []const u8) ?[]u8 {
+        const pool = objc.Pool.push();
+        defer pool.pop();
+        const s = objc.msg(?objc.Object, self.defaults, "stringForKey:", .{objc.nsString(key)}) orelse return null;
+        return self.gpa.dupe(u8, objc.fromNSString(s)) catch null;
+    }
+
+    /// The bytes of an `NSData` value, copied to `gpa`.
+    pub fn data(self: *const Store, key: []const u8) ?[]u8 {
+        const pool = objc.Pool.push();
+        defer pool.pop();
+        const d = objc.msg(?objc.Object, self.defaults, "dataForKey:", .{objc.nsString(key)}) orelse return null;
+        const len = objc.msg(objc.NSUInteger, d, "length", .{});
+        const out = self.gpa.alloc(u8, len) catch return null;
+        if (len > 0) objc.msg(void, d, "getBytes:length:", .{ out.ptr, len });
+        return out;
+    }
+
+    pub fn setBool(self: *const Store, key: []const u8, v: bool) void {
+        const pool = objc.Pool.push();
+        defer pool.pop();
+        objc.msg(void, self.defaults, "setBool:forKey:", .{ if (v) objc.YES else objc.NO, objc.nsString(key) });
+    }
+
+    pub fn setInt(self: *const Store, key: []const u8, v: i64) void {
+        const pool = objc.Pool.push();
+        defer pool.pop();
+        objc.msg(void, self.defaults, "setInteger:forKey:", .{ @as(objc.NSInteger, v), objc.nsString(key) });
+    }
+
+    pub fn setDouble(self: *const Store, key: []const u8, v: f64) void {
+        const pool = objc.Pool.push();
+        defer pool.pop();
+        objc.msg(void, self.defaults, "setDouble:forKey:", .{ v, objc.nsString(key) });
+    }
+
+    pub fn setString(self: *const Store, key: []const u8, v: []const u8) void {
+        const pool = objc.Pool.push();
+        defer pool.pop();
+        objc.msg(void, self.defaults, "setObject:forKey:", .{ objc.nsString(v), objc.nsString(key) });
+    }
+
+    pub fn setData(self: *const Store, key: []const u8, v: []const u8) void {
+        const pool = objc.Pool.push();
+        defer pool.pop();
+        const d = objc.msg(objc.Object, objc.class("NSData"), "dataWithBytes:length:", .{ v.ptr, @as(objc.NSUInteger, v.len) });
+        objc.msg(void, self.defaults, "setObject:forKey:", .{ d, objc.nsString(key) });
+    }
+
+    pub fn remove(self: *const Store, key: []const u8) void {
+        const pool = objc.Pool.push();
+        defer pool.pop();
+        objc.msg(void, self.defaults, "removeObjectForKey:", .{objc.nsString(key)});
     }
 };
 
-pub fn ensureDir(dir_path: []const u8) void {
-    var buf: [1024]u8 = undefined;
-    if (dir_path.len >= buf.len) return;
-    @memcpy(buf[0..dir_path.len], dir_path);
-    buf[dir_path.len] = 0;
-    var i: usize = 1;
-    while (i < dir_path.len) : (i += 1) {
-        if (buf[i] == '/') {
-            buf[i] = 0;
-            _ = c.mkdir(&buf, 0o755);
-            buf[i] = '/';
+test "garbage is quarantined as .unreadable-<n>.json" {
+    const Temp = @import("../tests/temp.zig").Temp;
+    const gpa = std.testing.allocator;
+    var t = try Temp.init(gpa);
+    defer t.deinit(gpa);
+    var store = try Store.init(gpa, t.root, t.suite);
+    defer store.deinit();
+    const before: i64 = @intFromFloat(@floor(json.toUnix(json.now())));
+    store.write("session.json", try gpa.dupe(u8, "{broken json"), true);
+    try std.testing.expect(store.load(struct { tabs: []const u8 }, "session.json") == null);
+    try std.testing.expect(store.readFile("session.json") == null);
+    const after: i64 = @intFromFloat(@floor(json.toUnix(json.now())));
+    var found = false;
+    var n = before;
+    while (n <= after) : (n += 1) {
+        const name = try std.fmt.allocPrint(gpa, "session.unreadable-{d}.json", .{n});
+        defer gpa.free(name);
+        if (store.readFile(name)) |kept| {
+            defer gpa.free(kept);
+            try std.testing.expectEqualStrings("{broken json", kept);
+            found = true;
         }
     }
-    _ = c.mkdir(&buf, 0o755);
+    try std.testing.expect(found);
+    try std.testing.expect(store.load(struct { tabs: []const u8 }, "missing.json") == null);
 }
 
-pub fn readFileAlloc(gpa: std.mem.Allocator, file_path: []const u8) ?[]u8 {
-    var b1: [1024]u8 = undefined;
-    const pz = cPath(&b1, file_path) orelse return null;
-    const f = c.fopen(pz, "rb") orelse return null;
-    defer _ = c.fclose(f);
-    if (c.fseek(f, 0, c.SEEK_END) != 0) return null;
-    const len_long = c.ftell(f);
-    if (len_long < 0) return null;
-    if (c.fseek(f, 0, c.SEEK_SET) != 0) return null;
-    const len: usize = @intCast(len_long);
-    const buf = gpa.alloc(u8, len) catch return null;
-    if (len > 0) {
-        const n = c.fread(buf.ptr, 1, len, f);
-        if (n != len) {
-            gpa.free(buf);
-            return null;
-        }
-    }
-    return buf;
-}
-
-pub fn writeFile(file_path: []const u8, data: []const u8) bool {
-    var buf: [1024]u8 = undefined;
-    if (file_path.len >= buf.len) return false;
-    @memcpy(buf[0..file_path.len], file_path);
-    buf[file_path.len] = 0;
-    const f = c.fopen(&buf, "wb") orelse return false;
-    defer _ = c.fclose(f);
-    if (data.len > 0) {
-        const n = c.fwrite(data.ptr, 1, data.len, f);
-        if (n != data.len) return false;
-    }
-    return true;
+test "store defaults and save round-trip" {
+    const Temp = @import("../tests/temp.zig").Temp;
+    const gpa = std.testing.allocator;
+    var t = try Temp.init(gpa);
+    defer t.deinit(gpa);
+    var store = try Store.init(gpa, t.root, t.suite);
+    defer store.deinit();
+    try std.testing.expect(store.bool("welcomed") == null);
+    store.setBool("welcomed", true);
+    store.setDouble("sidebar.width", 240);
+    store.setInt("n", -3);
+    store.setString("look", "dark");
+    store.setData("search.keywords", "[]");
+    try std.testing.expect(store.bool("welcomed").?);
+    try std.testing.expectEqual(@as(f64, 240), store.double("sidebar.width").?);
+    try std.testing.expectEqual(@as(i64, -3), store.int("n").?);
+    const s = store.string("look").?;
+    defer gpa.free(s);
+    try std.testing.expectEqualStrings("dark", s);
+    const d = store.data("search.keywords").?;
+    defer gpa.free(d);
+    try std.testing.expectEqualStrings("[]", d);
+    store.remove("look");
+    try std.testing.expect(!store.hasKey("look"));
+    const V = struct { title: []const u8 };
+    store.save("t.json", V{ .title = "He said \"hi\"" }, false);
+    store.disk.drain();
+    const back = store.load(V, "t.json").?;
+    defer back.deinit();
+    try std.testing.expectEqualStrings("He said \"hi\"", back.value.title);
 }
