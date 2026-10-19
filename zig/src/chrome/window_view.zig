@@ -1,18 +1,14 @@
 //! Immediate-mode `nanoui` chrome view (`Browser.view`): renders Sidebar,
 //! Top TabBar, BookmarksBar, Split View stage holes + 7 pt `PaneDivider`,
-//! Ubi Chat & Bookmarks side panels with 9 pt `EdgeHandle` drag strips,
-//! floating opaque Omnibox dropdown (with Gaussian shadow), FindBar,
-//! Settings plate, Toast banner, and keyboard shortcuts.
+//! the Bookmarks side panel with 9 pt `EdgeHandle` drag strips, floating
+//! opaque Omnibox dropdown (with Gaussian shadow), FindBar, and shortcuts.
 const std = @import("std");
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
-const Browser = @import("browser.zig").Browser;
-const nowEpoch = @import("browser.zig").nowEpoch;
-const Tab = @import("tab.zig").Tab;
-const SidePosition = @import("prefs.zig").SidePosition;
-const panels = @import("chrome_panels.zig");
+const Browser = @import("../model/browser.zig").Browser;
+const Tab = @import("../web/tab.zig").Tab;
+const panels = @import("panels.zig");
 const drawEdgeHandle = panels.drawEdgeHandle;
-const drawChatPanel = panels.drawChatPanel;
 const drawMarksPanel = panels.drawMarksPanel;
 const drawOmniboxOverlay = panels.drawOmniboxOverlay;
 const drawFindBar = panels.drawFindBar;
@@ -74,16 +70,10 @@ pub fn view(b: *Browser, c: *ui.Context) void {
         if (b.marks_open and !b.prefs.marks_popped and b.prefs.effectiveMarksSide() == .left and !b.marks_expanded) {
             drawMarksPanel(b, c, pal, true);
         }
-        if (b.chat_open and !b.prefs.chat_popped and b.prefs.effectiveChatSide() == .left and !b.chat_expanded) {
-            drawChatPanel(b, c, pal, true);
-        }
 
         // Center Stage (WebKit panes + overlays)
         drawStageArea(b, c, pal);
 
-        if (b.chat_open and !b.prefs.chat_popped and b.prefs.effectiveChatSide() == .right and !b.chat_expanded) {
-            drawChatPanel(b, c, pal, false);
-        }
         if (b.marks_open and !b.prefs.marks_popped and b.prefs.effectiveMarksSide() == .right and !b.marks_expanded) {
             drawMarksPanel(b, c, pal, false);
         }
@@ -118,9 +108,6 @@ fn handleShortcuts(b: *Browser, c: *ui.Context) void {
     } else if (c.shortcut(.{ .key = 'b', .cmd = true, .ctrl = true })) {
         b.marks_open = !b.marks_open;
         b.syncStageHost();
-    } else if (c.shortcut(.{ .key = 'y', .cmd = true, .shift = true })) {
-        b.chat_open = !b.chat_open;
-        b.syncStageHost();
     } else if (c.shortcut(.{ .key = 'b', .cmd = true, .shift = true })) {
         b.prefs.shows_bookmarks_bar = !b.prefs.shows_bookmarks_bar;
         b.prefs.setBool("bookmarks.bar", b.prefs.shows_bookmarks_bar);
@@ -143,8 +130,6 @@ fn handleShortcuts(b: *Browser, c: *ui.Context) void {
             b.omni_chip = null;
         } else if (b.find_open) {
             b.find_open = false;
-        } else if (b.plate != .none) {
-            b.plate = .none;
         } else if (b.activeTab()) |t| {
             if (t.loading) t.stopLoading();
         }
@@ -232,13 +217,6 @@ fn drawTopBar(b: *Browser, c: *ui.Context, pal: Palette) void {
     if (ui.button(c, "", .{ .variant = .ghost, .icon = "book", .size = 13 }).clicked) {
         b.marks_open = !b.marks_open;
         b.syncStageHost();
-    }
-    if (ui.button(c, "", .{ .variant = .ghost, .icon = "sparkles", .size = 13 }).clicked) {
-        b.chat_open = !b.chat_open;
-        b.syncStageHost();
-    }
-    if (ui.button(c, "", .{ .variant = .ghost, .icon = "gearshape", .size = 13 }).clicked) {
-        b.plate = if (b.plate == .settings) .none else .settings;
     }
 }
 
@@ -332,13 +310,6 @@ fn drawSideBar(b: *Browser, c: *ui.Context, pal: Palette, on_left: bool) void {
             b.syncStageHost();
         }
         ui.spacer(c);
-        if (ui.button(c, "", .{ .variant = .ghost, .icon = "sparkles", .size = 13 }).clicked) {
-            b.chat_open = !b.chat_open;
-            b.syncStageHost();
-        }
-        if (ui.button(c, "", .{ .variant = .ghost, .icon = "gearshape", .size = 13 }).clicked) {
-            b.plate = if (b.plate == .settings) .none else .settings;
-        }
         ui.end(c);
     }
     ui.end(c);
@@ -347,7 +318,7 @@ fn drawSideBar(b: *Browser, c: *ui.Context, pal: Palette, on_left: bool) void {
 }
 fn drawStageArea(b: *Browser, c: *ui.Context, pal: Palette) void {
     const split_tab = if (b.prefs.split_view and b.split_right_id != null) b.tabById(b.split_right_id.?) else null;
-    const framed = b.prefs.sidebar or b.chat_open or b.marks_open or split_tab != null;
+    const framed = b.prefs.sidebar or b.marks_open or split_tab != null;
     const pad: f32 = if (framed) 6 else 0;
 
     ui.column(c, .{
@@ -398,7 +369,7 @@ fn drawPaneBox(b: *Browser, c: *ui.Context, pal: Palette, tab_opt: ?*Tab, key_na
     }, key_name);
     defer c.end();
 
-    if (b.plate == .none and !b.chat_expanded and !b.marks_expanded) {
+    if (!b.marks_expanded) {
         c.addStageHoleNode(idx);
     }
 

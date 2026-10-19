@@ -1,6 +1,6 @@
-//! Preferences backed by `NSUserDefaults` (`app.kea.browser` or
-//! `app.kea.browser.<KEA_PROBE>`). No `@Published` invalidation cascades:
-//! `nanoui` reads fields directly during each immediate-mode frame.
+//! Preferences backed by `NSUserDefaults` (the app's standard defaults, or
+//! the `Kea.Options.suite` a test passes). No `@Published` invalidation
+//! cascades: `nanoui` reads fields directly during each immediate-mode frame.
 const std = @import("std");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;
@@ -29,7 +29,6 @@ pub const Look = enum {
 
 pub const Prefs = struct {
     defaults: objc.Object,
-    bench: bool = false,
     welcomed: bool = false,
     sidebar: bool = false,
     side_position: SidePosition = .left,
@@ -51,8 +50,8 @@ pub const Prefs = struct {
     pub fn init(store: *const Store) Prefs {
         const pool = objc.Pool.push();
         defer pool.pop();
-        const defaults = if (store.testing)
-            objc.msg(objc.Object, objc.alloc("NSUserDefaults"), "initWithSuiteName:", .{objc.nsString(store.suite)})
+        const defaults = if (store.suite) |suite|
+            objc.msg(objc.Object, objc.alloc("NSUserDefaults"), "initWithSuiteName:", .{objc.nsString(suite)})
         else
             objc.retain(objc.msg(objc.Object, objc.class("NSUserDefaults"), "standardUserDefaults", .{}));
 
@@ -68,7 +67,6 @@ pub const Prefs = struct {
     pub fn reload(self: *Prefs) void {
         const pool = objc.Pool.push();
         defer pool.pop();
-        self.bench = self.getBool("bench", false);
         self.welcomed = self.getBool("welcomed", false);
         self.sidebar = self.getBool("sidebar", false);
         if (self.getStr("sidebar.position")) |s| {

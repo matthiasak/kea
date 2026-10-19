@@ -381,16 +381,7 @@ fn appendJsonStr(out: *std.ArrayList(u8), gpa: std.mem.Allocator, s: []const u8)
 
 test "HistoryRegression: canonical identity, credentials, ranking, and flush" {
     const gpa = std.testing.allocator;
-    const tmp_dir = "/tmp/kea-zig-hist-test";
-    const store_mod = @import("store.zig");
-    store_mod.ensureDir(tmp_dir);
-    var store: Store = .{
-        .gpa = gpa,
-        .probe = null,
-        .testing = true,
-        .folder = try gpa.dupe(u8, tmp_dir),
-        .suite = try gpa.dupe(u8, "app.kea.browser.test"),
-    };
+    var store = try Store.init(gpa, "/tmp/kea-zig-hist-test", null);
     defer store.deinit();
 
     var h = History.init(gpa, &store);

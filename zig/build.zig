@@ -26,73 +26,70 @@ fn linkMacFrameworks(mod: *std.Build.Module, b: *std.Build, target: std.Build.Re
     mod.linkSystemLibrary("objc", .{});
 }
 
+fn appModule(b: *std.Build, root: []const u8, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, imports: []const std.Build.Module.Import) *std.Build.Module {
+    const mod = b.createModule(.{
+        .root_source_file = b.path(root),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .imports = imports,
+    });
+    linkMacFrameworks(mod, b, target);
+    return mod;
+}
+
+/// A test harness's root module: imports `nanoui` and `kea` (src/root.zig).
+fn harness(b: *std.Build, root: []const u8, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) *std.Build.Module {
+    const nanoui = b.dependency("nanoui", .{ .target = target, .optimize = optimize }).module("nanoui");
+    const kea = appModule(b, "src/root.zig", target, optimize, &.{.{ .name = "nanoui", .module = nanoui }});
+    return appModule(b, root, target, optimize, &.{
+        .{ .name = "nanoui", .module = nanoui },
+        .{ .name = "kea", .module = kea },
+    });
+}
+
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const nanoui_dep = b.dependency("nanoui", .{
-        .target = target,
-        .optimize = optimize,
-    });
-    const nanoui = nanoui_dep.module("nanoui");
+    const nanoui = b.dependency("nanoui", .{ .target = target, .optimize = optimize }).module("nanoui");
 
-    // 1. Standalone KeaZig executable (KeaZig.app/Contents/MacOS/KeaZig)
-    const exe_mod = b.createModule(.{
-        .root_source_file = b.path("src/main.zig"),
-        .target = target,
-        .optimize = optimize,
-        .link_libc = true,
-        .imports = &.{.{ .name = "nanoui", .module = nanoui }},
-    });
-    linkMacFrameworks(exe_mod, b, target);
-    const exe = b.addExecutable(.{
-        .name = "KeaZig",
-        .root_module = exe_mod,
-    });
+    // KeaZig executable (KeaZig.app/Contents/MacOS/KeaZig)
+    const exe_mod = appModule(b, "src/main.zig", target, optimize, &.{.{ .name = "nanoui", .module = nanoui }});
+    const exe = b.addExecutable(.{ .name = "KeaZig", .root_module = exe_mod });
     b.installArtifact(exe);
-
     const run_exe = b.addRunArtifact(exe);
     run_exe.addPassthruArgs();
     b.step("run", "Run KeaZig").dependOn(&run_exe.step);
 
-    // 2. Phase 0 Drag & Compositor Benchmark (zig build bench-drag)
-    const drag_mod = b.createModule(.{
-        .root_source_file = b.path("src/bench_drag.zig"),
-        .target = target,
-        .optimize = .ReleaseFast,
-        .link_libc = true,
-        .imports = &.{.{ .name = "nanoui", .module = nanoui }},
-    });
-    linkMacFrameworks(drag_mod, b, target);
-    const drag_exe = b.addExecutable(.{
-        .name = "kea-bench-drag",
-        .root_module = drag_mod,
-    });
-    b.installArtifact(drag_exe);
-    const run_drag = b.addRunArtifact(drag_exe);
-    b.step("bench-drag", "Run the Phase 0 80-step, 40-tab drag benchmark").dependOn(&run_drag.step);
-
-    // 3. Phase 2 C-ABI Static Library (libkea_nanoui.a)
-    const c_mod = b.createModule(.{
-        .root_source_file = b.path("src/c_api.zig"),
-        .target = target,
-        .optimize = optimize,
-        .link_libc = true,
-        .imports = &.{.{ .name = "nanoui", .module = nanoui }},
-    });
-    linkMacFrameworks(c_mod, b, target);
-    const c_lib = b.addLibrary(.{
-        .linkage = .static,
-        .name = "kea_nanoui",
-        .root_module = c_mod,
-    });
-    b.installArtifact(c_lib);
-
-    // 4. Unit & HistoryRegression tests (zig build test)
+    // Unit and HistoryRegression tests
     const tests = b.addTest(.{ .root_module = exe_mod });
     b.step("test", "Run KeaZig unit and HistoryRegression tests").dependOn(&b.addRunArtifact(tests).step);
 
-    // 5. Line limit check (<= 600 lines per file across zig/src and zig/nanoui)
+    // Headless chrome suites on ui.Tester
+    const ui_tests = b.addTest(.{ .root_module = harness(b, "src/tests/ui/root.zig", target, optimize) });
+    b.step("ui-test", "Run the headless chrome suites (ui.Tester)").dependOn(&b.addRunArtifact(ui_tests).step);
+
+    // Frame-time gate while the sidebar edge is dragged
+    const perf = b.addExecutable(.{ .name = "keazig-perf", .root_module = harness(b, "src/tests/perf.zig", target, .ReleaseFast) });
+    const run_perf = b.addRunArtifact(perf);
+    run_perf.has_side_effects = true;
+    b.step("perf", "Measure frame times dragging the sidebar edge (fails at CPU p90 >= 4 ms)").dependOn(&run_perf.step);
+
+    // WebKit end to end, in process, windows hidden
+    const e2e = b.addExecutable(.{ .name = "keazig-e2e", .root_module = harness(b, "src/tests/e2e/main.zig", target, .Debug) });
+    const run_e2e = b.addRunArtifact(e2e);
+    run_e2e.addArg("--nanoui-hidden");
+    run_e2e.has_side_effects = true;
+    b.step("e2e", "Run the in-process WebKit end-to-end cases").dependOn(&run_e2e.step);
+
+    // Chrome states rendered to PNGs ($KEAZIG_SNAPSHOTS or $TMPDIR/keazig-snapshots)
+    const snaps = b.addExecutable(.{ .name = "keazig-snapshots", .root_module = harness(b, "src/tests/snapshots.zig", target, optimize) });
+    const run_snaps = b.addRunArtifact(snaps);
+    run_snaps.has_side_effects = true;
+    b.step("snapshots", "Render named chrome states to PNG").dependOn(&run_snaps.step);
+
+    // Line limit check (<= 600 lines per file across zig/src)
     const lines = b.addExecutable(.{
         .name = "lines",
         .root_module = b.createModule(.{

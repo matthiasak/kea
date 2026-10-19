@@ -1,23 +1,21 @@
-//! Browser model: owns `Store`, `Prefs`, `History`, `Bookmarks`, `Tab` list,
-//! Split View (`split_right_id`, `split_fraction`, `focused_pane`), SidePanels
-//! (Ubi Chat & Bookmarks), Omnibox autocomplete/chip/suggestions, Find on Page,
-//! and `StageHost` synchronization.
+//! Browser model: one window's `Tab` list, Split View (`split_right_id`,
+//! `split_fraction`, `focused_pane`), the Bookmarks side panel, Omnibox
+//! autocomplete/chip/suggestions, Find on Page, and `StageHost` sync. The
+//! stores it reads (`prefs`, `history`, `bookmarks`) are shared on `Kea`.
 const std = @import("std");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;
 const ui = nanoui.ui;
-const Store = @import("store.zig").Store;
-const prefs_mod = @import("prefs.zig");
-const Prefs = prefs_mod.Prefs;
-const History = @import("history.zig").History;
-const history_mod = @import("history.zig");
-const Bookmarks = @import("bookmarks.zig").Bookmarks;
-const SiteEntry = @import("bookmarks.zig").SiteEntry;
-const Tab = @import("tab.zig").Tab;
-const StageHost = @import("stage_host.zig").StageHost;
+const Kea = @import("../app/kea.zig").Kea;
+const Store = @import("../data/store.zig").Store;
+const Prefs = @import("../data/prefs.zig").Prefs;
+const History = @import("../data/history.zig").History;
+const Bookmarks = @import("../data/bookmarks.zig").Bookmarks;
+const SiteEntry = @import("../data/bookmarks.zig").SiteEntry;
+const Tab = @import("../web/tab.zig").Tab;
+const StageHost = @import("../web/stage_host.zig").StageHost;
 
 pub const PaneFocus = enum { left, right };
-pub const PlateKind = enum { none, settings, bookmarks, history };
 
 pub const ClosedTab = struct {
     url: [2048]u8 = undefined,
@@ -27,15 +25,16 @@ pub const ClosedTab = struct {
 };
 
 pub const Browser = struct {
+    kea: *Kea,
     gpa: std.mem.Allocator,
-    app: *nanoui.App,
     window: ?*nanoui.Window = null,
     stage_host: ?*StageHost = null,
 
-    store: Store,
-    prefs: Prefs,
-    history: History,
-    bookmarks: Bookmarks,
+    // Shared with every window, owned by `kea`.
+    store: *Store,
+    prefs: *Prefs,
+    history: *History,
+    bookmarks: *Bookmarks,
 
     tabs: std.ArrayList(*Tab) = .empty,
     closed_tabs: std.ArrayList(ClosedTab) = .empty,
@@ -47,12 +46,9 @@ pub const Browser = struct {
     split_fraction: f32 = 0.5,
     focused_pane: PaneFocus = .left,
 
-    // Side Panels (Ubi Chat & Bookmarks)
-    chat_open: bool = false,
-    chat_expanded: bool = false,
+    // Bookmarks side panel
     marks_open: bool = false,
     marks_expanded: bool = false,
-    chat_buf: ui.TextBuffer = .{},
     marks_filter_buf: ui.TextBuffer = .{},
 
     // Omnibox state
@@ -70,36 +66,26 @@ pub const Browser = struct {
     find_buf: ui.TextBuffer = .{},
     find_matches: usize = 0,
 
-    // Modal plate & Toast
-    plate: PlateKind = .none,
+    // Toast
     toast_buf: [256]u8 = undefined,
     toast_len: usize = 0,
     toast_until: f64 = 0,
 
-    // Recorded geometry from last frame for `./bench` probe
+    // Page holes from the last frame (the split divider drags against them).
     active_page_frame: ui.Rect = .{},
     left_pane_frame: ui.Rect = .{},
     right_pane_frame: ui.Rect = .{},
 
-    pub fn create(gpa: std.mem.Allocator, app: *nanoui.App) !*Browser {
-        const self = try gpa.create(Browser);
-        errdefer gpa.destroy(self);
-
-        var store = try Store.init(gpa);
-        errdefer store.deinit();
-        const prefs = Prefs.init(&store);
-
+    pub fn create(kea: *Kea) !*Browser {
+        const self = try kea.gpa.create(Browser);
         self.* = .{
-            .gpa = gpa,
-            .app = app,
-            .store = store,
-            .prefs = prefs,
-            .history = undefined,
-            .bookmarks = undefined,
+            .kea = kea,
+            .gpa = kea.gpa,
+            .store = &kea.store,
+            .prefs = &kea.prefs,
+            .history = &kea.history,
+            .bookmarks = &kea.bookmarks,
         };
-        self.history = History.init(gpa, &self.store);
-        self.bookmarks = Bookmarks.init(gpa, &self.store);
-
         self.restoreSession();
         if (self.tabs.items.len == 0) {
             _ = self.openTab("", true, false);
@@ -109,15 +95,10 @@ pub const Browser = struct {
 
     pub fn destroy(self: *Browser) void {
         self.saveSession();
-        self.history.flush();
         if (self.stage_host) |sh| sh.destroy();
         for (self.tabs.items) |t| t.destroy();
         self.tabs.deinit(self.gpa);
         self.closed_tabs.deinit(self.gpa);
-        self.bookmarks.deinit();
-        self.history.deinit();
-        self.prefs.deinit();
-        self.store.deinit();
         self.gpa.destroy(self);
     }
 
@@ -133,6 +114,14 @@ pub const Browser = struct {
         }
     }
 
+    /// The window is closing (`WindowOptions.on_close`): drop everything
+    /// that points at it before nanoui frees its surface.
+    pub fn unbindWindow(self: *Browser) void {
+        if (self.stage_host) |sh| sh.destroy();
+        self.stage_host = null;
+        self.window = null;
+    }
+
     fn onStageRects(ctx: ?*anyopaque, holes: []const ui.Rect) void {
         const self: *Browser = @ptrCast(@alignCast(ctx orelse return));
         if (holes.len >= 1) {
@@ -146,16 +135,17 @@ pub const Browser = struct {
     }
 
     pub fn redraw(self: *Browser) void {
+        const w = self.window orelse return;
         self.syncStageHost();
-        if (self.window) |w| if (w.surface) |s| s.requestFrame();
+        if (w.surface) |s| s.requestFrame();
     }
 
     pub fn syncStageHost(self: *Browser) void {
         const sh = self.stage_host orelse return;
         const primary = self.tabById(self.active_id);
         const secondary = if (self.prefs.split_view and self.split_right_id != null) self.tabById(self.split_right_id.?) else null;
-        const framed = self.prefs.sidebar or self.chat_open or self.marks_open or secondary != null;
-        sh.setPanes(if (primary) |p| p.webview else null, if (secondary) |s| s.webview else null, framed);
+        const framed = self.prefs.sidebar or self.marks_open or secondary != null;
+        sh.setPanes(if (primary) |p| p.web else null, if (secondary) |s| s.web else null, framed);
     }
 
     pub fn activeTab(self: *Browser) ?*Tab {
@@ -170,21 +160,10 @@ pub const Browser = struct {
         return null;
     }
 
-    pub fn tabByUuidOrShort(self: *Browser, needle: []const u8) ?*Tab {
-        if (needle.len == 0) return self.activeTab();
-        for (self.tabs.items) |t| {
-            if (std.ascii.startsWithIgnoreCase(&t.uuid_str, needle) or std.ascii.endsWithIgnoreCase(&t.uuid_str, needle)) return t;
-        }
-        if (std.fmt.parseInt(u64, needle, 10) catch null) |num| {
-            return self.tabById(num);
-        }
-        return null;
-    }
-
     pub fn openTab(self: *Browser, initial_url: []const u8, foreground: bool, shy: bool) *Tab {
         const id = self.next_tab_id;
         self.next_tab_id += 1;
-        const t = Tab.create(self.gpa, id, initial_url, shy) catch @panic("OOM");
+        const t = Tab.create(self.gpa, id, initial_url, shy, &self.kea.opts) catch @panic("OOM");
         t.browser_ctx = self;
         t.on_change = onTabChanged;
         t.on_new_tab = onTabRequestedNew;
@@ -220,6 +199,7 @@ pub const Browser = struct {
             @memcpy(ct.title[0..ct.title_len], t.title()[0..ct.title_len]);
             self.closed_tabs.append(self.gpa, ct) catch {};
         }
+        if (self.stage_host) |sh| if (t.web) |wv| sh.forget(wv);
         t.destroy();
 
         if (self.split_right_id == id) {

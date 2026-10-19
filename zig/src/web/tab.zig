@@ -1,10 +1,12 @@
 //! WebKit Tab (`WKWebView` + `KeaZigWebDelegate`): navigation, crash-loop
 //! protection (max 3 auto-reloads in 20 s), per-pane JS `alert`/`confirm`/`prompt`
 //! dialog cards, OpenSearch `<link rel="search">` discovery, and JS evaluation.
+//! Headless tabs (`Kea.Options.headless`) never build a webview: `web` is null.
 const std = @import("std");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;
 const ui = nanoui.ui;
+const Options = @import("../app/kea.zig").Options;
 
 pub const DialogKind = enum { alert, confirm, prompt };
 
@@ -38,14 +40,13 @@ const opensearch_js =
 pub const Tab = struct {
     gpa: std.mem.Allocator,
     id: u64,
-    uuid_str: [36]u8,
     browser_ctx: ?*anyopaque = null,
     on_change: ?*const fn (ctx: ?*anyopaque, tab: *Tab) void = null,
     on_new_tab: ?*const fn (ctx: ?*anyopaque, url: []const u8) void = null,
     on_opensearch: ?*const fn (ctx: ?*anyopaque, host: []const u8, title: []const u8, href: []const u8) void = null,
 
-    webview: objc.Object,
-    delegate: objc.Object,
+    web: ?objc.Object = null,
+    delegate: ?objc.Object = null,
 
     url_buf: [2048]u8 = undefined,
     url_len: usize = 0,
@@ -69,12 +70,18 @@ pub const Tab = struct {
 
     question: ?DialogQuestion = null,
 
-    pub fn create(gpa: std.mem.Allocator, id: u64, initial_url: []const u8, shy: bool) !*Tab {
+    pub fn create(gpa: std.mem.Allocator, id: u64, initial_url: []const u8, shy: bool, opts: *const Options) !*Tab {
+        const self = try gpa.create(Tab);
+        self.* = .{ .gpa = gpa, .id = id, .shy = shy };
+        if (!opts.headless) self.buildWeb(opts);
+        self.setTitle("New Tab");
+        if (initial_url.len > 0) self.load(initial_url);
+        return self;
+    }
+
+    fn buildWeb(self: *Tab, opts: *const Options) void {
         const pool = objc.Pool.push();
         defer pool.pop();
-        const self = try gpa.create(Tab);
-        errdefer gpa.destroy(self);
-
         const del_class = objc.defineClass(.{
             .name = "KeaZigWebDelegate",
             .protocols = &.{ "WKNavigationDelegate", "WKUIDelegate", "WKScriptMessageHandler" },
@@ -96,10 +103,12 @@ pub const Tab = struct {
         const delegate = objc.msg(objc.Object, del_class, "new", .{});
         const config = objc.new("WKWebViewConfiguration");
         defer objc.release(config);
-        if (shy) {
+        // Private tabs, and every tab under tests, keep nothing on disk.
+        if (shyOrTest(self.shy, opts)) {
             const store = objc.msg(objc.Object, objc.class("WKWebsiteDataStore"), "nonPersistentDataStore", .{});
             objc.msg(void, config, "setWebsiteDataStore:", .{store});
         }
+        if (opts.scheme_handler) |h| objc.msg(void, config, "setURLSchemeHandler:forURLScheme:", .{ h, objc.nsString("kea-test") });
         const ucc = objc.msg(objc.Object, config, "userContentController", .{});
         const script = objc.msg(objc.Object, objc.alloc("WKUserScript"), "initWithSource:injectionTime:forMainFrameOnly:", .{
             objc.nsString(opensearch_js), @as(objc.NSInteger, 1), objc.YES,
@@ -119,33 +128,29 @@ pub const Tab = struct {
         if (objc.msg(objc.BOOL, webview, "respondsToSelector:", .{objc.sel("setInspectable:")}))
             objc.msg(void, webview, "setInspectable:", .{objc.YES});
 
-        var uuid_str: [36]u8 = undefined;
-        _ = std.fmt.bufPrint(&uuid_str, "00000000-0000-4000-8000-{x:0>12}", .{id}) catch {};
-
-        self.* = .{
-            .gpa = gpa,
-            .id = id,
-            .uuid_str = uuid_str,
-            .webview = webview,
-            .delegate = delegate,
-            .shy = shy,
-        };
+        self.web = webview;
+        self.delegate = delegate;
         objc.setZig(delegate, self);
-        self.setTitle("New Tab");
-        if (initial_url.len > 0) self.load(initial_url);
-        return self;
+    }
+
+    fn shyOrTest(shy: bool, opts: *const Options) bool {
+        return shy or opts.root != null;
     }
 
     pub fn destroy(self: *Tab) void {
         if (self.question) |_| self.answerDialog(false, null);
-        const ucc = objc.msg(objc.Object, objc.msg(objc.Object, self.webview, "configuration", .{}), "userContentController", .{});
-        objc.msg(void, ucc, "removeScriptMessageHandlerForName:", .{objc.nsString("keaZig")});
-        objc.setZig(self.delegate, null);
-        objc.msg(void, self.webview, "setNavigationDelegate:", .{@as(?objc.Object, null)});
-        objc.msg(void, self.webview, "setUIDelegate:", .{@as(?objc.Object, null)});
-        objc.msg(void, self.webview, "removeFromSuperview", .{});
-        objc.release(self.webview);
-        objc.release(self.delegate);
+        if (self.web) |wv| {
+            const ucc = objc.msg(objc.Object, objc.msg(objc.Object, wv, "configuration", .{}), "userContentController", .{});
+            objc.msg(void, ucc, "removeScriptMessageHandlerForName:", .{objc.nsString("keaZig")});
+            objc.msg(void, wv, "setNavigationDelegate:", .{@as(?objc.Object, null)});
+            objc.msg(void, wv, "setUIDelegate:", .{@as(?objc.Object, null)});
+            objc.msg(void, wv, "removeFromSuperview", .{});
+            objc.release(wv);
+        }
+        if (self.delegate) |d| {
+            objc.setZig(d, null);
+            objc.release(d);
+        }
         self.gpa.destroy(self);
     }
 
@@ -197,28 +202,33 @@ pub const Tab = struct {
             self.notify();
             return;
         }
+        const wv = self.web orelse {
+            self.notify();
+            return;
+        };
         const nsurl = objc.msg(?objc.Object, objc.class("NSURL"), "URLWithString:", .{objc.nsString(target)}) orelse return;
         const req = objc.msg(objc.Object, objc.class("NSURLRequest"), "requestWithURL:", .{nsurl});
         self.loading = true;
         self.progress = 0.15;
-        _ = objc.msg(?objc.Object, self.webview, "loadRequest:", .{req});
+        _ = objc.msg(?objc.Object, wv, "loadRequest:", .{req});
         self.notify();
     }
 
     pub fn reload(self: *Tab) void {
         self.setFailure(null);
         self.stopped = false;
-        if (self.url().len > 0 and objc.msg(?objc.Object, self.webview, "URL", .{}) == null) {
+        const wv = self.web orelse return;
+        if (self.url().len > 0 and objc.msg(?objc.Object, wv, "URL", .{}) == null) {
             self.load(self.url());
             return;
         }
-        _ = objc.msg(?objc.Object, self.webview, "reload", .{});
+        _ = objc.msg(?objc.Object, wv, "reload", .{});
         self.syncState();
     }
 
     /// Stops loading (`⌘.` / Esc): matches Kea's `stopLoading()`.
     pub fn stopLoading(self: *Tab) void {
-        objc.msg(void, self.webview, "stopLoading", .{});
+        if (self.web) |wv| objc.msg(void, wv, "stopLoading", .{});
         self.stopped = true;
         self.loading = false;
         self.progress = 0;
@@ -226,31 +236,34 @@ pub const Tab = struct {
     }
 
     pub fn goBack(self: *Tab) void {
-        if (objc.msg(objc.BOOL, self.webview, "canGoBack", .{})) {
-            _ = objc.msg(?objc.Object, self.webview, "goBack", .{});
+        const wv = self.web orelse return;
+        if (objc.msg(objc.BOOL, wv, "canGoBack", .{})) {
+            _ = objc.msg(?objc.Object, wv, "goBack", .{});
             self.syncState();
         }
     }
 
     pub fn goForward(self: *Tab) void {
-        if (objc.msg(objc.BOOL, self.webview, "canGoForward", .{})) {
-            _ = objc.msg(?objc.Object, self.webview, "goForward", .{});
+        const wv = self.web orelse return;
+        if (objc.msg(objc.BOOL, wv, "canGoForward", .{})) {
+            _ = objc.msg(?objc.Object, wv, "goForward", .{});
             self.syncState();
         }
     }
 
     pub fn syncState(self: *Tab) void {
+        const wv = self.web orelse return;
         const pool = objc.Pool.push();
         defer pool.pop();
-        self.loading = if (self.stopped) false else objc.msg(objc.BOOL, self.webview, "isLoading", .{});
-        self.can_go_back = objc.msg(objc.BOOL, self.webview, "canGoBack", .{});
-        self.can_go_forward = objc.msg(objc.BOOL, self.webview, "canGoForward", .{});
-        self.progress = @floatCast(objc.msg(f64, self.webview, "estimatedProgress", .{}));
-        if (objc.msg(?objc.Object, self.webview, "URL", .{})) |u| {
+        self.loading = if (self.stopped) false else objc.msg(objc.BOOL, wv, "isLoading", .{});
+        self.can_go_back = objc.msg(objc.BOOL, wv, "canGoBack", .{});
+        self.can_go_forward = objc.msg(objc.BOOL, wv, "canGoForward", .{});
+        self.progress = @floatCast(objc.msg(f64, wv, "estimatedProgress", .{}));
+        if (objc.msg(?objc.Object, wv, "URL", .{})) |u| {
             const abs = objc.fromNSString(objc.msg(?objc.Object, u, "absoluteString", .{}));
             if (abs.len > 0 and !std.mem.eql(u8, abs, "about:blank")) self.setUrl(abs);
         }
-        if (objc.msg(?objc.Object, self.webview, "title", .{})) |t| {
+        if (objc.msg(?objc.Object, wv, "title", .{})) |t| {
             const ts = objc.fromNSString(t);
             if (ts.len > 0) self.setTitle(ts);
         }

@@ -12,6 +12,14 @@ pub const PaneSlot = struct {
     webview: ?objc.Object = null,
     last_rect: ui.Rect = .{},
     corner_radius: f32 = 0,
+    /// The last `setHidden:` sent, so each frame sends only changes.
+    hidden: bool = false,
+
+    fn setHidden(slot: *PaneSlot, wv: objc.Object, on: bool) void {
+        if (slot.hidden == on) return;
+        slot.hidden = on;
+        objc.msg(void, wv, "setHidden:", .{on});
+    }
 };
 
 pub const StageHost = struct {
@@ -65,6 +73,15 @@ pub const StageHost = struct {
         self.updateSlot(1, secondary);
     }
 
+    /// Drops every slot holding `webview` (its tab is about to free it).
+    pub fn forget(self: *StageHost, webview: objc.Object) void {
+        for (&self.slots) |*slot| {
+            if (slot.webview == webview) slot.* = .{};
+        }
+        if (self.peek_slot.webview == webview) self.peek_slot = .{};
+        objc.msg(void, webview, "removeFromSuperview", .{});
+    }
+
     pub fn setPeek(self: *StageHost, webview: ?objc.Object) void {
         if (self.peek_slot.webview == webview) return;
         if (self.peek_slot.webview) |old| objc.msg(void, old, "removeFromSuperview", .{});
@@ -72,6 +89,8 @@ pub const StageHost = struct {
         self.peek_slot.last_rect = .{};
         if (webview) |wv| {
             objc.msg(void, self.stage_view, "addSubview:", .{wv});
+            objc.msg(void, wv, "setHidden:", .{objc.NO});
+            self.peek_slot.hidden = false;
             applyCornerRadius(wv, 12);
         }
     }
@@ -99,6 +118,7 @@ pub const StageHost = struct {
             const sup = objc.msg(?objc.Object, wv, "superview", .{});
             if (sup != self.stage_view) objc.msg(void, self.stage_view, "addSubview:", .{wv});
             objc.msg(void, wv, "setHidden:", .{objc.NO});
+            slot.hidden = false;
             applyCornerRadius(wv, self.card_radius);
         }
     }
@@ -119,7 +139,7 @@ pub const StageHost = struct {
             const wv = slot.webview orelse continue;
             if (i < holes.len and holes[i].w > 1 and holes[i].h > 1) {
                 const r = holes[i];
-                objc.msg(void, wv, "setHidden:", .{objc.NO});
+                slot.setHidden(wv, false);
                 if (!rectsEq(slot.last_rect, r)) {
                     slot.last_rect = r;
                     objc.msg(void, wv, "setFrame:", .{objc.CGRect{
@@ -128,13 +148,13 @@ pub const StageHost = struct {
                     }});
                 }
             } else {
-                objc.msg(void, wv, "setHidden:", .{objc.YES});
+                slot.setHidden(wv, true);
             }
         }
         if (self.peek_slot.webview) |wv| {
             if (holes.len >= 3) {
                 const r = holes[2];
-                objc.msg(void, wv, "setHidden:", .{objc.NO});
+                self.peek_slot.setHidden(wv, false);
                 if (!rectsEq(self.peek_slot.last_rect, r)) {
                     self.peek_slot.last_rect = r;
                     objc.msg(void, wv, "setFrame:", .{objc.CGRect{
@@ -143,7 +163,7 @@ pub const StageHost = struct {
                     }});
                 }
             } else {
-                objc.msg(void, wv, "setHidden:", .{objc.YES});
+                self.peek_slot.setHidden(wv, true);
             }
         }
     }

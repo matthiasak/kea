@@ -36,7 +36,7 @@ fi
 ZIG_OPT="-Doptimize=ReleaseFast"
 [ "$CONFIG" = "debug" ] && ZIG_OPT="-Doptimize=Debug"
 
-(cd zig && zig build lines && zig build "$ZIG_OPT")
+(cd zig && zig build lines && (cd nanoui && zig build lines) && zig build "$ZIG_OPT")
 BINARY="zig/zig-out/bin/$NAME"
 [ -f "$BINARY" ] || { echo "$BINARY was not produced" >&2; exit 1; }
 

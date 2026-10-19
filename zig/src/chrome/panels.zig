@@ -1,11 +1,12 @@
-//! Side panels (Ubi Chat & Bookmarks), 9 pt `EdgeHandle` drag strips,
-//! floating opaque Omnibox dropdown (with Gaussian shadow), and FindBar.
+//! The Bookmarks side panel, 9 pt `EdgeHandle` drag strips, the floating
+//! opaque Omnibox dropdown (with Gaussian shadow), and FindBar.
 const std = @import("std");
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
-const Browser = @import("browser.zig").Browser;
-const nowEpoch = @import("browser.zig").nowEpoch;
-const Palette = @import("chrome.zig").Palette;
+const Browser = @import("../model/browser.zig").Browser;
+const nowEpoch = @import("../model/browser.zig").nowEpoch;
+const Bookmarks = @import("../data/bookmarks.zig").Bookmarks;
+const Palette = @import("window_view.zig").Palette;
 
 pub fn drawEdgeHandle(b: *Browser, c: *ui.Context, pal: Palette, width_ptr: *f32, min_w: f32, max_w: f32, std_w: f32, grows_right: bool, name: []const u8) void {
     const idx = c.open(.{ .width = .{ .px = 9 }, .height = .fill, .align_items = .center, .justify = .center }, name);
@@ -33,45 +34,6 @@ pub fn drawEdgeHandle(b: *Browser, c: *ui.Context, pal: Palette, width_ptr: *f32
         .background = if (it.hovered or it.pressed) pal.muted else ui.Color.transparent,
     }, .none, null);
     c.end();
-}
-
-pub fn drawChatPanel(b: *Browser, c: *ui.Context, pal: Palette, on_left: bool) void {
-    if (!on_left) drawEdgeHandle(b, c, pal, &b.prefs.chat_width, 280, 720, 360, false, "chat-edge");
-    ui.column(c, .{
-        .width = .{ .px = b.prefs.chat_width },
-        .height = .fill,
-        .background = pal.ground,
-        .border = pal.hairline,
-        .padding = .all(12),
-        .gap = 8,
-    });
-    {
-        ui.row(c, .{ .width = .fill, .align_items = .center, .gap = 4 });
-        ui.text(c, "Ubi Chat", .{ .size = 14, .weight = .semibold, .color = pal.ink });
-        ui.spacer(c);
-        if (ui.button(c, "", .{ .variant = .ghost, .icon = "arrow.left.and.right", .size = 12 }).clicked) {
-            const cur = b.prefs.effectiveChatSide();
-            b.prefs.setChatSide(if (cur == .left) .right else .left);
-        }
-        if (ui.button(c, "", .{ .variant = .ghost, .icon = "arrow.up.left.and.arrow.down.right", .size = 12 }).clicked) {
-            b.chat_expanded = !b.chat_expanded;
-        }
-        if (ui.button(c, "", .{ .variant = .ghost, .icon = "xmark", .size = 12 }).clicked) {
-            b.chat_open = false;
-            b.syncStageHost();
-        }
-        ui.end(c);
-
-        ui.scroll(c, .{ .width = .fill, .grow = 1, .gap = 6 });
-        ui.card(c, .{ .width = .fill, .padding = .all(10), .radius = 8, .background = pal.frame, .shadow = null });
-        ui.text(c, "Ask about the current page or type @ to mention open tabs and bookmarks.", .{ .size = 12.5, .color = pal.muted, .wrap = true });
-        ui.end(c);
-        ui.end(c);
-
-        _ = ui.textField(c, &b.chat_buf, .{ .placeholder = "Ask Ubi Chat...", .width = .fill });
-    }
-    ui.end(c);
-    if (on_left) drawEdgeHandle(b, c, pal, &b.prefs.chat_width, 280, 720, 360, true, "chat-edge");
 }
 
 pub fn drawMarksPanel(b: *Browser, c: *ui.Context, pal: Palette, on_left: bool) void {
@@ -104,7 +66,7 @@ pub fn drawMarksPanel(b: *Browser, c: *ui.Context, pal: Palette, on_left: bool) 
         _ = ui.textField(c, &b.marks_filter_buf, .{ .placeholder = "Search bookmarks", .width = .fill });
         ui.scroll(c, .{ .width = .fill, .grow = 1, .gap = 4 });
         for (b.bookmarks.items.items, 0..) |bm, idx| {
-            if (!@import("bookmarks.zig").Bookmarks.matchesQuery(bm, b.marks_filter_buf.text())) continue;
+            if (!Bookmarks.matchesQuery(bm, b.marks_filter_buf.text())) continue;
             ui.key(c, c.print("bm-side-{d}", .{idx}));
             if (ui.button(c, bm.title, .{ .width = .fill, .variant = .ghost, .size = 12.5, .icon = "bookmark" }).clicked) {
                 if (bm.url) |u| b.goUrl(u);

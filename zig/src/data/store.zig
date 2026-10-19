@@ -1,5 +1,5 @@
-//! Storage paths (`~/Library/Application Support/Kea` or `Kea (<KEA_PROBE>)`),
-//! corrupt JSON quarantine (`*.corrupt`), and atomic file writes.
+//! Storage paths (`opts.root`, else `~/Library/Application Support/KeaZig`),
+//! the defaults suite, corrupt JSON quarantine (`*.corrupt`), and atomic writes.
 const std = @import("std");
 const c = struct {
     pub const FILE = opaque {};
@@ -27,45 +27,27 @@ pub fn cPath(buf: *[1024]u8, s: []const u8) ?[*]const u8 {
 }
 pub const Store = struct {
     gpa: std.mem.Allocator,
-    probe: ?[]const u8 = null,
-    testing: bool = false,
     folder: []u8,
-    suite: []u8,
+    /// NSUserDefaults suite (tests); null is the app's standard defaults.
+    suite: ?[]u8 = null,
 
-    pub fn init(gpa: std.mem.Allocator) !Store {
-        const home: []const u8 = if (c.getenv("HOME")) |h| std.mem.span(h) else "/tmp";
-        const probe_raw: []const u8 = if (c.getenv("KEA_PROBE")) |p| std.mem.span(p) else "";
-        const has_probe = probe_raw.len > 0;
-        const probe = if (has_probe) try gpa.dupe(u8, probe_raw) else null;
-
-        const is_generic_test = std.mem.eql(u8, probe_raw, "1") or std.mem.eql(u8, probe_raw, "test");
-        const folder = if (!has_probe)
-            try std.fmt.allocPrint(gpa, "{s}/Library/Application Support/KeaZig", .{home})
-        else if (is_generic_test)
-            try std.fmt.allocPrint(gpa, "{s}/Library/Application Support/Kea (test)", .{home})
-        else
-            try std.fmt.allocPrint(gpa, "{s}/Library/Application Support/Kea ({s})", .{ home, probe_raw });
-        const suite = if (!has_probe)
-            try gpa.dupe(u8, "app.kea.zig")
-        else if (is_generic_test)
-            try gpa.dupe(u8, "app.kea.browser.test")
-        else
-            try std.fmt.allocPrint(gpa, "app.kea.browser.test.{s}", .{probe_raw});
-
+    pub fn init(gpa: std.mem.Allocator, root: ?[]const u8, suite: ?[]const u8) !Store {
+        const folder = if (root) |r| try gpa.dupe(u8, r) else blk: {
+            const home: []const u8 = if (c.getenv("HOME")) |h| std.mem.span(h) else "/tmp";
+            break :blk try std.fmt.allocPrint(gpa, "{s}/Library/Application Support/KeaZig", .{home});
+        };
+        errdefer gpa.free(folder);
         ensureDir(folder);
         return .{
             .gpa = gpa,
-            .probe = probe,
-            .testing = has_probe,
             .folder = folder,
-            .suite = suite,
+            .suite = if (suite) |s| try gpa.dupe(u8, s) else null,
         };
     }
 
     pub fn deinit(self: *Store) void {
-        if (self.probe) |p| self.gpa.free(p);
         self.gpa.free(self.folder);
-        self.gpa.free(self.suite);
+        if (self.suite) |s| self.gpa.free(s);
     }
 
     pub fn path(self: *const Store, name: []const u8) ![]u8 {
