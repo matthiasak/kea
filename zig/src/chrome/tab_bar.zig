@@ -19,6 +19,8 @@ const lights = @import("lights.zig");
 const tab_width = @import("tab_width.zig");
 const tab_pill = @import("tab_pill.zig");
 const tab_drag = @import("tab_drag.zig");
+const split_tab_item = @import("split_tab_item.zig");
+const split_drop = @import("split_drop.zig");
 const tab_menu = @import("tab_menu.zig");
 const groups_view = @import("groups_view.zig");
 const spaces_view = @import("spaces_view.zig");
@@ -128,13 +130,14 @@ fn items(b: *Browser, a: std.mem.Allocator) ![]Item {
     return out.items;
 }
 
-fn rowOf(c: *ui.Context, list: []const Item) tab_width.Row {
+fn rowOf(b: *Browser, c: *ui.Context, list: []const Item) tab_width.Row {
     var r: tab_width.Row = .{};
     for (list) |it| switch (it) {
         .tab => |t| if (t.tab.pin != null) {
             r.pins += 1;
         } else {
             r.loose += 1;
+            r.pairs += @intFromBool(split_tab_item.partner(b, t.tab) != null);
         },
         .heading => |g| {
             r.groups += 1;
@@ -162,7 +165,7 @@ pub fn tabBar(b: *Browser, c: *ui.Context, p: *const Palette) void {
     const room = tab_width.room(strip_w, lights_w, dot, leading, tab_width.far(st.doors, prefs.navigation_left));
     st.room = room;
     const list = items(b, c.alloc()) catch return;
-    const row = rowOf(c, list);
+    const row = rowOf(b, c, list);
     const each = row.each(room);
     const content = row.content(each) + tab_pill.growth(b, each);
     const run = @min(content, room);
@@ -175,6 +178,7 @@ pub fn tabBar(b: *Browser, c: *ui.Context, p: *const Palette) void {
     const nearby = if (rect) |r| r.contains(c.input.mouse) else false;
     // A link dragged onto the row opens there.
     c.acceptDrop(root);
+    split_drop.mark(b, 0, rect);
     const over = if (c.input.drag_over) |at| (if (rect) |r| r.contains(at) else false) else false;
     c.node(root).style.background = p.hover.alpha(motion.quickTo(c, landing_id, 0, if (over) 1 else 0));
     if (c.dropAt(root)) |d| _ = b.take(d);
@@ -204,11 +208,13 @@ pub fn tabBar(b: *Browser, c: *ui.Context, p: *const Palette) void {
 
     plus(b, c, p, nearby);
     ui.spacer(c);
-    // Back, forward, reload, and the bookmarks, at the far end. The
-    // download door arrives with P8, the extensions' with P13.
+    // The download door, back, forward, reload, and the bookmarks, at the
+    // far end. The extensions' door arrives with P13.
     const doors = c.open(.{ .direction = .row, .gap = metrics.tab_gap, .align_items = .center }, null);
     st.doors_node = c.node(doors).id;
     if (c.rects.get(st.doors_node)) |r| st.doors = r.w;
+    // Only while a download is running, and a moment after.
+    @import("fetch_door.zig").door(b, c, p, "strip");
     if (!prefs.navigation_left) {
         ui.row(c, .{ .padding = .{ .right = 8 } });
         helm(b, c, p);
@@ -276,14 +282,15 @@ fn drawRun(b: *Browser, c: *ui.Context, p: *const Palette, list: []const Item, e
             .tab => |ti| {
                 const t = ti.tab;
                 const pid = pillId(t.id);
-                const w = tab_pill.span(b, t, each);
+                const w = split_tab_item.stripSpan(b, t, each);
                 const shown_w = motion.settleTo(c, pid, 1, w);
                 const x = motion.settleTo(c, pid, 0, target_x);
                 const known = for (last.items) |s| {
                     if (s.id == t.id) break true;
                 } else false;
                 const v = presence.presenceFrom(c, pid, if (!fresh and !known) 0 else 1, true, motion.settle, null) orelse 1;
-                const live = t.id == b.active_id;
+                // A pair wears its own grey, on the half with the keys.
+                const live = t.id == b.active_id and split_tab_item.partner(b, t) == null;
                 const step = w + metrics.tab_gap;
                 ui.key(c, c.print("strip-tab-{d}", .{t.id}));
                 if (b.carry.hand) |h| if (h.tab == t.id and h.held) {
@@ -306,11 +313,12 @@ fn drawRun(b: *Browser, c: *ui.Context, p: *const Palette, list: []const Item, e
                     target_x += step;
                     continue;
                 };
-                const d = tab_pill.pill(b, c, p, t, .{ .live = live, .each = each, .width = shown_w, .place = .{
+                const placed = split_tab_item.stripItem(b, c, p, t, .{ .live = live, .each = each, .width = shown_w, .place = .{
                     .offset = .{ .x = x - flow_x },
                     .opacity = std.math.clamp(v, 0, 1),
                     .scale = 0.9 + 0.1 * v,
                 } });
+                const d = placed.drawn;
                 const r = tab_drag.carried(b, c, d.it, t, ti.index, ti.count, step, false);
                 const shift = r.shift;
                 if (shift != 0) c.node(d.index).style.offset.x += shift;
@@ -321,7 +329,7 @@ fn drawRun(b: *Browser, c: *ui.Context, p: *const Palette, list: []const Item, e
                     live_rect = .{ .x = x + shift, .y = 0, .w = shown_w, .h = if (d.it.rect) |pr| pr.h else 28 };
                     live_tab = t;
                 }
-                click(b, c, t, d, r, live);
+                click(b, c, placed.asked, placed.asked_drawn, r, placed.asked.id == b.active_id);
                 st.seen.append(b.gpa, .{ .id = t.id, .node = d.it.id, .x = x, .w = shown_w, .pin = t.pin != null }) catch {};
                 flow_x += shown_w + metrics.tab_gap;
                 target_x += step;
@@ -336,7 +344,7 @@ fn drawRun(b: *Browser, c: *ui.Context, p: *const Palette, list: []const Item, e
         const live = h.tab.id == b.active_id;
         var chip = tab_drag.chipStyle(p);
         if (live) chip.background = if (h.tab.pin != null) p.pin_live else p.wash;
-        _ = tab_pill.pill(b, c, p, h.tab, .{ .live = live, .each = each, .interactive = false, .place = .{ .absolute = true, .offset = .{ .x = h.x, .y = (metrics.strip - 28) / 2 }, .chip = chip } });
+        _ = split_tab_item.stripItem(b, c, p, h.tab, .{ .live = live, .each = each, .interactive = false, .place = .{ .absolute = true, .offset = .{ .x = h.x, .y = (metrics.strip - 28) / 2 }, .chip = chip } });
     }
     revealActive(b, c, run_id, run, overflowing);
 }
@@ -551,7 +559,7 @@ pub fn helm(b: *Browser, c: *ui.Context, p: *const Palette) void {
     if (door(c, p, "chevron.right", "Forward   ⌘]", forward)) tab.goForward();
     const loading = tab.loading;
     if (door(c, p, if (loading) "xmark" else "arrow.clockwise", if (loading) "Stop   ⌘." else "Reload   ⌘R", !tab.isBlank())) {
-        if (loading) tab.stopLoading() else tab.reload();
+        if (loading) tab.stopLoading() else tab.reload(false);
     }
 }
 
@@ -563,12 +571,7 @@ fn door(c: *ui.Context, p: *const Palette, icon: []const u8, help: []const u8, e
     return controls.door(c, p, icon, .{ .help = help }).clicked and enabled;
 }
 
-/// `BookmarkDoor`: filled while the page in front is kept.
-// ponytail: opens the bookmarks side panel until P8.7's dropdown (BookmarksDropdown) replaces it.
+/// `BookmarkDoor`, its list hanging below it.
 fn bookmarkDoor(b: *Browser, c: *ui.Context, p: *const Palette) void {
-    const kept = if (b.activeTab()) |t| !t.isBlank() and b.bookmarks.bookmarkFor(t.url()) != null else false;
-    if (controls.door(c, p, if (kept) "bookmark.fill" else "bookmark", .{ .help = "Bookmarks" }).clicked) {
-        b.marks_open = !b.marks_open;
-        b.syncStageHost();
-    }
+    @import("bookmarks/door.zig").door(b, c, p, .below);
 }

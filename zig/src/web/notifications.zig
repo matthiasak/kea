@@ -96,8 +96,11 @@ pub fn asked(self: objc.Object, _: objc.SEL, wv: objc.Object, from: objc.Object,
     if (!t.kea.prefs.site_notifications or t.shy or !objc.msg(objc.BOOL, store, "isPersistent", .{}) or host.len == 0 or !std.mem.eql(u8, page_origin, site))
         return dialogs.call(decide, .{false});
     if (choice(t.kea, site)) |remembered| return dialogs.call(decide, .{remembered});
-    // ponytail: the card that asks (`CaptureAsk`, then `authorize`) is P8.10's bar; until then a new site is refused.
-    dialogs.call(decide, .{false});
+    // Asked over its own page, on the bar; the grant asks macOS too (`dialogs.answerBar`).
+    const a = dialogs.make(t, .notify, host, "notifications", decide) orelse return dialogs.call(decide, .{false});
+    var kb: [420]u8 = undefined;
+    dialogs.keepAs(a, std.fmt.bufPrint(&kb, "{s}" ++ suffix, .{site}) catch "");
+    dialogs.ask(t, a);
 }
 
 const prefix = "capture.";

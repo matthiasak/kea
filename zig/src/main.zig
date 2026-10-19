@@ -5,6 +5,8 @@ const nanoui = @import("nanoui");
 const kea = @import("app/kea.zig");
 const browsers = @import("app/browsers.zig");
 const links = @import("app/links.zig");
+const menus = @import("app/menus.zig");
+const keys = @import("app/keys.zig");
 
 pub fn main(init: std.process.Init) !void {
     // Closing the last window keeps the app, as Safari and Chrome do (#327).
@@ -21,6 +23,9 @@ pub fn main(init: std.process.Init) !void {
     app.options.on_continue_activity = links.onContinueActivity;
     app.options.dock_menu = browsers.dockMenu(k);
     _ = try k.newBrowser();
+    // The menu bar and the app's keys, for the window in front.
+    menus.install(k);
+    keys.install(k);
     browsers.restore(k);
     // Addresses from other apps have somewhere to go from here on.
     links.hand(k);
@@ -74,10 +79,14 @@ test {
     _ = @import("app/kea.zig");
     _ = @import("design/palette.zig");
     _ = @import("chrome/ring.zig");
+    _ = @import("chrome/when.zig");
     _ = @import("chrome/tests_controls.zig");
     _ = @import("chrome/lights.zig");
     _ = @import("chrome/tab_width.zig");
     _ = @import("chrome/pin_grid.zig");
+    _ = @import("model/split.zig");
+    _ = @import("chrome/pane_divider.zig");
+    _ = @import("chrome/split_stage.zig");
     _ = @import("app/browsers.zig");
     _ = @import("app/links.zig");
     _ = @import("web/local_network.zig");
@@ -89,4 +98,29 @@ test {
     _ = @import("web/frame_rate.zig");
     _ = @import("web/little.zig");
     _ = @import("chrome/link_bubble.zig");
+    _ = @import("app/commands.zig");
+    _ = @import("app/shortcuts.zig");
+    _ = @import("app/menus.zig");
+    _ = @import("app/keys.zig");
+    _ = @import("chrome/kea_flight.zig");
+    _ = @import("ai/ai.zig");
+    _ = @import("ai/assistant.zig");
+    _ = @import("ai/regex.zig");
+    _ = @import("ai/client.zig");
+    _ = @import("ai/client_more.zig");
+    _ = @import("ai/markdown.zig");
+    _ = @import("ai/page_text.zig");
+    _ = @import("ai/sign_in.zig");
+    _ = @import("ai/catalog.zig");
+    _ = @import("ai/shell.zig");
+    _ = @import("ai/ubi_chat.zig");
+    _ = @import("ai/organize.zig");
+    _ = @import("ai/chat_sections.zig");
+    _ = @import("ai/mermaid/mermaid.zig");
+    _ = @import("sys/keychain.zig");
+    _ = @import("sys/urlsession.zig");
+    _ = @import("sync/core.zig");
+    _ = @import("sync/sigv4.zig");
+    _ = @import("sync/drop.zig");
+    _ = @import("sync/sync_tests.zig");
 }

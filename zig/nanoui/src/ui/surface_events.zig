@@ -30,7 +30,6 @@ pub const methods = [_]objc.Method{
     .{ .name = "scrollWheel:", .imp = &scrollWheel, .types = "v@:@" },
     .{ .name = "keyDown:", .imp = &keyDown, .types = "v@:@" },
     .{ .name = "flagsChanged:", .imp = &flagsChanged, .types = "v@:@" },
-    .{ .name = "performKeyEquivalent:", .imp = &performKeyEquivalent, .types = "c@:@" },
     .{ .name = "paste:", .imp = &paste, .types = "v@:@" },
     .{ .name = "draggingEntered:", .imp = &draggingUpdated, .types = "Q@:@" },
     .{ .name = "draggingUpdated:", .imp = &draggingUpdated, .types = "Q@:@" },
@@ -97,15 +96,6 @@ fn resignFirstResponder(obj: objc.Object, _: objc.SEL) callconv(.c) objc.BOOL {
         s.requestFrame();
     }
     return objc.YES;
-}
-
-fn performKeyEquivalent(obj: objc.Object, sel_in: objc.SEL, event: objc.Object) callconv(.c) objc.BOOL {
-    const s = surfaceOf(obj) orelse return objc.NO;
-    const flags = objc.msg(objc.NSUInteger, event, "modifierFlags", .{});
-    if (flags & ((1 << 20) | (1 << 18)) == 0) return objc.NO;
-    s.ctx.shortcut_taken = false;
-    keyDown(obj, sel_in, event);
-    return if (s.ctx.shortcut_taken) objc.YES else objc.NO;
 }
 
 /// A press of `button`: the view takes the keyboard, the box under the
@@ -233,7 +223,7 @@ fn keyDown(obj: objc.Object, _: objc.SEL, event: objc.Object) callconv(.c) void 
     const ign = objc.fromNSString(objc.msg(?objc.Object, event, "charactersIgnoringModifiers", .{}));
     if (ign.len > 0) {
         const cp = std.unicode.utf8Decode(ign[0..cf.seqLen(ign[0])]) catch 0;
-        const key: u21 = if (cp < 128) std.ascii.toLower(@intCast(cp)) else cp;
+        const key = input.Shortcut.keyOf(cp);
         const special = key == 0xF700 or key == 0xF701 or key == '\t' or key == 0x1b;
         // Option too: a text field with Emacs's keys takes ⌥B, ⌥F, ⌥D.
         if (in.cmd or in.ctrl or in.alt or special) {

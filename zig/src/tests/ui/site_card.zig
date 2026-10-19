@@ -67,7 +67,7 @@ test "esc closes the site card" {
     _ = try opened(&f);
     defer f.deinit();
     try std.testing.expect(isOpen(&f));
-    _ = f.tester.shortcut(.{ .key = ui.Shortcut.escape });
+    _ = f.press("\x1b", 53, .{});
     f.tester.settle(1);
     try std.testing.expect(!isOpen(&f));
 }

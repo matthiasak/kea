@@ -15,13 +15,13 @@ const Space = data.Space;
 const session = @import("../data/session.zig");
 const groups_ops = @import("groups.zig");
 const TabGroup = groups_ops.TabGroup;
-const Pair = @import("browser_rows.zig").Pair;
+const TabSplit = @import("split.zig").TabSplit;
 
 /// A space's row of tabs while another space is on screen.
 pub const Parked = struct {
     tabs: std.ArrayList(*Tab) = .empty,
     active: u64 = 0,
-    pair: ?Pair = null,
+    splits: std.ArrayList(TabSplit) = .empty,
     /// Its groups as its file has them; null when unknown, for the file to say.
     groups: ?std.ArrayList(TabGroup) = null,
 
@@ -29,6 +29,7 @@ pub const Parked = struct {
     pub fn deinit(row: *Parked, gpa: std.mem.Allocator) void {
         for (row.tabs.items) |t| t.destroy();
         row.tabs.deinit(gpa);
+        row.splits.deinit(gpa);
         if (row.groups) |*g| groups_ops.freeGroups(gpa, g);
     }
 };
@@ -67,11 +68,10 @@ fn enter(self: *Browser, id: Uuid) void {
     for (visible) |vid| if (self.tabById(vid)) |t| t.touch();
 
     // The row on screen is parked as it is, sound and all.
-    const leaving: Parked = .{ .tabs = self.tabs, .active = self.active_id, .pair = self.currentPair(), .groups = self.tab_groups };
+    const leaving: Parked = .{ .tabs = self.tabs, .active = self.active_id, .splits = self.splits, .groups = self.tab_groups };
     self.tabs = .empty;
     self.tab_groups = .empty;
-    self.split_right_id = null;
-    self.focused_pane = .left;
+    self.splits = .empty;
     const gop = self.parked.getOrPut(self.gpa, self.space_id) catch @panic("OOM");
     if (gop.found_existing) gop.value_ptr.deinit(self.gpa);
     gop.value_ptr.* = leaving;
@@ -82,17 +82,17 @@ fn enter(self: *Browser, id: Uuid) void {
         var back = kv.value;
         if (back.tabs.items.len > 0) {
             if (back.groups) |g| self.tab_groups = g;
-            self.showRow(back.tabs, back.active, back.pair);
+            self.showRow(back.tabs, back.active, back.splits);
             for (self.visibleTabIDs()) |vid| if (self.tabById(vid)) |t| {
                 _ = t.wake();
             };
         } else {
             back.deinit(self.gpa);
-            self.showRow(.empty, 0, null);
+            self.showRow(.empty, 0, .empty);
             self.restoreSession();
         }
     } else {
-        self.showRow(.empty, 0, null);
+        self.showRow(.empty, 0, .empty);
         self.restoreSession();
     }
     self.setEditing(if (self.tabById(self.active_id)) |t| t.isBlank() else true);

@@ -85,7 +85,10 @@ fn pressed(ctx: ?*anyopaque) callconv(.c) void {
     const w = watches.getPtr(b) orelse return;
     const event = if (w.pressure) |s| dispatch.dispatch_source_get_data(s) else 0;
     const critical = event & pressure_critical != 0;
-    if (critical) w.critical_until = json.now() + 60;
+    if (critical) {
+        w.critical_until = json.now() + 60;
+        @import("../chrome/tab_switcher.zig").reset(b);
+    }
     sleepIdle(b, if (critical) 0 else 5 * 60);
 }
 

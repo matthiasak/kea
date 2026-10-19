@@ -16,21 +16,8 @@ const browsers = @import("../app/browsers.zig");
 const groups_ops = @import("groups.zig");
 const TabGroup = groups_ops.TabGroup;
 const Parked = @import("spaces.zig").Parked;
-
-/// Interim Split View's pair, as the session keeps it (P7 ports `TabSplit`).
-pub const Pair = struct { left: u64, right: u64, fraction: f64 = 0.5, focused: ?u64 = null };
-
-/// The pair on screen — the tab in front and the one beside it — or the
-/// one kept aside.
-pub fn currentPair(self: *Browser) ?Pair {
-    const rid = self.split_right_id orelse return self.kept_pair;
-    return .{
-        .left = self.active_id,
-        .right = rid,
-        .fraction = self.split_fraction,
-        .focused = if (self.focused_pane == .right) rid else self.active_id,
-    };
-}
+const split_ops = @import("split.zig");
+const TabSplit = split_ops.TabSplit;
 
 // MARK: where rows are kept
 
@@ -68,7 +55,7 @@ pub fn allRows(self: *Browser, arena: std.mem.Allocator) !json.Map(Shape) {
         try rows.map.put(arena, try arena.dupe(u8, &key), try intoArena(arena, saved.value));
     }
     const here = self.space_id.string();
-    const live = try self.session(arena, self.tabs.items, self.active_id, try groupsForSession(arena, self.tab_groups.items), self.currentPair());
+    const live = try self.session(arena, self.tabs.items, self.active_id, try groupsForSession(arena, self.tab_groups.items), self.splits.items);
     try rows.map.put(arena, try arena.dupe(u8, &here), live);
     for (self.parked.keys(), self.parked.values()) |id, *row| {
         const key = id.string();
@@ -118,8 +105,8 @@ pub fn groupsForSession(arena: std.mem.Allocator, list: []const TabGroup) ![]ses
 
 /// A row as `Session.Shape`, on `arena`, its strings the tabs'. `active`
 /// is the one in front or, when that one isn't kept, the kept one just
-/// before it; only groups with a kept tab, and only a pair whole in the file.
-pub fn session(self: *Browser, arena: std.mem.Allocator, tabs: []const *Tab, active: u64, groups: ?[]const session_file.TabGroup, pair: ?Pair) !Shape {
+/// before it; only groups with a kept tab, and only pairs whole in the file.
+pub fn session(self: *Browser, arena: std.mem.Allocator, tabs: []const *Tab, active: u64, groups: ?[]const session_file.TabGroup, splits: []const TabSplit) !Shape {
     _ = self;
     var entries: std.ArrayList(session_file.Entry) = .empty;
     var indices: std.AutoHashMapUnmanaged(u64, i64) = .empty;
@@ -155,16 +142,18 @@ pub fn session(self: *Browser, arena: std.mem.Allocator, tabs: []const *Tab, act
         };
         kept_groups = out.items;
     }
-    var splits: []session_file.Split = &.{};
-    if (pair) |p| if (indices.get(p.left)) |l| if (indices.get(p.right)) |r| if (r == l + 1) {
-        splits = try arena.alloc(session_file.Split, 1);
-        splits[0] = .{
+    // Only a pair whole in the file: one with an empty page, or a private
+    // one, isn't written, and its other page comes back alone.
+    var saved: std.ArrayList(session_file.Split) = .empty;
+    for (splits) |p| if (indices.get(p.left())) |l| if (indices.get(p.right())) |r| if (r == l + 1) {
+        try saved.append(arena, .{
             .tabs = try arena.dupe(i64, &.{ l, r }),
-            .sizes = try arena.dupe(f64, &.{ p.fraction, 1 - p.fraction }),
+            .axis = p.axis,
+            .sizes = try arena.dupe(f64, &p.sizes),
             .focused = if (p.focused) |f| indices.get(f) else null,
-        };
+        });
     };
-    return .{ .tabs = entries.items, .active = front, .groups = kept_groups, .splits = splits };
+    return .{ .tabs = entries.items, .active = front, .groups = kept_groups, .splits = saved.items };
 }
 
 /// Written for the next launch: the pins as they are here, for the other
@@ -176,7 +165,7 @@ pub fn writeSession(self: *Browser, now: bool) void {
     const a = arena.allocator();
     const mine = @import("pins.zig").pinDefs(self, a, self.tabs.items) catch return;
     if (self.kea.pins.set(self.space_id, mine)) self.kea.pinsChanged(self, self.space_id);
-    const shape = self.session(a, self.tabs.items, self.active_id, groupsForSession(a, self.tab_groups.items) catch return, self.currentPair()) catch return;
+    const shape = self.session(a, self.tabs.items, self.active_id, groupsForSession(a, self.tab_groups.items) catch return, self.splits.items) catch return;
     self.writeRow(self.space_id, shape, now);
 }
 
@@ -195,7 +184,7 @@ fn parkedShape(self: *Browser, arena: std.mem.Allocator, space: Uuid, row: *cons
         defer saved.deinit();
         break :blk if (saved.value.groups) |g| (try intoArena(arena, .{ .tabs = &.{}, .active = 0, .groups = g })).groups else null;
     };
-    return self.session(arena, row.tabs.items, row.active, groups, row.pair);
+    return self.session(arena, row.tabs.items, row.active, groups, row.splits.items);
 }
 
 /// `rememberSession`: written a moment from now, once for many changes.
@@ -242,6 +231,8 @@ pub fn restoreSession(self: *Browser) void {
     var restored = restoreRow(self, saved.value, self.space_id, self.tab_groups.items);
     self.tabs.appendSlice(self.gpa, restored.tabs.items) catch @panic("OOM");
     restored.tabs.deinit(self.gpa);
+    self.splits.deinit(self.gpa);
+    self.splits = restored.splits;
     self.arrangeGroupedTabs(null);
     // No tab in front (a fresh start): an empty one beside the pins.
     var front: ?*Tab = null;
@@ -260,30 +251,10 @@ pub fn restoreSession(self: *Browser) void {
         return;
     };
     self.active_id = first.id;
-    applyPair(self, restored.pair);
-    // Only the one you were looking at actually loads.
-    _ = first.wake();
-    if (self.split_right_id) |rid| if (self.tabById(rid)) |r| {
-        _ = r.wake();
+    // Only the ones you were looking at actually load.
+    for (self.visibleTabIDs()) |id| if (self.tabById(id)) |t| {
+        _ = t.wake();
     };
-}
-
-/// Interim: the pair on screen when the tab in front is one of its pages;
-/// otherwise kept aside (`kept_pair`) for the session and for `select`.
-pub fn applyPair(self: *Browser, pair: ?Pair) void {
-    self.split_right_id = null;
-    self.focused_pane = .left;
-    self.kept_pair = null;
-    const p = pair orelse return;
-    const front = self.active_id;
-    if (front != p.left and front != p.right) {
-        self.kept_pair = p;
-        return;
-    }
-    self.active_id = p.left;
-    self.split_right_id = p.right;
-    self.split_fraction = @floatCast(p.fraction);
-    if (front == p.right) self.focused_pane = .right;
 }
 
 /// A space's row as its session left it, made without touching the one
@@ -327,25 +298,28 @@ fn restoreRow(self: *Browser, saved: Shape, space: Uuid, groups: anytype) Parked
     }
     const said: ?*Tab = if (saved.active >= 0 and saved.active < by_saved.len) by_saved[@intCast(saved.active)] else null;
     self.reconcilePins(&row, space);
-    var pair: ?Pair = null;
+    // Pairs, whether Split View is on or not: off, they wait, as groups
+    // do. Each tab in one pair at most, and only a pair that still holds.
+    var splits: std.ArrayList(TabSplit) = .empty;
     for (saved.splits) |s| {
         if (s.tabs.len != 2) continue;
         const l = slot(by_saved, s.tabs[0]) orelse continue;
         const r = slot(by_saved, s.tabs[1]) orelse continue;
-        if (!holds(row.items, l, r)) continue;
-        pair = .{
-            .left = l.id,
-            .right = r.id,
-            .fraction = if (s.sizes.len == 2) std.math.clamp(s.sizes[0], 0.2, 0.8) else 0.5,
-            .focused = if (s.focused) |f| if (slot(by_saved, f)) |t| (if (std.mem.indexOfScalar(*Tab, row.items, t) != null) t.id else null) else null else null,
-        };
-        break;
+        const taken = for (splits.items) |p| {
+            if (p.contains(l.id) or p.contains(r.id)) break true;
+        } else false;
+        if (taken) continue;
+        const focused = if (s.focused) |f| if (slot(by_saved, f)) |t| t.id else null else null;
+        var p = TabSplit.make(.{ l.id, r.id }, s.sizes, focused);
+        p.axis = s.axis;
+        if (!split_ops.holds(p, row.items)) continue;
+        splits.append(self.gpa, p) catch @panic("OOM");
     }
     var active: u64 = 0;
     if (said) |t| if (std.mem.indexOfScalar(*Tab, row.items, t) != null) {
         active = t.id;
     };
-    return .{ .tabs = row, .active = active, .pair = pair };
+    return .{ .tabs = row, .active = active, .splits = splits };
 }
 
 fn slot(by_saved: []const ?*Tab, i: i64) ?*Tab {
@@ -353,22 +327,14 @@ fn slot(by_saved: []const ?*Tab, i: i64) ?*Tab {
     return by_saved[@intCast(i)];
 }
 
-/// `Browser.holds` for two: next to each other in order, neither pinned,
-/// of one kind and one group.
-fn holds(row: []const *Tab, l: *Tab, r: *Tab) bool {
-    const a = std.mem.indexOfScalar(*Tab, row, l) orelse return false;
-    const b = std.mem.indexOfScalar(*Tab, row, r) orelse return false;
-    if (b != a + 1 or l.pin != null or r.pin != null or l.shy != r.shy) return false;
-    if (l.group_id == null) return r.group_id == null;
-    return r.group_id != null and l.group_id.?.eql(r.group_id.?);
-}
-
-/// Another space's row put on screen in place of this one; `row` is moved in.
-pub fn showRow(self: *Browser, row: std.ArrayList(*Tab), active: u64, pair: ?Pair) void {
+/// Another space's row put on screen in place of this one; `row` and
+/// `splits` are moved in.
+pub fn showRow(self: *Browser, row: std.ArrayList(*Tab), active: u64, splits: std.ArrayList(TabSplit)) void {
     self.tabs.deinit(self.gpa);
     self.tabs = row;
+    self.splits.deinit(self.gpa);
+    self.splits = splits;
     self.active_id = if (active != 0) active else if (row.items.len > 0) row.items[0].id else 0;
-    applyPair(self, pair);
     self.arrangeGroupedTabs(null);
     // A question its page asked while the space was away (`activeID.didSet`).
     if (self.tabById(self.active_id)) |front| @import("../web/dialogs.zig").presentHeld(front);

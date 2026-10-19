@@ -5,6 +5,7 @@
 //! Not the menus' commands (P8's `app/commands.zig`): these are words, not keys.
 const std = @import("std");
 const Browser = @import("browser.zig").Browser;
+const sheet = @import("../chrome/sheet.zig");
 
 pub const Command = enum {
     settings,
@@ -48,15 +49,11 @@ pub const Command = enum {
     }
 
     /// Some only mean something once the feature behind them is on — and,
-    /// here, once the panel it opens has been ported (P8's sheets, P10's
-    /// passwords): until then the word is not offered rather than doing nothing.
+    /// here, once the panel it opens has been ported (P10's passwords):
+    /// until then the word is not offered rather than doing nothing.
     pub fn available(self: Command, b: *const Browser) bool {
         return switch (self) {
             .new_space => b.prefs.uses_spaces,
-            .settings => @hasField(Browser, "tuning"),
-            .bookmarks => @hasField(Browser, "bookmarking"),
-            .history => @hasField(Browser, "recalling"),
-            .downloads => @hasField(Browser, "hoarding"),
             .passwords => @hasField(Browser, "managing"),
             else => true,
         };
@@ -64,21 +61,13 @@ pub const Command = enum {
 
     pub fn run(self: Command, b: *Browser) void {
         switch (self) {
-            .settings => if (comptime @hasField(Browser, "tuning")) {
-                b.tuning = true;
-            },
+            .settings => sheet.show(b, .tuning),
             .new_tab => b.newTab(),
             .new_private_tab => b.newShyTab(),
             .new_space => b.making_space = true,
-            .bookmarks => if (comptime @hasField(Browser, "bookmarking")) {
-                b.bookmarking = true;
-            },
-            .history => if (comptime @hasField(Browser, "recalling")) {
-                b.recalling = true;
-            },
-            .downloads => if (comptime @hasField(Browser, "hoarding")) {
-                b.hoarding = true;
-            },
+            .bookmarks => sheet.show(b, .bookmarking),
+            .history => sheet.show(b, .recalling),
+            .downloads => sheet.show(b, .hoarding),
             .passwords => if (comptime @hasField(Browser, "managing")) {
                 b.managing = true;
             },

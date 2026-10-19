@@ -399,14 +399,14 @@ pub const Tab = struct {
 
     /// `reload(fromOrigin:)`: a pin put down wakes; a view that lost its
     /// document, or a file, is given its address back.
-    pub fn reload(self: *Tab) void {
+    pub fn reload(self: *Tab, from_origin: bool) void {
         if (self.wake()) return;
         self.setFailure(null);
         self.reader = false;
         self.build();
         const wv = self.web orelse return;
         if (self.address) |a| if (self.hollow() or std.mem.startsWith(u8, a, "file:")) return open(wv, a);
-        _ = objc.msg(?objc.Object, wv, "reload", .{});
+        if (from_origin) _ = objc.msg(?objc.Object, wv, "reloadFromOrigin", .{}) else _ = objc.msg(?objc.Object, wv, "reload", .{});
     }
 
     /// `stop()`.

@@ -6,12 +6,18 @@ const metrics = @import("../design/metrics.zig");
 
 /// What the run holds: pinned squares, loose tabs (with groups on, the
 /// ungrouped ones and each group's visible ones), group headings and
-/// their summed widths. A pair's extra width arrives with P7.
+/// their summed widths; how many of the loose places are pairs.
 pub const Row = struct {
     pins: usize = 0,
     loose: usize = 0,
     groups: usize = 0,
     headings: f32 = 0,
+    pairs: usize = 0,
+
+    /// What the pairs add over a loose tab's `base` (`pairWidthExtra`).
+    fn extra(r: Row, base: f32) f32 {
+        return @as(f32, @floatFromInt(r.pairs)) * (pairWidth(base) - base);
+    }
 
     /// Gaps between every item of the run.
     fn gaps(r: Row) f32 {
@@ -26,12 +32,12 @@ pub const Row = struct {
 
     /// `width(in:)`: every loose tab's width in `room`.
     pub fn each(r: Row, room_: f32) f32 {
-        return tabWidth(room_, r.loose, r.spent());
+        return tabWidth(room_, r.loose, r.spent() + r.extra(metrics.tab_min_width));
     }
 
     /// `content(in:)`: the whole run at `each_` a tab.
     pub fn content(r: Row, each_: f32) f32 {
-        return r.spent() + @as(f32, @floatFromInt(r.loose)) * each_;
+        return r.spent() + @as(f32, @floatFromInt(r.loose)) * each_ + r.extra(each_);
     }
 };
 
@@ -41,6 +47,12 @@ pub const Row = struct {
 pub fn tabWidth(room_: f32, loose: usize, spent: f32) f32 {
     if (loose == 0) return metrics.tab_width;
     return @max(metrics.tab_min_width, @min(metrics.tab_width, (room_ - spent) / @as(f32, @floatFromInt(loose))));
+}
+
+/// A pair's one place (`splitItemWidth`): half again a tab and a bit,
+/// between 136 and 210.
+pub fn pairWidth(base: f32) f32 {
+    return @min(210, @max(136, base * 1.55));
 }
 
 /// Wide enough to wear its title; narrower, its mark alone.
@@ -91,4 +103,13 @@ test "row spends squares, headings and gaps; room leaves the chrome" {
     try std.testing.expectApproxEqAbs(@as(f32, 1176), room(1440, 100, 0, 0, far(0, false)), 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, 0), far(0, true), 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, 0), room(100, 100, 28, 84, 140), 0.001);
+}
+
+test "a pair takes one place, 1.55 tabs between 136 and 210" {
+    try std.testing.expectApproxEqAbs(@as(f32, 136), pairWidth(36), 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 155), pairWidth(100), 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 210), pairWidth(186), 0.001);
+    const r: Row = .{ .loose = 3, .pairs = 1 };
+    // 3 places of 100, one of them a pair 55 wider, and 2 gaps.
+    try std.testing.expectApproxEqAbs(@as(f32, 300 + 55 + 4), r.content(100), 0.001);
 }

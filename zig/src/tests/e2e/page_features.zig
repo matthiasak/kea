@@ -48,7 +48,7 @@ fn findCounts(h: *Harness) !void {
 }
 
 fn toast(b: *app.Browser) []const u8 {
-    return b.toast_buf[0..b.toast_len];
+    return b.announcement orelse "";
 }
 
 fn reading(t: *app.Tab) bool {

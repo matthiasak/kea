@@ -1,7 +1,6 @@
 //! Browser.swift "tabs" (2330-3046, 3255-3480, 3740-3800): the row in the
 //! order it is shown, opening, picking, moving, ⌘1–9 and ⌃Tab, and moving
-//! a tab to another space. Splitting arrives with P7: until then the pair
-//! is the interim `split_right_id` beside `active_id`.
+//! a tab to another space. A pair's pages share one place (model/split.zig).
 const std = @import("std");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;
@@ -12,10 +11,13 @@ const address = @import("address.zig");
 
 // MARK: what the row shows
 
-/// `displayedTabs`: one place per tab. Until P7, a pair's pages keep a
-/// place each.
+/// `displayedTabs`: one place per tab, a pair's at its first page. Valid
+/// until the next call (it reuses `Browser.displayed`).
 pub fn displayedTabs(self: *Browser) []*Tab {
-    return self.tabs.items;
+    if (!self.prefs.split_view or self.splits.items.len == 0) return self.tabs.items;
+    self.displayed.clearRetainingCapacity();
+    for (self.tabs.items) |t| if (self.standsInRow(t)) self.displayed.append(self.gpa, t) catch @panic("OOM");
+    return self.displayed.items;
 }
 
 /// `shownTabs`: the tabs as they are on screen — with groups on, not the
@@ -32,15 +34,15 @@ pub fn shownTabs(self: *Browser, gpa: std.mem.Allocator) ![]*Tab {
     }
     const loose = try self.tabsIn(gpa, null);
     defer gpa.free(loose);
-    try out.appendSlice(gpa, loose);
+    for (loose) |t| if (self.standsInRow(t)) try out.append(gpa, t);
     return out.toOwnedSlice(gpa);
 }
 
 /// `visibleTabIDs`: the page on screen, and its pair's other page.
 pub fn visibleTabIDs(self: *Browser) [2]u64 {
     if (self.active_id == 0) return .{ 0, 0 };
-    const right = if (self.prefs.split_view) self.split_right_id orelse 0 else 0;
-    return .{ self.active_id, right };
+    const p = self.activeSplit() orelse return .{ self.active_id, 0 };
+    return p.tabs;
 }
 
 fn visible(self: *Browser, id: u64) bool {
@@ -51,34 +53,6 @@ fn visible(self: *Browser, id: u64) bool {
 pub fn indexOf(self: *Browser, tab: *const Tab) ?usize {
     for (self.tabs.items, 0..) |t, i| if (t == tab) return i;
     return null;
-}
-
-// MARK: the interim pair (P7 ports `TabSplit`)
-
-/// `split(for:) != nil`: one of the pair's pages, while Split View is on.
-pub fn inSplit(self: *Browser, tab: *const Tab) bool {
-    const rid = self.split_right_id orelse return false;
-    return self.prefs.split_view and (tab.id == rid or tab.id == self.active_id);
-}
-
-/// The pair's other page.
-pub fn partnerOf(self: *Browser, tab: *const Tab) ?*Tab {
-    const rid = self.split_right_id orelse return null;
-    if (tab.id == rid) return self.tabById(self.active_id);
-    if (tab.id == self.active_id) return self.tabById(rid);
-    return null;
-}
-
-pub fn detachSplit(self: *Browser, tab: *const Tab) void {
-    if (self.kept_pair) |p| if (tab.id == p.left or tab.id == p.right) {
-        self.kept_pair = null;
-        self.rememberSession();
-    };
-    const rid = self.split_right_id orelse return;
-    if (tab.id != rid and tab.id != self.active_id) return;
-    self.split_right_id = null;
-    self.focused_pane = .left;
-    self.rememberSession();
 }
 
 // MARK: making tabs
@@ -120,8 +94,12 @@ pub fn adopt(self: *Browser, t: *Tab) void {
 /// a question the new one asked in the background is asked now.
 pub fn setActive(self: *Browser, id: u64) void {
     if (id == self.active_id) return;
-    if (self.tabById(self.active_id)) |left| left.touch();
+    const old = self.active_id;
+    if (self.tabById(old)) |left| left.touch();
     self.active_id = id;
+    @import("split.zig").activeMoved(self, old, id);
+    // The switcher's order, most recently used first.
+    if (old != 0) @import("../chrome/tab_switcher.zig").leftTab(self, old);
     // What was found belongs to the page just left; the words go on.
     @import("../web/page_find.zig").invalidatePage(self, true);
     @import("../chrome/link_bubble.zig").dismiss(self);
@@ -250,43 +228,18 @@ pub fn visit(self: *Browser, url: []const u8, apart: bool) void {
 
 // MARK: picking
 
-/// `select(_:floatPrevious:)`. Its folded group opens; a page asleep wakes.
+/// `select(_:floatPrevious:)`. Within the pair on screen, a focus change;
+/// otherwise its folded group opens and a page asleep wakes.
 pub fn select(self: *Browser, tab: *Tab) void {
-    // A pair kept aside comes back in front when one of its pages is picked.
-    if (self.kept_pair) |p| if (self.prefs.split_view and (tab.id == p.left or tab.id == p.right)) {
-        self.setActive(tab.id);
-        tab.touch();
-        self.applyPair(p);
-        for ([_]u64{ p.left, p.right }) |id| if (self.tabById(id)) |t| {
-            _ = t.wake();
-        };
-        self.rememberSession();
-        return self.redraw();
+    if (self.splitFor(tab)) |s| if (self.activeSplit()) |front| if (s.id.eql(front.id) and self.active_id != tab.id) {
+        return self.focusPane(tab);
     };
-    // Interim pair: its pages take the focus, and another tab goes into
-    // the focused pane (P7 replaces this with `focusPane`).
-    if (self.split_right_id) |rid| {
-        if (tab.id == rid) {
-            self.focused_pane = .right;
-            return self.redraw();
-        }
-        if (tab.id == self.active_id) {
-            self.focused_pane = .left;
-            return self.redraw();
-        }
-        if (self.focused_pane == .right) {
-            if (self.tabById(rid)) |old| old.touch();
-            self.split_right_id = tab.id;
-            tab.touch();
-            _ = tab.wake();
-            self.rememberSession();
-            return self.redraw();
-        }
-    }
     if (self.prefs.uses_tab_groups) if (tab.group_id) |gid| if (self.groupById(gid)) |g| if (g.collapsed) {
         g.collapsed = false;
         self.writeSession(true);
     };
+    // A peek is over the tab it was opened from; another tab puts it away.
+    if (self.peek_tab != null and tab.id != self.active_id) self.closePeek();
     // Its words were a draft for the blank tab it was typed on, unless ⌘K's.
     if (tab.id != self.active_id and !self.summoning) if (self.tabById(self.active_id)) |here| if (here.isBlank()) {
         here.own(&here.draft, self.omni.typed.items);
@@ -300,7 +253,7 @@ pub fn select(self: *Browser, tab: *Tab) void {
     tab.touch();
     // A tab brought back from last time opens the moment you look at it.
     if (!tab.wake()) tab.revive();
-    if (self.split_right_id) |rid| if (self.tabById(rid)) |other| {
+    if (self.activeSplit()) |p| if (self.tabById(p.partner(tab.id).?)) |other| {
         if (!other.isBlank() and !other.wake()) other.revive();
     };
     self.rememberSession();
@@ -309,11 +262,11 @@ pub fn select(self: *Browser, tab: *Tab) void {
     self.redraw();
 }
 
-/// ⌘1–8: the tab in that place on screen.
+/// ⌘1–8: the tab in that place on screen — a pair's page that had the keys last.
 pub fn selectIndex(self: *Browser, index: usize) void {
     const shown = self.shownTabs(self.gpa) catch return;
     defer self.gpa.free(shown);
-    if (index < shown.len) self.select(shown[index]);
+    if (index < shown.len) self.select(self.entry(shown[index]));
 }
 
 /// ⌃Tab, ⌃⇧Tab: the next tab on screen, round to the first again. It walks
@@ -322,7 +275,7 @@ pub fn selectIndex(self: *Browser, index: usize) void {
 pub fn step(self: *Browser, direction: isize) void {
     const shown = self.shownTabs(self.gpa) catch return;
     defer self.gpa.free(shown);
-    const anchor = self.tabById(self.active_id) orelse return;
+    const anchor = self.tabById(if (self.activeSplit()) |p| p.left() else self.active_id) orelse return;
     const has_anchor = std.mem.indexOfScalar(*Tab, shown, anchor) != null;
     if (!(shown.len > 1 or (shown.len == 1 and !has_anchor))) return;
     const here: isize = @intCast(self.indexOf(anchor) orelse return);
@@ -330,7 +283,7 @@ pub fn step(self: *Browser, direction: isize) void {
     var k: isize = 1;
     while (k < n) : (k += 1) {
         const next = self.tabs.items[@intCast(@mod(here + direction * k, n))];
-        if (std.mem.indexOfScalar(*Tab, shown, next) != null) return self.select(next);
+        if (std.mem.indexOfScalar(*Tab, shown, next) != null) return self.select(self.entry(next));
     }
 }
 
@@ -340,22 +293,37 @@ pub fn step(self: *Browser, direction: isize) void {
 pub fn move(self: *Browser, tab: *Tab, index: usize) void {
     if (index >= self.tabs.items.len) return;
     const target = self.tabs.items[index];
-    const destination = std.mem.indexOfScalar(*Tab, self.displayedTabs(), target) orelse return;
+    // A pair stands in the row as its first page.
+    const rep = if (self.splitFor(target)) |p| self.tabById(p.left()) orelse target else target;
+    const destination = std.mem.indexOfScalar(*Tab, self.displayedTabs(), rep) orelse return;
     self.moveDisplayedTab(tab, destination);
 }
 
 /// `moveDisplayedTab`: among the row's places; a pin among pins, a tab
-/// among tabs.
+/// among tabs; a pair moves whole and steps over a pair whole.
 pub fn moveDisplayedTab(self: *Browser, tab: *Tab, index: usize) void {
     const shown = self.displayedTabs();
     if (index >= shown.len) return;
-    const from = std.mem.indexOfScalar(*Tab, shown, tab) orelse return;
+    const pair = self.splitFor(tab);
+    const representative = self.tabById(if (pair) |p| p.left() else tab.id) orelse return;
+    const from = std.mem.indexOfScalar(*Tab, shown, representative) orelse return;
     if (from == index) return;
     const anchor = shown[index];
-    if ((tab.pin == null) != (anchor.pin == null) or !joins(self, tab, anchor)) return;
-    _ = self.tabs.orderedRemove(self.indexOf(tab).?);
+    var moving_buf: [2]*Tab = undefined;
+    var moving: []*Tab = moving_buf[0..1];
+    moving_buf[0] = tab;
+    if (pair) |p| {
+        moving_buf = .{ self.tabById(p.left()) orelse return, self.tabById(p.right()) orelse return };
+        moving = moving_buf[0..2];
+        // In the row's order, whichever page was carried.
+        if (self.indexOf(moving_buf[0]).? > self.indexOf(moving_buf[1]).?) std.mem.swap(*Tab, &moving_buf[0], &moving_buf[1]);
+    }
+    for (moving) |m| if ((m.pin == null) != (anchor.pin == null)) return;
+    if (!joins(self, tab, anchor)) return;
+    for (moving) |m| _ = self.tabs.orderedRemove(self.indexOf(m).?);
     const target = self.indexOf(anchor).?;
-    self.tabs.insert(self.gpa, if (from < index) target + 1 else target, tab) catch @panic("OOM");
+    const size: usize = if (self.splitFor(anchor) == null) 1 else 2;
+    self.tabs.insertSlice(self.gpa, if (from < index) target + size else target, moving) catch @panic("OOM");
     self.arrangeGroupedTabs(null);
     self.rememberSession();
     self.redraw();
@@ -371,8 +339,8 @@ fn joins(self: *Browser, tab: *Tab, anchor: *const Tab) bool {
     return true;
 }
 
-/// Let go in the strip: before `target`, taking its group, or with none at
-/// the end of its kind.
+/// Let go in the strip: before `target` (a pair's, before its first page),
+/// taking its group, or with none at the end of its kind; out of its pair.
 pub fn dropTabIntoStrip(self: *Browser, tab: *Tab, before: ?*Tab) void {
     const source = self.indexOf(tab) orelse return;
     if (before) |target| {
@@ -380,11 +348,12 @@ pub fn dropTabIntoStrip(self: *Browser, tab: *Tab, before: ?*Tab) void {
         const target_index = self.indexOf(target) orelse return;
         if (self.partnerOf(tab) == target) return;
         if ((tab.pin == null) != (target.pin == null) or !joins(self, tab, target)) return;
+        const start = if (self.splitFor(target)) |p| (if (self.tabById(p.left())) |l| self.indexOf(l).? else target_index) else target_index;
         self.detachSplit(tab);
         const previous = tab.group_id;
         tab.group_id = target.group_id;
         _ = self.tabs.orderedRemove(source);
-        self.tabs.insert(self.gpa, if (source < target_index) target_index - 1 else target_index, tab) catch @panic("OOM");
+        self.tabs.insert(self.gpa, if (source < start) start - 1 else start, tab) catch @panic("OOM");
         self.removeEmptyGroup(previous);
     } else {
         self.detachSplit(tab);
@@ -403,20 +372,24 @@ pub fn dropTabIntoStrip(self: *Browser, tab: *Tab, before: ?*Tab) void {
     self.redraw();
 }
 
-/// Where a new tab goes: beside the tab you are on, but never among the pins.
+/// Where a new tab goes: beside the tab you are on (past its pair), but
+/// never among the pins.
 pub fn placeForNew(self: *Browser) usize {
     const here = self.indexOf(self.tabById(self.active_id) orelse return self.tabs.items.len).?;
     var after = here;
-    if (self.split_right_id) |rid| if (self.prefs.split_view) if (self.tabById(rid)) |r| {
-        after = @max(after, self.indexOf(r).?);
+    if (self.activeSplit()) |p| if (self.tabById(p.right())) |r| {
+        after = self.indexOf(r).?;
     };
     return @max(after + 1, self.pinnedCount());
 }
 
-/// A tab made outside the row — a peek being kept — put in it at `index`.
+/// A tab made outside the row — a peek being kept — put in it at `index`,
+/// never between a pair's pages (`safeInsertionIndex`).
 pub fn insert(self: *Browser, tab: *Tab, index: usize) void {
     self.prepare(tab);
-    self.tabs.insert(self.gpa, @min(index, self.tabs.items.len), tab) catch @panic("OOM");
+    var at = @min(index, self.tabs.items.len);
+    if (at < self.tabs.items.len and !self.standsInRow(self.tabs.items[at])) at += 1;
+    self.tabs.insert(self.gpa, at, tab) catch @panic("OOM");
     self.arrangeGroupedTabs(null);
     self.rememberSession();
 }
@@ -519,4 +492,31 @@ pub fn copyMarkdownLink(self: *Browser) void {
     out.print(self.gpa, "]({s})", .{t.url()}) catch return;
     nanoui.clipboard.writeText(out.items);
     self.announce("Link copied");
+}
+
+/// ⌘⇧V, when nothing is being typed. What is in the clipboard, if it is a
+/// place — or a search — in the tab you're on.
+pub fn pasteAndGo(self: *Browser) void {
+    const text = (nanoui.clipboard.readText(self.gpa) catch null) orelse {
+        self.refusals += 1;
+        return self.redraw();
+    };
+    defer self.gpa.free(text);
+    const url = self.destination(self.gpa, std.mem.trim(u8, text, " \t\r\n")) orelse {
+        self.refusals += 1;
+        return self.redraw();
+    };
+    defer self.gpa.free(url);
+    const t = self.activeTab() orelse (if (self.tabs.items.len > 0) self.tabs.items[0] else return);
+    t.go(url);
+    self.setEditing(false);
+    self.omni.typed.clearRetainingCapacity();
+    self.redraw();
+}
+
+/// ⌘⇧M. Whatever is making noise in this tab stops making noise.
+pub fn pauseMedia(self: *Browser) void {
+    const t = self.activeTab() orelse return;
+    if (t.web) |wv| objc.msg(void, wv, "pauseAllMediaPlaybackWithCompletionHandler:", .{@as(?*anyopaque, null)});
+    self.announce("Paused");
 }

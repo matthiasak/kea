@@ -167,6 +167,12 @@ fn front(kea: *Kea, except: ?*Browser) ?*Browser {
     return null;
 }
 
+/// What the menus and keys of no browser's window act on: the window in
+/// front's browser (`Front.shared`, `Browsers.acting`).
+pub fn acting(kea: *Kea) ?*Browser {
+    return front(kea, null);
+}
+
 /// At launch, once the first window is up: the other windows there were.
 pub fn restore(kea: *Kea) void {
     const records = windows_file.read(&kea.store);
@@ -318,7 +324,10 @@ pub fn flush(kea: *Kea) void {
 pub fn appActive(kea: *Kea, active: bool) void {
     for (kea.browsers.items) |b| {
         if (b.lights) |l| l.appActive(active);
-        if (!active) @import("../chrome/site_card.zig").resign(b);
+        if (!active) {
+            @import("../chrome/site_card.zig").resign(b);
+            @import("../chrome/tab_switcher.zig").cancel(b);
+        }
     }
     // A video comes along when another app is in front (`appLeft`/`appBack`).
     @import("../web/float.zig").appActive(kea, active);
@@ -347,7 +356,8 @@ pub fn closeAll(kea: *Kea) void {
 
 fn onKey(ctx: *anyopaque, w: *nanoui.Window) void {
     const b: *Browser = @ptrCast(@alignCast(ctx));
-    if (!w.isFocused()) return;
+    // The window let go of the keys: its tab switcher goes with them.
+    if (!w.isFocused()) return @import("../chrome/tab_switcher.zig").cancel(b);
     // `Browsers.becameKey`.
     b.shut = false;
     b.kea.windows.front = b;
@@ -407,7 +417,8 @@ pub fn browserFor(kea: *Kea, window: ?objc.Object) ?*Browser {
 
 fn framed(self_obj: objc.Object, _: objc.SEL, note: objc.Object) callconv(.c) void {
     const kea = objc.getZig(Kea, self_obj) orelse return;
-    if (browserFor(kea, objc.msg(?objc.Object, note, "object", .{})) != null) saveSoon(kea);
+    const window = objc.msg(?objc.Object, note, "object", .{});
+    if (browserFor(kea, window) != null) saveSoon(kea) else @import("../chrome/popped.zig").framed(kea, window);
 }
 
 fn menuEnded(self_obj: objc.Object, _: objc.SEL, _: objc.Object) callconv(.c) void {

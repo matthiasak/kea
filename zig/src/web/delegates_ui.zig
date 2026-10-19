@@ -2,9 +2,9 @@
 //! 4363-4447, 4657-4710, 4823-4839; Dialogs.swift 128-379): a link that asks
 //! for a new window gets a tab, alert/confirm/prompt and file choosing go
 //! through `dialogs.zig`, sign-ins and bad certificates are asked about,
-//! another app's address is handed off, the camera and microphone are
-//! answered from what was remembered, and a page whose process went away
-//! comes back.
+//! another app's address is handed off, the camera, microphone and where
+//! you are asked on the window's bar (or answered from what was
+//! remembered), and a page whose process went away comes back.
 const std = @import("std");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;
@@ -27,6 +27,7 @@ pub const methods = [_]objc.Method{
     .{ .name = "webView:didReceiveAuthenticationChallenge:completionHandler:", .imp = &challenged, .types = "v@:@@@?" },
     .{ .name = "webView:requestMediaCapturePermissionForOrigin:initiatedByFrame:type:decisionHandler:", .imp = &askedForCapture, .types = "v@:@@@q@?" },
     .{ .name = "_webView:requestNotificationPermissionForSecurityOrigin:decisionHandler:", .imp = &@import("notifications.zig").asked, .types = "v@:@@@?" },
+    .{ .name = "_webView:requestGeolocationPermissionForOrigin:initiatedByFrame:decisionHandler:", .imp = &askedForLocation, .types = "v@:@@@@?" },
     .{ .name = "webViewDidClose:", .imp = &didClose, .types = "v@:@" },
     .{ .name = "webViewWebContentProcessDidTerminate:", .imp = &didTerminate, .types = "v@:@" },
 };
@@ -77,7 +78,8 @@ fn createWebView(self: objc.Object, _: objc.SEL, wv: objc.Object, configuration:
 /// `paneAsking`: a page of the pair on screen asks over its own pane.
 fn inPane(t: *Tab) bool {
     const b = t.browser orelse return false;
-    return b.prefs.split_view and b.inSplit(t);
+    const p = b.activeSplit() orelse return false;
+    return p.contains(t.id);
 }
 
 fn question(self: objc.Object, kind: dialogs.Kind, frame: objc.Object, message: ?objc.Object, default_text: ?objc.Object, completion: *const anyopaque) void {
@@ -198,37 +200,91 @@ pub fn handOff(t: *Tab, wv: objc.Object, url: objc.Object, scheme: []const u8, a
     dialogs.ask(t, a);
 }
 
-// MARK: the camera and microphone
+// MARK: the camera, the microphone, where you are
 
-/// Answered from what was remembered for the origin (`capture.<site>|<type>`),
-/// never for a private tab; otherwise WebKit asks itself until the
-/// capture bar arrives (P8.10).
+/// `askedForCapture`: answered from what was remembered for the origin that
+/// asked (`capture.<site>|<type>`), never for a private tab; otherwise asked
+/// on the bar over its own page, as a page's other questions are (`ask`).
+/// An extension's own page is named as the extension, remembered for it.
 fn askedForCapture(self: objc.Object, _: objc.SEL, wv: objc.Object, origin: objc.Object, frame: objc.Object, kind: objc.NSInteger, decide: *const anyopaque) callconv(.c) void {
-    const prompt: objc.NSInteger = 0;
-    const t = nav.tabOf(self) orelse return dialogs.call(decide, .{prompt});
+    const deny: objc.NSInteger = 2;
+    const t = nav.tabOf(self) orelse return dialogs.call(decide, .{deny});
     const pool = objc.Pool.push();
     defer pool.pop();
     const asker = objc.msg(objc.Object, frame, "securityOrigin", .{});
     const asker_scheme = objc.fromNSString(objc.msg(?objc.Object, asker, "protocol", .{}));
     var site_buf: [320]u8 = undefined;
-    const site = if (std.ascii.eqlIgnoreCase(asker_scheme, "chrome-extension") or std.ascii.eqlIgnoreCase(asker_scheme, "webkit-extension"))
-        std.fmt.bufPrint(&site_buf, "{s}://{s}", .{ asker_scheme, originHost(frame) }) catch return dialogs.call(decide, .{prompt})
-    else blk: {
-        const host = objc.fromNSString(objc.msg(?objc.Object, origin, "host", .{}));
-        if (host.len == 0) break :blk if (Parts.parse(t.url())) |p| p.hostName() orelse "This page" else "This page";
+    const origin_host = objc.fromNSString(objc.msg(?objc.Object, origin, "host", .{}));
+    const extension = std.ascii.eqlIgnoreCase(asker_scheme, "chrome-extension") or std.ascii.eqlIgnoreCase(asker_scheme, "webkit-extension");
+    const page_host = if (Parts.parse(t.url())) |p| p.hostName() orelse "This page" else "This page";
+    // ponytail: an extension is "An extension" until P13 names installed ones.
+    const host = if (extension) "An extension" else if (origin_host.len == 0) page_host else origin_host;
+    const site = if (extension)
+        std.fmt.bufPrint(&site_buf, "{s}://{s}", .{ asker_scheme, originHost(frame) }) catch return dialogs.call(decide, .{deny})
+    else if (origin_host.len == 0) page_host else blk: {
         const scheme = objc.fromNSString(objc.msg(?objc.Object, origin, "protocol", .{}));
         const port = objc.msg(objc.NSInteger, origin, "port", .{});
         break :blk if (port == 0)
-            std.fmt.bufPrint(&site_buf, "{s}://{s}", .{ scheme, host }) catch return dialogs.call(decide, .{prompt})
+            std.fmt.bufPrint(&site_buf, "{s}://{s}", .{ scheme, origin_host }) catch return dialogs.call(decide, .{deny})
         else
-            std.fmt.bufPrint(&site_buf, "{s}://{s}:{d}", .{ scheme, host, port }) catch return dialogs.call(decide, .{prompt});
+            std.fmt.bufPrint(&site_buf, "{s}://{s}:{d}", .{ scheme, origin_host, port }) catch return dialogs.call(decide, .{deny});
     };
     const store = objc.msg(objc.Object, objc.msg(objc.Object, wv, "configuration", .{}), "websiteDataStore", .{});
     const shy = t.shy or !objc.msg(objc.BOOL, store, "isPersistent", .{});
     var key_buf: [360]u8 = undefined;
-    const key = std.fmt.bufPrint(&key_buf, "capture.{s}|{d}", .{ site, kind }) catch return dialogs.call(decide, .{prompt});
+    const about = std.fmt.bufPrint(&key_buf, "{s}|{d}", .{ site, kind }) catch return dialogs.call(decide, .{deny});
+    var full_buf: [370]u8 = undefined;
+    const key = std.fmt.bufPrint(&full_buf, "capture.{s}", .{about}) catch return dialogs.call(decide, .{deny});
     if (!shy) if (t.kea.store.bool(key)) |remembered| return dialogs.call(decide, .{@as(objc.NSInteger, if (remembered) 1 else 2)});
-    dialogs.call(decide, .{prompt});
+    // WKMediaCaptureType: camera 0, microphone 1, both 2.
+    const wants = switch (kind) {
+        0 => "camera",
+        1 => "microphone",
+        else => "camera and microphone",
+    };
+    const a = dialogs.make(t, .capture, host, wants, decide) orelse return dialogs.call(decide, .{deny});
+    if (!shy) dialogs.keepAs(a, about);
+    dialogs.ask(t, a);
+}
+
+/// What a test run tells a page asking where you are: recorded, and
+/// refused, never asked of the Mac.
+fn giveLocation(t: *Tab, decide: *const anyopaque, grant: bool) void {
+    if (t.kea.opts.root != null) {
+        dialogs.location_answered = if (grant) "granted" else "denied";
+        return dialogs.call(decide, .{@as(objc.NSInteger, 2)});
+    }
+    dialogs.call(decide, .{@as(objc.NSInteger, if (grant) 1 else 2)});
+}
+
+/// `askedForLocation`: only the page on screen, and only for itself — the
+/// tab in front, the page's own origin, asked by a frame of that origin.
+/// Remembered per origin as the camera is, never for a private tab.
+fn askedForLocation(self: objc.Object, _: objc.SEL, wv: objc.Object, origin: objc.Object, frame: objc.Object, decide: *const anyopaque) callconv(.c) void {
+    const t = nav.tabOf(self) orelse return dialogs.call(decide, .{@as(objc.NSInteger, 2)});
+    const b = t.browser orelse return giveLocation(t, decide, false);
+    const pool = objc.Pool.push();
+    defer pool.pop();
+    const notifications = @import("notifications.zig");
+    const host = objc.fromNSString(objc.msg(?objc.Object, origin, "host", .{}));
+    var sb: [400]u8 = undefined;
+    const site = notifications.origin(&sb, objc.fromNSString(objc.msg(?objc.Object, origin, "protocol", .{})), host, objc.msg(objc.NSInteger, origin, "port", .{}));
+    const asker = objc.msg(objc.Object, frame, "securityOrigin", .{});
+    var ab: [400]u8 = undefined;
+    const asking = notifications.origin(&ab, objc.fromNSString(objc.msg(?objc.Object, asker, "protocol", .{})), objc.fromNSString(objc.msg(?objc.Object, asker, "host", .{})), objc.msg(objc.NSInteger, asker, "port", .{}));
+    var pb: [400]u8 = undefined;
+    const page = notifications.originOf(&pb, tab_mod.currentUrl(wv) orelse "");
+    if (t.id != b.active_id or host.len == 0 or !std.mem.eql(u8, page, site) or !std.mem.eql(u8, asking, site)) return giveLocation(t, decide, false);
+    var key_buf: [420]u8 = undefined;
+    const about = std.fmt.bufPrint(&key_buf, "{s}|location", .{site}) catch return giveLocation(t, decide, false);
+    var full_buf: [430]u8 = undefined;
+    const key = std.fmt.bufPrint(&full_buf, "capture.{s}", .{about}) catch return giveLocation(t, decide, false);
+    if (!t.shy) if (t.kea.store.bool(key)) |remembered| return giveLocation(t, decide, remembered);
+    // One question at a time, as for the camera.
+    if (b.asking != null) return giveLocation(t, decide, false);
+    const a = dialogs.make(t, .location, host, "location", decide) orelse return giveLocation(t, decide, false);
+    if (!t.shy) dialogs.keepAs(a, about);
+    dialogs.bar(t, a);
 }
 
 // MARK: a page closing itself, a page whose process went away

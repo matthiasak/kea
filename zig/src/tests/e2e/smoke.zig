@@ -73,12 +73,12 @@ fn splitHalves(h: *Harness) !void {
     h.frame();
     const single = b.active_page_frame.w;
     b.prefs.set("split_view", true); // off unless asked for, as in Swift
-    b.pairSplit(right.id);
+    b.pair(right, left, false);
     h.frame();
     const split = b.active_page_frame.w;
     try h.expect(single > 400 and split < single * 0.6, "hole {d:.1} → {d:.1}", .{ single, split });
     const sh = b.stage_host.?;
-    try h.expect(sh.slots[0].webview == left.web and sh.slots[1].webview == right.web, "slots don't hold both panes", .{});
+    try h.expect(sh.slots.items[0].webview == left.web and sh.slots.items[1].webview == right.web, "slots don't hold both panes", .{});
 }
 
 fn marksPanel(h: *Harness) !void {
@@ -94,7 +94,7 @@ fn marksPanel(h: *Harness) !void {
     const after = b.active_page_frame.w;
     // The panel's edge handle lies over the panel (BookmarksSidebar), so the page gives up its width.
     const want = b.prefs.marks_width;
-    try h.expect(b.marks_open, "⌃⌘B didn't open the panel", .{});
+    try h.expect(b.prefs.bookmarks_sidebar, "⌃⌘B didn't open the panel", .{});
     try h.expect(@abs((before - after) - want) <= 2, "hole {d:.1} → {d:.1}, want a {d:.1} shrink", .{ before, after, want });
 }
 
@@ -160,14 +160,14 @@ fn closeSplitTab(h: *Harness) !void {
     const right = try openLoaded(h, b, "kea-test://site/page?title=Right");
     b.select(left);
     b.prefs.set("split_view", true);
-    b.pairSplit(right.id);
+    b.pair(right, left, false);
     h.frame();
     const freed = left.web.?;
     const right_web = right.web.?;
     b.close(left);
     h.pump(0.2); // a frame places webviews: any stale slot would message the freed one
     const sh = b.stage_host.?;
-    for (sh.slots) |slot| try h.expect(slot.webview != freed, "a slot still holds the closed tab's webview", .{});
+    for (sh.slots.items) |slot| try h.expect(slot.webview != freed, "a slot still holds the closed tab's webview", .{});
     try h.expect(sh.peek_slot.webview != freed, "the peek slot holds the closed tab's webview", .{});
-    try h.expect(sh.slots[0].webview == right_web, "the remaining tab isn't in the first slot", .{});
+    try h.expect(sh.slots.items[0].webview == right_web, "the remaining tab isn't in the first slot", .{});
 }

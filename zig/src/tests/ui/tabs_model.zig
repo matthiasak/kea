@@ -279,7 +279,8 @@ test "a split not in front survives restore and the next write" {
     defer k.destroy();
     k.prefs.set("split_view", true);
     const b = try k.newBrowser();
-    try t.expect(b.split_right_id == null);
+    try t.expect(b.activeSplit() == null);
+    try t.expectEqual(@as(usize, 1), b.splits.items.len);
     b.flushSession();
     {
         const saved = app.session.read(&k.store, Uuid.first);
@@ -287,10 +288,11 @@ test "a split not in front survives restore and the next write" {
         try t.expectEqual(@as(usize, 1), saved.value.splits.len);
         try t.expectEqualSlices(i64, &.{ 1, 2 }, saved.value.splits[0].tabs);
     }
-    // Picking one of its pages brings the pair in front.
+    // Picking one of its pages brings the pair in front, that page with the keys.
     b.select(b.tabs.items[2]);
-    try t.expectEqual(b.tabs.items[1].id, b.active_id);
-    try t.expectEqual(@as(?u64, b.tabs.items[2].id), b.split_right_id);
+    try t.expectEqual(b.tabs.items[2].id, b.active_id);
+    const pair = b.activeSplit().?;
+    try t.expectEqual([2]u64{ b.tabs.items[1].id, b.tabs.items[2].id }, pair.tabs);
 }
 
 test "a background tab opened to wait builds nothing while tabs.lazy is on" {

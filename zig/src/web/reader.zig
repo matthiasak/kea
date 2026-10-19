@@ -22,7 +22,7 @@ pub fn toggle(t: *Tab) void {
     if (t.isBlank()) return nothing(t);
     if (t.reader) {
         t.reader = false;
-        t.reload();
+        t.reload(false);
         return;
     }
     t.evaluate(script, .page, answered, 0);

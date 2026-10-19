@@ -285,6 +285,7 @@ pub fn takeOffer(self: *Browser, offer: Offer) void {
     if (offer.command) |cmd| {
         cmd.run(self);
     } else if (if (offer.tab) |id| self.tabById(id) else null) |t| {
+        if (fillsPane(self, t, false)) |blank| return self.fill(blank, t);
         self.select(t);
     } else if (self.activeTab() orelse if (self.tabs.items.len > 0) self.tabs.items[0] else null) |t| {
         t.go(offer.url);
@@ -380,6 +381,8 @@ pub fn submit(self: *Browser, aside: bool, front: bool) void {
     // A page already open is switched to, not opened again.
     if (picked) |pk| if (if (pk.tab) |id| self.tabById(id) else null) |t| {
         self.summoning = false;
+        // From the empty page of a pair: that tab comes into the pair.
+        if (fillsPane(self, t, aside)) |blank| return self.fill(blank, t);
         self.select(t);
         self.setEditing(false);
         self.setTyped("");
@@ -420,6 +423,15 @@ pub fn submit(self: *Browser, aside: bool, front: bool) void {
     }
     self.setEditing(false);
     self.setTyped("");
+}
+
+/// The empty page of a pair in front that `tab` would come into.
+fn fillsPane(self: *Browser, tab: *Tab, aside: bool) ?*Tab {
+    const blank = self.activeTab() orelse return null;
+    if (aside or !blank.isBlank() or tab.shy != blank.shy) return null;
+    _ = self.splitFor(blank) orelse return null;
+    if (self.splitFor(tab)) |s| if (s.contains(blank.id)) return null;
+    return blank;
 }
 
 /// What a new tab, or the empty one ⌘T came back to, starts the field with.

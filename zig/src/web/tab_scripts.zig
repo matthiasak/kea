@@ -117,6 +117,19 @@ pub fn autoScrollChanged(b: *Browser) void {
     };
 }
 
+/// `prefs.$showsLinks`: the bubble put away when off, and every tab's next
+/// page and the page each shows now told (`HoveredLink.off` quiets one up).
+pub fn showsLinksChanged(b: *Browser) void {
+    const on = b.kea.prefs.shows_links;
+    if (!on) @import("../chrome/link_bubble.zig").dismiss(b);
+    const parked = b.parkedTabs(b.gpa) catch return;
+    defer b.gpa.free(parked);
+    for ([_][]const *Tab{ b.tabs.items, parked }) |list| for (list) |t| {
+        curtain_js.armFor(t, t.url());
+        t.evaluate(if (on) link_script else "if (window.__keaLinks) window.__keaLinks.on = false;", .kea, null, 0);
+    };
+}
+
 /// `Veiling.style`: a stylesheet put in before the document has a body.
 pub fn veilStyle(gpa: std.mem.Allocator, css: []const u8) ![]u8 {
     var out: std.ArrayList(u8) = .empty;

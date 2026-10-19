@@ -91,8 +91,8 @@ test "cmd-K lists open tabs MRU and cmd release commits" {
     b.select(two);
     b.select(three);
     f.tester.settle(1);
-    f.tester.setMods(.{ .cmd = true });
-    try t.expect(f.tester.shortcut(.{ .key = 'k', .cmd = true }));
+    f.mods(.{ .cmd = true });
+    try t.expect(f.press("k", 40, .{ .cmd = true }));
     try t.expect(b.summoning and b.editing);
     // The most recent first, never the one in front nor a blank one.
     try t.expectEqual(@as(usize, 2), b.omni.offers.len);
@@ -100,9 +100,9 @@ test "cmd-K lists open tabs MRU and cmd release commits" {
     try t.expectEqual(one.id, b.omni.offers[1].tab.?);
     try t.expectEqual(@as(?usize, 0), b.omni.picked);
     // ⌘K again with ⌘ held walks on; letting ⌘ go takes it.
-    try t.expect(f.tester.shortcut(.{ .key = 'k', .cmd = true }));
+    try t.expect(f.press("k", 40, .{ .cmd = true }));
     try t.expectEqual(@as(?usize, 1), b.omni.picked);
-    f.tester.setMods(.{});
+    f.mods(.{});
     try t.expectEqual(one.id, b.active_id);
     try t.expect(!b.editing and !b.summoning);
 }
@@ -118,7 +118,7 @@ test "re space does not chip without exact name" {
     try t.expect(b.site_chip == null);
     try t.expectEqualStrings("Reddit", b.omni.site_offer.?.name);
     // Tab is what puts the site in the field.
-    try t.expect(f.tester.shortcut(.{ .key = '\t' }));
+    try t.expect(f.press("\t", 48, .{}));
     f.tester.settle(1);
     try t.expectEqualStrings("Reddit", b.site_chip.?.name);
     try t.expectEqual(@as(usize, 0), b.omni.typed.items.len);
@@ -134,7 +134,7 @@ test "esc closes pick then field" {
     _ = b.open("https://example.com/", .{ .foreground = true });
     f.tester.settle(1);
     try t.expect(!b.fieldShowing());
-    try t.expect(f.tester.shortcut(.{ .key = 'l', .cmd = true }));
+    try t.expect(f.press("l", 37, .{ .cmd = true }));
     f.tester.settle(1);
     try t.expect(b.editing);
     // ⌘L's address comes up selected whole.
@@ -144,10 +144,10 @@ test "esc closes pick then field" {
     f.tester.typeText("gi");
     _ = f.tester.shortcut(.{ .key = ui.Shortcut.down });
     try t.expect(b.omni.picked != null);
-    try t.expect(f.tester.shortcut(.{ .key = ui.Shortcut.escape }));
+    try t.expect(f.press("\x1b", 53, .{}));
     try t.expect(b.omni.picked == null);
     try t.expect(b.editing);
-    try t.expect(f.tester.shortcut(.{ .key = ui.Shortcut.escape }));
+    try t.expect(f.press("\x1b", 53, .{}));
     try t.expect(!b.editing);
     f.tester.settle(1);
     try t.expect(!f.tester.hasText("Enter a web address"));

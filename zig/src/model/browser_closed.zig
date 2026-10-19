@@ -46,8 +46,9 @@ pub const LastClear = struct { batch: Uuid, blank: ?u64 };
 /// last tab leaves a blank one; closing that blank one closes the window.
 pub fn close(self: *Browser, tab: *Tab) void {
     const index = self.indexOf(tab) orelse return;
+    const pair = self.splitFor(tab);
     const partner = self.partnerOf(tab);
-    const on_left = partner != null and tab.id == self.active_id;
+    const on_left = if (pair) |p| p.left() == tab.id else false;
     self.detachSplit(tab);
 
     if (tab.pin != null) {
@@ -97,8 +98,9 @@ pub fn close(self: *Browser, tab: *Tab) void {
     self.redraw();
 }
 
-/// ⌘W: what is in front. Until the panels arrive (P8), the tab.
+/// ⌘W: what is in front — the sheet up, else the tab (`closeFront`).
 pub fn closeFront(self: *Browser) void {
+    if (@import("../chrome/sheet.zig").closePanel(self)) return;
     if (self.activeTab()) |t| self.close(t);
 }
 
@@ -269,19 +271,13 @@ pub fn reopenGhost(self: *Browser, at: usize) void {
     const t = self.make(ghost.url, false);
     const group = regroup(self, ghost);
     t.group_id = group.id;
-    self.tabs.insert(self.gpa, @min(ghost.index, self.tabs.items.len), t) catch @panic("OOM");
-    self.arrangeGroupedTabs(null);
+    self.insert(t, ghost.index);
     self.setActive(t.id);
     self.setEditing(false);
     self.setTyped("");
-    if (ghost.partner) |pid| if (self.tabById(pid)) |partner| if (self.prefs.split_view and self.split_right_id == null and partner.shy == t.shy) {
-        if (ghost.on_left) {
-            self.pairSplit(partner.id);
-        } else {
-            self.setActive(partner.id);
-            self.pairSplit(t.id);
-            self.focused_pane = .right;
-        }
+    // Back into its pair, if the page it was beside is still alone.
+    if (ghost.partner) |pid| if (self.tabById(pid)) |partner| if (self.splitFor(partner) == null and self.canSplit(t, partner)) {
+        self.pair(t, partner, ghost.on_left);
     };
     self.rememberSession();
     self.redraw();
@@ -304,6 +300,9 @@ fn reopenBatch(self: *Browser, batch: Uuid) void {
     }
     var front: ?*Tab = null;
     var regrouped = false;
+    // The tab each ghost was, and the one it is now.
+    var back: std.AutoHashMapUnmanaged(u64, *Tab) = .empty;
+    defer back.deinit(self.gpa);
     var k = members.items.len;
     while (k > 0) {
         k -= 1;
@@ -312,9 +311,16 @@ fn reopenBatch(self: *Browser, batch: Uuid) void {
         const group = regroup(self, ghost);
         t.group_id = group.id;
         regrouped = regrouped or group.back;
-        self.tabs.insert(self.gpa, @min(ghost.index, self.tabs.items.len), t) catch @panic("OOM");
+        self.insert(t, ghost.index);
+        if (ghost.was) |was| back.put(self.gpa, was, t) catch {};
         if (ghost.front) front = t;
-        // ponytail: a pair cleared together comes back as two tabs until P7's TabSplit.
+        // A pair cleared together: its other half came back just before,
+        // beside it already. Made a pair again as it stands, not through
+        // pair(), which would take the focus and wake both pages.
+        if (ghost.partner) |id| if (back.get(id)) |partner| if (self.splitFor(partner) == null and self.canSplit(t, partner)) {
+            const p = @import("split.zig").TabSplit.make(if (ghost.on_left) .{ t.id, partner.id } else .{ partner.id, t.id }, null, t.id);
+            if (@import("split.zig").holds(p, self.tabs.items)) self.splits.append(self.gpa, p) catch {};
+        };
     }
     if (regrouped) self.arrangeGroupedTabs(null);
     if (front) |t| self.select(t);

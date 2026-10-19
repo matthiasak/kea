@@ -39,9 +39,9 @@ test "ctrl-cmd-B bookmarks panel shrinks the hole by the panel" {
     try f.init(gpa, .{ .sidebar = false });
     defer f.deinit();
     const before = f.holes()[0].w;
-    _ = f.tester.shortcut(.{ .key = 'b', .cmd = true, .ctrl = true });
+    _ = f.press("b", 11, .{ .cmd = true, .ctrl = true });
     f.tester.frame();
-    try std.testing.expect(f.browser.marks_open);
+    try std.testing.expect(f.kea.prefs.bookmarks_sidebar);
     const after = f.holes()[0].w;
     try std.testing.expectApproxEqAbs(f.kea.prefs.marks_width, before - after, 0.5);
 }

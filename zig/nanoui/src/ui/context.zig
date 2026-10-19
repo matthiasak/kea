@@ -97,7 +97,7 @@ pub const Interaction = struct {
 
 const Hit = struct { id: u64, index: u32, rect: types.Rect, scroll: bool };
 
-pub const Cursor = enum { arrow, hand, text, resize_left_right, resize_up_down, open_hand, closed_hand, not_allowed };
+pub const Cursor = enum { arrow, hand, text, resize_left_right, resize_up_down, open_hand, closed_hand, not_allowed, crosshair };
 pub const A11yRole = enum { button, tab, text_field, splitter, slider, checkbox, switch_toggle, radio_button, group, static_text, list, row, image, menu_button, popover };
 pub const A11yItem = struct {
     id: u64,

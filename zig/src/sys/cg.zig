@@ -58,6 +58,10 @@ pub extern "c" fn CGImageGetWidth(image: Image) usize;
 pub extern "c" fn CGImageGetHeight(image: Image) usize;
 pub extern "c" fn CGContextDrawImage(ctx: Context, rect: objc.CGRect, image: Image) void;
 pub extern "c" fn CGContextSetInterpolationQuality(ctx: Context, quality: i32) void;
+pub extern "c" fn CGImageSourceCreateWithURL(url: objc.Object, options: ?objc.Object) ?Source;
+pub extern "c" fn CGImageSourceCreateImageAtIndex(source: Source, index: usize, options: ?objc.Object) ?Image;
+pub extern "c" const kCGImagePropertyGIFDictionary: CFStringRef;
+pub extern "c" const kCGImagePropertyGIFDelayTime: CFStringRef;
 
 /// An sRGB picture of `w`×`h` points at `scale` pixels a point, drawn in
 /// points with y up (CoreGraphics' own way).

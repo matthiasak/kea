@@ -10,6 +10,7 @@ const Tab = @import("tab.zig").Tab;
 const Browser = @import("../model/browser.zig").Browser;
 const Curtain = @import("../data/curtain.zig").Curtain;
 const scripts = @import("tab_scripts.zig");
+const hidden_panel = @import("../chrome/hidden_panel.zig");
 
 /// `Veiling.picker`: loaded on every page, asleep until asked for.
 pub const picker_script = @embedFile("js/veil_picker.js");
@@ -106,6 +107,7 @@ pub fn toggleHiding(b: *Browser) void {
         b.veiling = false;
         stopPicking(t);
     } else {
+        hidden_panel.setReviewing(b, false);
         b.veiling = true;
         startPicking(t);
     }
@@ -214,6 +216,7 @@ pub fn restoreAll(b: *Browser) void {
     defer b.gpa.free(host);
     b.kea.curtain.restoreAll(host);
     redress(b);
+    hidden_panel.setReviewing(b, false);
     b.announce("Everything is back");
 }
 

@@ -18,6 +18,8 @@ const tab_menu = @import("tab_menu.zig");
 const tab_drag = @import("tab_drag.zig");
 const groups_view = @import("groups_view.zig");
 const tab_address = @import("tab_address.zig");
+const split_tab_item = @import("split_tab_item.zig");
+const split_drop = @import("split_drop.zig");
 
 const px = struct {
     fn v(n: f32) ui.Length {
@@ -53,7 +55,8 @@ pub fn section(b: *Browser, c: *ui.Context, p: *const Palette, tabs: []const *Ta
     var held: ?struct { t: *Tab, slot: u32, shift: f32 } = null;
     for (tabs, 0..) |t, index| {
         ui.key(c, c.print("row-{d}", .{t.id}));
-        const row = sideRow(b, c, p, t, t.id == live, interactive);
+        const item = place(b, c, p, t, live, interactive);
+        const row = item.row;
         if (!interactive) continue;
         const r = tab_drag.carried(b, c, row.it, t, index, tabs.len, step, true);
         if (r.held) {
@@ -63,7 +66,7 @@ pub fn section(b: *Browser, c: *ui.Context, p: *const Palette, tabs: []const *Ta
         } else c.node(row.index).style.offset.y = r.shift;
         if (r.target) |to| move(b, t, which, to);
         if (r.dropped) |at| dropOnGroup(b, t, at);
-        if (!r.swallowsClick()) act(b, c, t, t.id == live, row.it, row.close);
+        if (!r.swallowsClick()) act(b, c, item.asked, item.asked.id == live, item.asked_it, item.asked_close);
     }
     const h = held orelse return;
     const parent = c.node(h.slot).parent;
@@ -76,9 +79,28 @@ pub fn section(b: *Browser, c: *ui.Context, p: *const Palette, tabs: []const *Ta
     style.offset = .{ .x = slot.x - box.x - pad.left, .y = slot.y - box.y - pad.top + h.shift };
     style.width = px(slot.w);
     _ = c.open(style, "row-carried");
-    _ = sideRow(b, c, p, h.t, h.t.id == live, false);
+    _ = place(b, c, p, h.t, live, false);
     c.end();
 }
+
+/// A row's place: the tab's row, or its pair's two lines (`SplitTabItem`);
+/// `asked` the line a click, a cross or a menu was for.
+const Place = struct { row: Row, asked: *Tab, asked_it: ui.Interaction, asked_close: ui.Interaction };
+
+fn place(b: *Browser, c: *ui.Context, p: *const Palette, t: *Tab, live: u64, interactive: bool) Place {
+    const right = split_tab_item.partner(b, t) orelse {
+        const row = sideRow(b, c, p, t, t.id == live, interactive);
+        if (interactive) split_drop.mark(b, t.id, row.it.rect);
+        return .{ .row = row, .asked = t, .asked_it = row.it, .asked_close = row.close };
+    };
+    const d = split_tab_item.stacked(b, c, p, t, right, row_height, interactive);
+    var close = no_press;
+    const hit = d.hit orelse return .{ .row = .{ .index = d.index, .it = d.it, .close = close }, .asked = t, .asked_it = no_press, .asked_close = close };
+    close.clicked = hit.close;
+    return .{ .row = .{ .index = d.index, .it = d.it, .close = close }, .asked = hit.tab, .asked_it = if (hit.close) no_press else hit.it, .asked_close = close };
+}
+
+const no_press: ui.Interaction = .{ .id = 0, .rect = null, .hovered = false, .pressed = false, .clicked = false, .focused = false };
 
 fn move(b: *Browser, t: *Tab, which: Section, to: usize) void {
     switch (which) {

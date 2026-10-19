@@ -9,4 +9,11 @@ test {
     _ = @import("site_card.zig");
     _ = @import("omnibox.zig");
     _ = @import("link_bubble.zig");
+    _ = @import("side_panels.zig");
+    _ = @import("peek_switcher.zig");
+    _ = @import("split.zig");
+    _ = @import("sheets.zig");
+    _ = @import("recall.zig");
+    _ = @import("bookmarks.zig");
+    _ = @import("menus.zig");
 }

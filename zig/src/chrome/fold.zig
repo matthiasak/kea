@@ -84,7 +84,7 @@ fn onRight(b: *const Browser) bool {
 /// A popover opened from the column, still open: it holds the column out.
 fn holding(b: *const Browser) bool {
     const o = b.overlay orelse return false;
-    return o == .bookmarks_dropdown or o == .extension_menu;
+    return o == .bookmarks_dropdown or o == .bookmark_card or o == .extension_menu;
 }
 
 fn fullScreen(b: *const Browser) bool {

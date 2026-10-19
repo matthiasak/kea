@@ -45,10 +45,12 @@ pub fn span(b: *const Browser, tab: *const Tab, each: f32) f32 {
     return if (pinned(b, tab)) metrics.pin_width else each;
 }
 
-/// What the edited tab adds to the run (`total += min(340, room) − oldWidth`).
+/// What the edited tab adds to the run (`total += min(340, room) − oldWidth`);
+/// a pair's page grows from the pair's width.
 pub fn growth(b: *Browser, each: f32) f32 {
     const t = b.tabById(b.editing_tab orelse return 0) orelse return 0;
-    return @min(340, b.strip.room) - (if (t.pin != null) metrics.pin_width else each);
+    const was = if (b.splitFor(t) != null) tab_width.pairWidth(each) else if (t.pin != null) metrics.pin_width else each;
+    return @min(340, b.strip.room) - was;
 }
 
 /// Where the strip puts the pill this frame.

@@ -25,6 +25,13 @@ pub const Shortcut = struct {
     pub const tab: u21 = '\t';
     pub const enter: u21 = '\r';
 
+    /// The shortcut key for a typed character, ignoring modifiers:
+    /// ASCII lowered, and ⇧Tab's backtab (0x19) offered as Tab (Shift is set).
+    pub fn keyOf(cp: u21) u21 {
+        if (cp == 0x19) return tab;
+        return if (cp < 128) std.ascii.toLower(@intCast(cp)) else cp;
+    }
+
     /// As this platform has it: Command is Control off macOS.
     pub fn native(s: Shortcut) Shortcut {
         if (@import("builtin").os.tag == .macos or !s.cmd) return s;

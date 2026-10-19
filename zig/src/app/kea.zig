@@ -69,6 +69,14 @@ pub const Kea = struct {
     loot: Loot = undefined,
     /// Downloads while they happen, every window's (`Shared.fetches`).
     fetches: Fetches = undefined,
+    /// The bookmarks' own window, one for the app (`PanelWindow.bookmarks`).
+    marks_window: ?*@import("../chrome/popped.zig").PanelWindow = null,
+    /// Your own keys for the menu commands (`ShortcutStore.shared`).
+    shortcuts: @import("shortcuts.zig").Shortcuts = undefined,
+    /// The app's key monitor (app/keys.zig), while installed.
+    key_monitor: ?objc.Object = null,
+    /// The menu bar's menus as last made (app/menus.zig).
+    menus: @import("menus.zig").State = .{},
 
     pub fn create(gpa: std.mem.Allocator, ui_app: ?*nanoui.App, opts: Options) !*Kea {
         const self = try gpa.create(Kea);
@@ -92,6 +100,7 @@ pub const Kea = struct {
             .app = if (ui_app) |a| a.nsapp else null,
         });
         self.history.init(gpa, &self.store);
+        self.shortcuts = .init(gpa, &self.store);
         self.bookmarks = Bookmarks.init(gpa, &self.store);
         self.site_search = SiteSearch.init(gpa, &self.store);
         self.pins = Pins.init(gpa, &self.store);
@@ -116,11 +125,18 @@ pub const Kea = struct {
 
     pub fn destroy(self: *Kea) void {
         self.flush();
+        // Nothing of this `Kea`'s is clicked or keyed into from here on.
+        @import("keys.zig").uninstall(self);
+        @import("menus.zig").uninstall(self);
         self.swipe.stop();
         @import("scripting.zig").uninstall(self);
         self.links.deinit(self.gpa);
         // The small windows' pages are tabs of no window's: they go first.
         @import("../web/little.zig").closeAll(self);
+        if (self.marks_window) |m| {
+            self.marks_window = null;
+            m.close();
+        }
         browsers.closeAll(self);
         @import("../web/notifications.zig").forgetKea(self);
         self.browsers.deinit(self.gpa);
@@ -137,6 +153,7 @@ pub const Kea = struct {
         self.site_search.deinit();
         self.bookmarks.deinit();
         self.history.deinit();
+        self.shortcuts.deinit();
         self.prefs.deinit();
         self.store.deinit();
         self.gpa.destroy(self);

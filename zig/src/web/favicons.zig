@@ -187,6 +187,22 @@ pub const Favicons = struct {
         const owned = kea.gpa.dupe(u8, png) catch return;
         kea.store.disk.write(path, owned, false);
     }
+
+    /// Clear History (`forgetAll`): every icon kept on disk goes, and what
+    /// was known missing; the tabs open now keep theirs until they close.
+    pub fn forgetAll(self: *Favicons) void {
+        const kea = self.kea orelse return;
+        // A write still queued would put an icon back after the folder went.
+        kea.store.disk.drain();
+        const pool = objc.Pool.push();
+        defer pool.pop();
+        const fm = objc.msg(objc.Object, objc.class("NSFileManager"), "defaultManager", .{});
+        _ = objc.msg(objc.BOOL, fm, "removeItemAtPath:error:", .{ objc.nsString(self.folder), @as(?*anyopaque, null) });
+        inline for (.{ &self.missing, &self.absent }) |s| {
+            freeSet(s);
+            s.* = .empty;
+        }
+    }
 };
 
 fn freeSet(s: *Set) void {

@@ -10,6 +10,7 @@ const objc = @import("nanoui").objc;
 pub const mask = struct {
     pub const mouse_moved: u64 = 1 << 5;
     pub const left_mouse_dragged: u64 = 1 << 6;
+    pub const key_down: u64 = 1 << 10;
     pub const scroll_wheel: u64 = 1 << 22;
 };
 

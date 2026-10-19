@@ -144,7 +144,7 @@ pub fn lift(kea: *Kea, page: objc.Object, calls: Calls) void {
         const host = StageHost.create(gpa, s) catch null;
         p.host = host;
         if (host) |h| {
-            h.setPanes(page, null, false);
+            h.setPage(page, false);
             if (objc.msg(?objc.Object, h.stage_view, "layer", .{})) |layer| {
                 objc.msg(void, p.scrim, "setFrame:", .{objc.msg(CGRect, layer, "bounds", .{})});
                 objc.msg(void, layer, "addSublayer:", .{p.scrim});

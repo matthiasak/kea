@@ -118,7 +118,7 @@ test "fold hides column and edge reveals it" {
     f.tester.settle(1);
     try t.expect(try rowCount(&f) > 0);
     // ⌘S: folded, the page takes the column's room but the card's gap.
-    try t.expect(f.tester.shortcut(.{ .key = 's', .cmd = true }));
+    try t.expect(f.press("s", 1, .{ .cmd = true }));
     try t.expect(b.folded);
     f.tester.settle(1.5);
     try t.expectEqual(@as(usize, 0), try rowCount(&f));

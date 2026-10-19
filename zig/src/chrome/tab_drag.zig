@@ -1,8 +1,8 @@
 //! `Carried` (TabBar.swift 756-853): a tab picked up and carried along its
 //! row, the others making way as it passes them — across the strip or down
 //! the column alike. The hand's travel is the tab's own; the row only
-//! changes when the tab passes another. Split View's `TabDrag` (pairing
-//! into a stage half) arrives with P7.
+//! changes when the tab passes another. With Split View on, the stage is
+//! asked first (chrome/split_drop.zig): over a page's edge, a pair.
 const std = @import("std");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;
@@ -12,6 +12,7 @@ const Tab = @import("../web/tab.zig").Tab;
 const Palette = @import("../design/palette.zig").Palette;
 const card = @import("../design/card.zig");
 const motion = @import("../design/motion.zig");
+const split_drop = @import("split_drop.zig");
 
 /// `DragGesture(minimumDistance: 5)`.
 pub const min_distance: f32 = 5;
@@ -95,13 +96,21 @@ pub fn carried(b: *Browser, c: *ui.Context, it: ui.Interaction, tab: *Tab, index
             h.from = index;
             st.landing = null;
         }
+        // Called off with Esc: back where it was picked up, held no more.
+        if (b.stage.drop.cancelled == tab.id) {
+            h.shift = 0;
+            if (index != h.from) r.target = h.from;
+            return r;
+        }
+        r.held = true;
         const from: f32 = @floatFromInt(h.from);
+        r.shift = travel - (@as(f32, @floatFromInt(index)) - from) * step;
+        h.shift = r.shift;
+        // Over a page's edge the row keeps still: the stage shows the pair.
+        if (split_drop.update(b, c, tab, h.origin)) return r;
         const last: f32 = @floatFromInt(@max(1, count) - 1);
         const target: usize = @intFromFloat(std.math.clamp(from + @round(travel / step), 0, last));
         if (target != index) r.target = target;
-        r.held = true;
-        r.shift = travel - (@as(f32, @floatFromInt(index)) - from) * step;
-        h.shift = r.shift;
         return r;
     }
 
@@ -110,9 +119,18 @@ pub fn carried(b: *Browser, c: *ui.Context, it: ui.Interaction, tab: *Tab, index
     st.hand = null;
     if (!was.held) return r;
     r.let_go = true;
-    if (b.dragOut(tab, objc.msg(objc.CGPoint, objc.class("NSEvent"), "mouseLocation", .{}))) {
-        r.outside = true;
-    } else r.dropped = mouse;
+    // Paired, or a pair's half put back in the row; else the half picked
+    // up (or the tab) may go to another window.
+    const source = switch (split_drop.finish(b, c, tab)) {
+        .none => tab,
+        .outside => |s| s,
+        .taken, .cancelled => null,
+    };
+    if (source) |s| {
+        if (b.dragOut(s, objc.msg(objc.CGPoint, objc.class("NSEvent"), "mouseLocation", .{}))) {
+            r.outside = true;
+        } else if (s == tab) r.dropped = mouse;
+    }
     st.gen +%= 1;
     st.landing = .{ .tab = tab.id, .gen = st.gen, .from = was.shift };
     r.shift = ui.springFrom(c, springId(tab.id), st.gen, was.shift, 0, motion.settle);

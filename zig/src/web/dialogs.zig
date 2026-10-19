@@ -18,7 +18,10 @@ const appkit = @import("../sys/appkit.zig");
 /// not on its allocator.
 const gpa = std.heap.c_allocator;
 
-pub const Kind = enum { alert, confirm, prompt, open_panel, sign_in, trust, hand_off };
+/// `capture`, `location` and `notify` are a page asking for the camera or
+/// microphone, where you are, or to send notifications: asked on the
+/// window's bar (`Browser.asking`, chrome/bars.zig), one at a time.
+pub const Kind = enum { alert, confirm, prompt, open_panel, sign_in, trust, hand_off, capture, location, notify };
 
 /// One question, answered exactly once (`HeldQuestion`, `PaneQuestion`).
 pub const Ask = struct {
@@ -41,6 +44,28 @@ pub const Ask = struct {
     answered: bool = false,
     /// Shown over its own pane (`PaneQuestion`).
     pane: bool = false,
+    /// When it was asked (`ui.clock`): a pane's card takes no click for half a second.
+    asked: f64 = 0,
+    /// A bar question's answer is kept under `capture.<about>` ("site|kind");
+    /// empty for a private tab, which keeps nothing. Owned.
+    about: []u8 = &.{},
+};
+
+/// The bar's question up now (`Browser.asking`): taken only half a second
+/// after it came up, so a click timed by the page can't land on Allow.
+pub const Asking = struct {
+    ask: *Ask,
+    shown: f64,
+
+    /// "Allow once", with "Always allow" beside it (where you are).
+    pub fn once(self: Asking) bool {
+        return self.ask.kind == .location;
+    }
+
+    /// An answer that can be kept: not a private tab's.
+    pub fn keeps(self: Asking) bool {
+        return self.ask.about.len > 0;
+    }
 };
 
 extern "c" fn _Block_copy(block: ?*const anyopaque) ?objc.Object;
@@ -74,8 +99,14 @@ pub fn make(t: *Tab, kind: Kind, host: []const u8, message: []const u8, completi
         gpa.destroy(a);
         return null;
     };
-    a.* = .{ .kind = kind, .serial = t.serial, .host = h, .message = m, .completion = if (completion) |c| _Block_copy(c) else null };
+    a.* = .{ .kind = kind, .serial = t.serial, .host = h, .message = m, .completion = if (completion) |c| _Block_copy(c) else null, .asked = ui.clock.now() };
     return a;
+}
+
+/// A bar question's answer, kept for the site as `capture.<about>`.
+pub fn keepAs(a: *Ask, about: []const u8) void {
+    gpa.free(a.about);
+    a.about = gpa.dupe(u8, about) catch &.{};
 }
 
 /// `ask(from:show:drop:)`: over its own page only. A tab in the
@@ -104,6 +135,10 @@ fn presentLater(t: *Tab, _: usize) void {
 }
 
 fn present(t: *Tab, a: *Ask) void {
+    switch (a.kind) {
+        .capture, .location, .notify => return bar(t, a),
+        else => {},
+    }
     if (a.pane or t.kea.opts.hidden) {
         t.questions.append(t.gpa, a) catch return answer(a, false, null);
         return t.changed(.state);
@@ -111,10 +146,46 @@ fn present(t: *Tab, a: *Ask) void {
     sheet(t, a);
 }
 
+/// On the bar, if nothing is asked there already: a second page asking
+/// while the first still waits is refused rather than queued behind it.
+pub fn bar(t: *Tab, a: *Ask) void {
+    const b = t.browser orelse return answer(a, false, null);
+    if (b.asking != null) return answer(a, false, null);
+    b.asking = .{ .ask = a, .shown = ui.clock.now() };
+    b.redraw();
+}
+
+/// What last answered a page asking where you are, in a test run — which
+/// never goes on to ask the Mac (`Browser.locationAnswered`).
+pub var location_answered: ?[]const u8 = null;
+
+/// The bar's answer (`answerCapture`): kept for the site unless `keep` is
+/// off ("Allow once") or the tab is private; the notifications' grant also
+/// asks macOS (`SiteNotifications.authorize`).
+pub fn answerBar(b: anytype, grant: bool, keep: bool) void {
+    const asking = b.asking orelse return;
+    if (ui.clock.now() - asking.shown <= 0.5) return;
+    const a = asking.ask;
+    if (keep and a.about.len > 0) {
+        var buf: [420]u8 = undefined;
+        if (std.fmt.bufPrint(&buf, "capture.{s}", .{a.about})) |key| b.kea.store.setBool(key, grant) else |_| {}
+    }
+    if (a.kind == .notify and grant) @import("notifications.zig").authorize(b.kea);
+    b.asking = null;
+    answer(a, grant, null);
+    b.redraw();
+}
+
 /// Everything `t` asked, answered as dismissed: it closed or went away.
 pub fn dropAll(t: *Tab) void {
     while (t.held.pop()) |a| answer(a, false, null);
     while (t.questions.items.len > 0) answer(t.questions.items[0], false, null);
+    // And the bar's, if it was this tab asking.
+    if (t.browser) |b| if (b.asking) |asking| if (asking.ask.serial == t.serial) {
+        b.asking = null;
+        answer(asking.ask, false, null);
+        b.redraw();
+    };
 }
 
 fn removeFrom(list: *std.ArrayList(*Ask), a: *Ask) void {
@@ -152,6 +223,13 @@ pub fn answer(a: *Ask, ok: bool, text: ?[]const u8) void {
                 call(blk, .{ use_credential, trustCredential(a.subject.?) });
             } else call(blk, .{ cancel_challenge, @as(?objc.Object, null) }),
             .hand_off => {},
+            // WKPermissionDecision: grant 1, deny 2.
+            .capture => call(blk, .{@as(objc.NSInteger, if (ok) 1 else 2)}),
+            .location => if (t != null and t.?.kea.opts.root != null) {
+                location_answered = if (ok) "granted" else "denied";
+                call(blk, .{@as(objc.NSInteger, 2)});
+            } else call(blk, .{@as(objc.NSInteger, if (ok) 1 else 2)}),
+            .notify => call(blk, .{ok}),
         }
     }
     if (a.kind == .hand_off and ok) if (a.subject) |u| {
@@ -174,6 +252,7 @@ fn free(a: *Ask) void {
     a.input.deinit();
     gpa.free(a.host);
     gpa.free(a.message);
+    gpa.free(a.about);
     gpa.destroy(a);
 }
 
@@ -294,6 +373,8 @@ fn sheet(t: *Tab, a: *Ask) void {
         ),
         .sign_in => newAlert(std.fmt.bufPrint(&buf, "{s} asks you to sign in", .{a.host}) catch "Sign in", a.message, 1, &.{ "Sign In", "Cancel" }),
         .open_panel => openPanel(a),
+        // Asked on the window's bar (`bar`), never as a sheet.
+        .capture, .location, .notify => unreachable,
     };
     const alert = a.alert.?;
     if (a.kind == .prompt) {

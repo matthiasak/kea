@@ -221,25 +221,18 @@ pub fn pinsChanged(self: *Browser, space: Uuid) void {
             if (self.active_id == 0 and self.tabs.items.len > 0) self.active_id = self.tabs.items[0].id;
             if (self.active_id == 0) self.newTab();
         }
-        if (self.split_right_id) |rid| if (self.tabById(rid) == null) {
-            self.split_right_id = null;
-        };
-        if (self.kept_pair) |p| if (self.tabById(p.left) == null or self.tabById(p.right) == null) {
-            self.kept_pair = null;
-        };
+        @import("split.zig").keepWhole(&self.splits, self.tabs.items);
         var arena: std.heap.ArenaAllocator = .init(self.gpa);
         defer arena.deinit();
         const a = arena.allocator();
         const groups = rows.groupsForSession(a, self.tab_groups.items) catch return;
-        const shape = self.session(a, self.tabs.items, self.active_id, groups, self.currentPair()) catch return;
+        const shape = self.session(a, self.tabs.items, self.active_id, groups, self.splits.items) catch return;
         if (!self.restoring) self.writeRow(self.space_id, shape, false);
         return self.redraw();
     }
     const row = self.parked.getPtr(space) orelse return;
     self.reconcilePins(&row.tabs, space);
-    if (row.pair) |p| if (!has(row.tabs.items, p.left) or !has(row.tabs.items, p.right)) {
-        row.pair = null;
-    };
+    @import("split.zig").keepWhole(&row.splits, row.tabs.items);
     if (!has(row.tabs.items, row.active)) row.active = if (row.tabs.items.len > 0) row.tabs.items[0].id else 0;
 }
 

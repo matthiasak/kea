@@ -114,8 +114,11 @@ pub fn moveToGroup(self: *Browser, tab: *Tab, id: ?Uuid) void {
     if (id) |g| if (groupIndex(self, g) == null) return;
     const previous = tab.group_id;
     if (eqlOpt(previous, id)) return;
+    // A pair is one place in the row: moved into a group or out of one,
+    // both halves go, and stay a pair.
+    const partner = self.partnerOf(tab);
     tab.group_id = id;
-    // ponytail: a pair moves as one with P7's TabSplit; the interim pair's other page stays.
+    if (partner) |p| p.group_id = id;
     self.removeEmptyGroup(previous);
     self.arrangeGroupedTabs(null);
     if (id) |g| if (self.groupById(g)) |group| {
@@ -132,11 +135,14 @@ fn eqlOpt(a: ?Uuid, b: ?Uuid) bool {
 
 /// Reordered among its peers in the section shown.
 pub fn moveWithin(self: *Browser, tab: *Tab, group: ?Uuid, index: usize) void {
-    const peers = self.tabsIn(self.gpa, group) catch return;
-    defer self.gpa.free(peers);
-    const from = std.mem.indexOfScalar(*Tab, peers, tab) orelse return;
-    if (index >= peers.len or from == index) return;
-    const destination = self.indexOf(peers[index]) orelse return;
+    const all = self.tabsIn(self.gpa, group) catch return;
+    defer self.gpa.free(all);
+    var peers: std.ArrayList(*Tab) = .empty;
+    defer peers.deinit(self.gpa);
+    for (all) |t| if (self.standsInRow(t)) peers.append(self.gpa, t) catch return;
+    const from = std.mem.indexOfScalar(*Tab, peers.items, tab) orelse return;
+    if (index >= peers.items.len or from == index) return;
+    const destination = self.indexOf(peers.items[index]) orelse return;
     self.move(tab, destination);
 }
 
@@ -191,17 +197,15 @@ pub fn tabsIn(self: *Browser, gpa: std.mem.Allocator, group: ?Uuid) ![]*Tab {
 }
 
 /// A folded group shows its name alone — and the tab you are on, if it is
-/// in there.
+/// in there (a pair's, its first page). A pair's later page has no place.
 pub fn visibleTabsIn(self: *Browser, gpa: std.mem.Allocator, group: TabGroup) ![]*Tab {
     const members = try self.tabsIn(gpa, group.id);
-    if (!group.collapsed) return members;
-    var k: usize = 0;
-    for (members) |t| if (t.id == self.active_id) {
-        members[k] = t;
-        k += 1;
-    };
     defer gpa.free(members);
-    return gpa.dupe(*Tab, members[0..k]);
+    const front = if (self.activeSplit()) |p| p.left() else self.active_id;
+    var out: std.ArrayList(*Tab) = .empty;
+    errdefer out.deinit(gpa);
+    for (members) |t| if (self.standsInRow(t) and (!group.collapsed or t.id == front)) try out.append(gpa, t);
+    return out.toOwnedSlice(gpa);
 }
 
 /// A group lasts as long as its tabs: the last one gone, it goes too.

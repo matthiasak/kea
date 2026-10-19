@@ -9,14 +9,15 @@ const nanoui = @import("nanoui");
 const objc = nanoui.objc;
 const ui = nanoui.ui;
 const Browser = @import("../model/browser.zig").Browser;
-const Tab = @import("../web/tab.zig").Tab;
 const palette = @import("../design/palette.zig");
 const Palette = palette.Palette;
 const metrics = @import("../design/metrics.zig");
 const motion = @import("../design/motion.zig");
 const card = @import("../design/card.zig");
 const Room = @import("room.zig").Room;
-const panels = @import("panels.zig");
+const bars = @import("bars.zig");
+const hidden_panel = @import("hidden_panel.zig");
+const side_panels = @import("side_panels.zig");
 const side_bar = @import("side_bar.zig");
 const fold = @import("fold.zig");
 const space_swipe = @import("space_swipe.zig");
@@ -25,10 +26,15 @@ const groups_view = @import("groups_view.zig");
 const tab_bar = @import("tab_bar.zig");
 const overlays = @import("overlays.zig");
 const controls = @import("controls.zig");
-const browsers = @import("../app/browsers.zig");
 const page_layers = @import("page_layers.zig");
 const site_card = @import("site_card.zig");
+const bookmark_door = @import("bookmarks/door.zig");
+const split_stage = @import("split_stage.zig");
 const omnibox = @import("omnibox.zig");
+const peek = @import("peek.zig");
+const tab_switcher_view = @import("tab_switcher_view.zig");
+const sheet = @import("sheet.zig");
+const welcome = @import("welcome.zig");
 
 const px = struct {
     fn v(n: f32) ui.Length {
@@ -42,13 +48,14 @@ pub fn view(b: *Browser, c: *ui.Context) void {
     const p = palette.get(c.theme.dark);
     // The strip and the column say where the window is dragged from.
     c.title_bar_height = 0;
-    // ⌘ let go of ends a ⌘K walk, wherever it stopped.
-    if (c.input.mods_changed and !c.input.cmd) b.landSummon();
-    handleShortcuts(b, c);
+    // The bookmarks manager's start and end; its keys are the key monitor's.
+    @import("bookmarks/manager.zig").frame(b);
     // The address typed into a tab, done with: the next takes the keys again.
     if (b.editing_tab == null) b.tab_field.claimed = null;
     space_swipe.frame(b, c);
     groups_view.beginFrame(b);
+    // The bookmarks' own window follows the prefs, before anything is laid out.
+    @import("popped.zig").followBookmarks(b.kea);
 
     const r = room(b, c);
     applyGround(b, p, r);
@@ -72,6 +79,9 @@ pub fn view(b: *Browser, c: *ui.Context) void {
     if (!b.prefs.sidebar and !r.folded and !r.fullscreen) tab_bar.tabBar(b, c, p);
     if (r.barShown()) drawBookmarksBar(b, c, p, r);
     if (!r.fullscreen) fold.view(b, c, p);
+    bars.view(b, c, p);
+    // Over the page only: the column, the strip and the bookmarks bar stay uncovered.
+    peek.view(b, c, p, .{ .x = if (right) 0 else chrome.w, .y = chrome.h, .w = c.size.w - chrome.w, .h = c.size.h - chrome.h });
 
     // Over everything, in App.swift's order. Fold, bars, Peek, panels and
     // sheets, the tab switcher and the import's card come with their phases.
@@ -79,8 +89,14 @@ pub fn view(b: *Browser, c: *ui.Context) void {
     // tabs is not what it stands over.
     const lead: f32 = if (r.sidebar() and !right) b.prefs.side_width else 0;
     const trail: f32 = if (r.sidebar() and right) b.prefs.side_width else 0;
-    omnibox.view(b, c, p, .{ .x = lead, .y = 0, .w = c.size.w - lead - trail, .h = c.size.h }, .{});
+    // With Split View on, each page has its own, fitted (chrome/split_stage.zig).
+    if (!b.prefs.split_view) omnibox.view(b, c, p, .{ .x = lead, .y = 0, .w = c.size.w - lead - trail, .h = c.size.h }, .{});
     site_card.follow(b);
+    sheet.view(b, c, p);
+    welcome.view(b, c, p);
+    // No dimming for this one: the page stays in view while it offers to put things back.
+    hidden_panel.view(b, c, p);
+    tab_switcher_view.view(b, c, p);
     drawOverlay(b, c, p);
 }
 
@@ -94,9 +110,10 @@ fn room(b: *Browser, c: *ui.Context) Room {
         .side_width = prefs.side_width,
         .bar_pref = prefs.bookmarks_bar,
         .has_bookmarks = b.bookmarks.roots.len > 0,
-        .marks_asked = b.marks_open,
+        .marks_asked = prefs.bookmarks_sidebar,
         .marks_popped = prefs.marks_popped,
-        .marks_expanded = b.marks_expanded,
+        .marks_expanded = b.expanded_panel == .bookmarks,
+        .chat_expanded = b.expanded_panel == .chat,
         .chat_popped = prefs.chat_popped,
         .chat_width_pref = prefs.chat_width,
         .marks_width_pref = prefs.marks_width,
@@ -139,65 +156,21 @@ fn drawStageRow(b: *Browser, c: *ui.Context, p: *const Palette, r: Room, roomed:
         .offset = .{ .x = if (right) 0 else slide.w - roomed.w, .y = slide.h - roomed.h },
     });
     defer ui.end(c);
-    const marks_left = b.prefs.effectiveMarksSide() == .left;
-    const marks_w = r.marksWidth();
-    if (r.marksShown() and marks_left) panels.marksPanel(b, c, p, true, marks_w);
-    const stage_w = c.size.w - pad.left - pad.right - if (r.marksShown()) marks_w else 0;
-    drawStage(b, c, p, r, stage_w, marks_left);
-    if (r.marksShown() and !marks_left) panels.marksPanel(b, c, p, false, marks_w);
+    side_panels.beside(b, c, p, r, true);
+    // The stage's own size, from what is beside it, so the pages are laid
+    // out in this frame for this window, never the last one's.
+    const beside: f32 = (if (r.chatShown()) r.chatWidth() else 0) + (if (r.marksShown()) r.marksWidth() else 0);
+    drawStage(b, c, p, r, .{ .w = @max(0, c.size.w - pad.left - pad.right - beside), .h = @max(0, c.size.h - pad.top - pad.bottom) });
+    side_panels.beside(b, c, p, r, false);
 }
 
-/// The stage: one page, or two side by side with Split View, a card in
-/// the card's mode; and the panel let out over it.
-fn drawStage(b: *Browser, c: *ui.Context, p: *const Palette, r: Room, stage_w: f32, marks_left: bool) void {
-    const split_tab = if (b.prefs.split_view and b.split_right_id != null) b.tabById(b.split_right_id.?) else null;
-    _ = c.open(.{ .direction = .row, .grow = 1, .height = .fill }, "kea.stage");
+/// The stage: one page, or a pair's two (chrome/split_stage.zig), each a
+/// card in the card's mode; and the panel let out over it.
+fn drawStage(b: *Browser, c: *ui.Context, p: *const Palette, r: Room, size: ui.Size) void {
+    _ = c.open(.{ .grow = 1, .height = .fill }, "kea.stage");
     defer c.end();
-    const left = drawPane(b, c, p, b.tabById(b.active_id), "stage-left", if (split_tab != null) b.split_fraction else 1.0, b.focused_pane == .left or split_tab == null);
-    if (r.cards() and !b.prefs.split_view) card.cardEdge(c, left);
-    if (split_tab) |rt| {
-        drawDivider(b, c, p);
-        _ = drawPane(b, c, p, rt, "stage-right", 1.0 - b.split_fraction, b.focused_pane == .right);
-    }
-    // Let out over the page (`letOut`), on the panel's side.
-    if (b.marks_expanded and r.marksColumn() and !r.marks_popped) {
-        const w = @min(760, stage_w);
-        ui.column(c, .{ .absolute = true, .offset = .{ .x = if (marks_left) 0 else stage_w - w }, .width = px(w), .height = .fill });
-        panels.marksPanel(b, c, p, marks_left, null);
-        ui.end(c);
-    }
-}
-
-/// The 7-point gutter between two pages; dragged, it moves their boundary.
-fn drawDivider(b: *Browser, c: *ui.Context, p: *const Palette) void {
-    const i = c.open(.{ .width = px(7), .height = .fill, .align_items = .center, .justify = .center }, "split-divider");
-    defer c.end();
-    const it = c.interact(i, .{});
-    c.addA11y(i, .splitter, "Split View divider", "", false, true);
-    if (it.hovered or it.pressed) c.cursor = .resize_left_right;
-    if (it.double_clicked) {
-        b.evenSplit();
-    } else if (it.pressed) {
-        const total_w = @max(100, b.left_pane_frame.w + b.right_pane_frame.w);
-        const rel_x = c.input.mouse.x - b.left_pane_frame.x;
-        b.split_fraction = std.math.clamp(rel_x / total_w, 0.2, 0.8);
-        c.changed = true;
-    }
-    _ = c.leaf(.{ .width = px(1), .height = .fill, .background = p.faint }, .none, null);
-}
-
-/// One page's hole, and what stands over that page alone (`page_layers`)
-/// and the find pill. Returns the hole's box.
-fn drawPane(b: *Browser, c: *ui.Context, p: *const Palette, tab_opt: ?*Tab, key_name: []const u8, weight: f32, focused: bool) u32 {
-    const idx = c.open(.{ .grow = @max(0.1, weight), .height = .fill, .align_items = .center, .justify = .center }, key_name);
-    defer c.end();
-    c.addStageHoleNode(idx);
-    if (tab_opt) |t| {
-        page_layers.draw(c, p, t);
-        @import("link_bubble.zig").draw(b, c, p, t, idx);
-    }
-    if (focused and b.finder.finding) panels.findBar(b, c, p);
-    return idx;
+    split_stage.view(b, c, p, r, size);
+    side_panels.letOut(b, c, p, r);
 }
 
 /// `BookmarksBar`: under the strip, or beside the column's top on the
@@ -206,40 +179,7 @@ fn drawBookmarksBar(b: *Browser, c: *ui.Context, p: *const Palette, r: Room) voi
     const right = r.sideOnRight();
     const lead = if (right) r.farGap() else r.chrome().w;
     const trail = if (right) r.chrome().w else r.farGap();
-    const on_frame = r.cards();
-    ui.row(c, .{
-        .absolute = true,
-        .offset = .{ .x = lead, .y = r.band() },
-        .width = px(c.size.w - lead - trail),
-        .height = px(@import("room.zig").bar_height),
-        .padding = .xy(10, 0),
-        .gap = 2,
-        .align_items = .center,
-        .background = if (on_frame) p.frame else p.ground,
-        .scroll_x = true,
-        .scroll_bar = false,
-    });
-    defer ui.end(c);
-    if (!on_frame) _ = c.leaf(.{ .absolute = true, .offset = .{ .x = -10, .y = @import("room.zig").bar_height - 1 }, .width = px(c.size.w - lead - trail), .height = px(1), .background = p.hairline }, .none, null);
-    for (b.bookmarks.roots, 0..) |bm, idx| {
-        ui.key(c, c.print("bm-bar-{d}", .{idx}));
-        const folder = bm.children != null;
-        const i = c.open(.{ .direction = .row, .gap = 6, .padding = .xy(8, 0), .height = px(22), .radius = 6, .align_items = .center, .control = true }, null);
-        const it = c.interact(i, .{});
-        c.help(i, bm.url orelse bm.title);
-        c.addA11y(i, .button, bm.title, "", false, true);
-        if (it.hovered) c.node(i).style.background = p.hover;
-        ui.icon(c, if (folder) "folder" else "globe", .{ .size = 10.5, .color = p.muted });
-        ui.column(c, .{ .max_width = 150 });
-        ui.text(c, bm.title, .{ .size = 12, .color = p.ink, .truncate = true });
-        ui.end(c);
-        if (folder) ui.icon(c, "chevron.down", .{ .size = 7.5, .weight = .semibold, .color = p.faint });
-        c.end();
-        if (bm.url) |u| {
-            if (it.clicked) b.visit(u, c.input.cmd);
-            if (it.middle_clicked) _ = b.open(u, .{ .foreground = false, .from = b.activeTab(), .may_wait = true });
-        }
-    }
+    @import("bookmarks/bar.zig").view(b, c, p, lead, r.band(), c.size.w - lead - trail, r.cards());
 }
 
 /// The one overlay open over the window, last so it takes the clicks
@@ -247,126 +187,13 @@ fn drawBookmarksBar(b: *Browser, c: *ui.Context, p: *const Palette, r: Room) voi
 /// that opens it.
 fn drawOverlay(b: *Browser, c: *ui.Context, p: *const Palette) void {
     if (b.overlay) |o| if (o == .site_card) return site_card.overlay(b, c, p);
-    if (!overlays.begin(c, &b.overlay, b.overlay_anchor, .{ .background = p.ground, .radius = 14, .border = p.hairline, .clip = true }, .{})) return;
+    const marks = if (b.overlay) |o| o == .bookmarks_dropdown or o == .bookmark_card else false;
+    const place: overlays.Place = if (marks) bookmark_door.place(b) else .{};
+    if (!overlays.begin(c, &b.overlay, b.overlay_anchor, .{ .background = p.ground, .radius = 14, .border = p.hairline, .clip = true }, place)) return;
     switch (b.overlay.?) {
         .space_icons => spaces_view.iconsPopover(b, c, p),
+        .bookmarks_dropdown, .bookmark_card => bookmark_door.overlay(b, c, p),
         else => {},
     }
     ui.end(c);
-}
-
-fn handleShortcuts(b: *Browser, c: *ui.Context) void {
-    if (c.shortcut(.{ .key = 'n', .cmd = true })) {
-        // ponytail: here until P8's command registry takes ⌘N.
-        _ = browsers.newWindow(b.kea) catch {};
-    } else if (c.shortcut(.{ .key = 't', .cmd = true, .shift = true })) {
-        b.reopen();
-    } else if (c.shortcut(.{ .key = 't', .cmd = true })) {
-        b.newTab();
-    } else if (c.shortcut(.{ .key = 'w', .cmd = true })) {
-        b.closeFront();
-    } else if (c.shortcut(.{ .key = 'l', .cmd = true })) {
-        b.edit();
-    } else if (c.shortcut(.{ .key = 'k', .cmd = true })) {
-        // ⌘K again, with ⌘ still down: one step further down the list.
-        if (b.editing and b.omni.offers.len > 0) b.stepSummon() else b.summon();
-    } else if (c.shortcut(.{ .key = 'r', .cmd = true, .shift = true })) {
-        // ponytail: here until P8's command registry takes `view.reader`, `view.hide` and find.
-        @import("../web/reader.zig").toggleReader(b);
-    } else if (c.shortcut(.{ .key = 'h', .cmd = true, .shift = true })) {
-        @import("../web/curtain_js.zig").toggleHiding(b);
-    } else if (b.veiling and c.shortcut(.{ .key = 'z', .cmd = true })) {
-        // Only while pointing: everywhere else undo is the page's.
-        @import("../web/curtain_js.zig").undoHiding(b);
-    } else if (c.shortcut(.{ .key = 'g', .cmd = true, .shift = true })) {
-        @import("../web/page_find.zig").look(b, false);
-    } else if (c.shortcut(.{ .key = 'g', .cmd = true })) {
-        @import("../web/page_find.zig").look(b, true);
-    } else if (c.shortcut(.{ .key = 'r', .cmd = true })) {
-        if (b.activeTab()) |t| t.reload();
-    } else if (c.shortcut(.{ .key = '.', .cmd = true })) {
-        if (b.activeTab()) |t| t.stopLoading();
-    } else if (c.shortcut(.{ .key = 'f', .cmd = true })) {
-        @import("../web/page_find.zig").openFind(b);
-    } else if (c.shortcut(.{ .key = 's', .cmd = true, .ctrl = true })) {
-        b.prefs.set("sidebar", !b.prefs.sidebar);
-        b.syncStageHost();
-    } else if (c.shortcut(.{ .key = 's', .cmd = true })) {
-        // ponytail: here until P8's command registry takes `view.fold`.
-        fold.toggleFold(b);
-    } else if (if (b.prefs.uses_spaces) spaceDigit(c) else null) |n| {
-        // ⌃1…⌃9, the spaces in their order, only with spaces on (`ContentView.take`).
-        b.switchSpaceIndex(n);
-    } else if (c.shortcut(.{ .key = 'b', .cmd = true, .ctrl = true })) {
-        b.marks_open = !b.marks_open;
-        b.syncStageHost();
-    } else if (c.shortcut(.{ .key = 'b', .cmd = true, .shift = true })) {
-        b.prefs.set("bookmarks_bar", !b.prefs.bookmarks_bar);
-    } else if (c.shortcut(.{ .key = 'd', .cmd = true })) {
-        if (b.activeTab()) |t| {
-            if (b.bookmarks.bookmarkFor(t.url())) |kept| {
-                b.bookmarks.remove(&.{kept.id});
-                b.announce("Bookmark removed");
-            } else if (b.bookmarks.add(t.url(), t.title()) != null) b.announce("Bookmark added");
-        }
-    } else if (c.shortcut(.{ .key = '+', .cmd = true }) or c.shortcut(.{ .key = '=', .cmd = true })) {
-        // ponytail: here until P8's command registry takes `view.zoomIn` and its kin.
-        if (b.activeTab()) |t| t.magnifyBy(1.1);
-    } else if (c.shortcut(.{ .key = '-', .cmd = true })) {
-        if (b.activeTab()) |t| t.magnifyBy(1.0 / 1.1);
-    } else if (c.shortcut(.{ .key = '0', .cmd = true })) {
-        if (b.activeTab()) |t| t.resetZoom();
-    } else if (c.shortcut(.{ .key = 'i', .cmd = true, .alt = true })) {
-        // ponytail: here until P8's command registry takes `view.inspector` and its kin.
-        @import("../web/inspector.zig").toggleInspector(b);
-    } else if (c.shortcut(.{ .key = 'j', .cmd = true, .alt = true })) {
-        @import("../web/inspector.zig").showConsole(b);
-    } else if (c.shortcut(.{ .key = 'c', .cmd = true, .alt = true })) {
-        @import("../web/inspector.zig").inspectElement(b);
-    } else if (c.shortcut(.{ .key = 'p', .cmd = true, .shift = true })) {
-        @import("../web/float.zig").toggle(b);
-    } else if (c.shortcut(.{ .key = '[', .cmd = true })) {
-        if (b.activeTab()) |t| t.goBack();
-    } else if (c.shortcut(.{ .key = ']', .cmd = true })) {
-        if (b.activeTab()) |t| t.goForward();
-    } else if (c.shortcut(.{ .key = '\t', .ctrl = true, .shift = true })) {
-        b.step(-1);
-    } else if (c.shortcut(.{ .key = '\t', .ctrl = true })) {
-        b.step(1);
-    } else if (b.overlay == null and c.shortcut(.{ .key = 0x1b })) {
-        escape(b);
-    }
-}
-
-/// Esc puts things back one at a time, in Swift's order (`ContentView.take`);
-/// what later phases bring (Peek, panels, Ubi Chat…) joins it with them.
-fn escape(b: *Browser) void {
-    if (b.editing_tab != null) return b.cancelTabEdit();
-    if (b.veiling) return @import("../web/curtain_js.zig").toggleHiding(b);
-    if (b.finder.finding) return @import("../web/page_find.zig").closeFind(b);
-    // The list first, then the field.
-    if (b.omni.picked != null) {
-        b.omni.picked = null;
-        return b.redraw();
-    }
-    const front = b.tabById(b.active_id);
-    // A new tab never sent anywhere is itself what is open: Esc takes it
-    // away, back to the tab touched last. Anything typed keeps it.
-    if (front) |blank| if (blank.isBlank() and b.omni.typed.items.len == 0) {
-        var back: ?*Tab = null;
-        for (b.tabs.items) |t| if (t != blank and (back == null or t.touched > back.?.touched)) {
-            back = t;
-        };
-        if (back) |t| {
-            b.select(t);
-            return b.close(blank);
-        }
-    };
-    if (b.editing and front != null and !front.?.isBlank()) return b.dismiss();
-    if (b.activeTab()) |t| if (t.loading) t.stopLoading();
-}
-
-fn spaceDigit(c: *ui.Context) ?usize {
-    for (0..9) |n| if (c.shortcut(.{ .key = @intCast('1' + n), .ctrl = true })) return n;
-    return null;
 }

@@ -4,9 +4,8 @@
 //! session), `browser_windows.zig` ("a tab to another window"), `pins.zig`,
 //! `groups.zig`, `spaces.zig` and `omni.zig` (guessing, the address field and
 //! the address in the tab) — whose functions are this struct's methods
-//! through the decls below. Also, for now: interim Split View
-//! (`split_right_id`, `split_fraction`, `focused_pane`, replaced in P7), the
-//! Bookmarks side panel, Find on Page and `StageHost` sync.
+//! through the decls below; `split.zig` (Split View's pairs) too. Also, for
+//! now: the Bookmarks side panel, Find on Page and `StageHost` sync.
 const std = @import("std");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;
@@ -26,7 +25,7 @@ const json = @import("../data/json.zig");
 const Uuid = json.Uuid;
 const overlays = @import("../chrome/overlays.zig");
 const room = @import("../chrome/room.zig");
-const EdgeDrag = @import("../chrome/panels.zig").EdgeDrag;
+const side_panels = @import("../chrome/side_panels.zig");
 const tabs_ops = @import("browser_tabs.zig");
 const closed_ops = @import("browser_closed.zig");
 const rows_ops = @import("browser_rows.zig");
@@ -39,12 +38,14 @@ const sleep_ops = @import("../web/sleep.zig");
 const downloads_ops = @import("../web/downloads_keep.zig");
 const handoff_ops = @import("../app/handoff.zig");
 const omni_ops = @import("omni.zig");
+const marks_ops = @import("../chrome/bookmarks/actions.zig");
+const split_ops = @import("split.zig");
+const clear_ops = @import("browser_clear.zig");
 
-pub const PaneFocus = enum { left, right };
+pub const TabSplit = split_ops.TabSplit;
 pub const TabGroup = groups_ops.TabGroup;
 pub const Ghost = closed_ops.Ghost;
 pub const Parked = spaces_ops.Parked;
-pub const Pair = rows_ops.Pair;
 pub const OpenOptions = tabs_ops.OpenOptions;
 
 pub const Browser = struct {
@@ -99,18 +100,17 @@ pub const Browser = struct {
     /// A tab being sent into the space being made, from its menu.
     after_space_created: ?u64 = null,
 
-    // Split View state (interim, P7)
-    split_right_id: ?u64 = null,
-    split_fraction: f32 = 0.5,
-    focused_pane: PaneFocus = .left,
-    /// A pair kept while not in front — restored with another tab in front —
-    /// so the session keeps it, as Swift's `splits` do whatever is in front.
-    kept_pair: ?Pair = null,
+    // Split View's pairs (model/split.zig), kept with Split View off too;
+    // and `displayedTabs`' row, made again each time it is asked for.
+    splits: std.ArrayList(TabSplit) = .empty,
+    displayed: std.ArrayList(*Tab) = .empty,
 
-    // Bookmarks side panel
-    marks_open: bool = false,
-    marks_expanded: bool = false,
-    marks_filter_buf: ui.TextBuffer = .{},
+    // The side panels (chrome/side_panels.zig): the one let out over the
+    // page (`expandedPanel`), the last one let out while it fades, a header
+    // being carried.
+    expanded_panel: ?side_panels.SidePanel = null,
+    let_out: ?side_panels.SidePanel = null,
+    header_drag: ?side_panels.HeaderDrag = null,
 
     // The address field (model/omni.zig): raised over a page (`editing`),
     // what it thinks you mean, the site in it, ⌘K's switcher, and what was
@@ -132,27 +132,47 @@ pub const Browser = struct {
     omnibox: @import("../chrome/omnibox.zig").State = .{},
     tab_field: @import("../chrome/tab_address.zig").State = .{},
 
-    // Find on page (web/page_find.zig); the interim bar's field until P8.
+    // Find on page (web/page_find.zig) and its bar (chrome/find_bar.zig).
     finder: @import("../web/page_find.zig").Find = .{},
-    find_buf: ui.TextBuffer = .{},
+    find_bar: @import("../chrome/find_bar.zig").State = .{},
 
-    // Taking things off pages (web/curtain_js.zig): pointing, and what a
-    // private tab hid on its page only.
+    // Taking things off pages (web/curtain_js.zig): pointing, what a
+    // private tab hid on its page only, and the list of what is hidden
+    // here (`reviewing`, chrome/hidden_panel.zig — set it through `setReviewing`).
     veiling: bool = false,
     passing_veils: @import("../web/curtain_js.zig").Passing = .empty,
+    reviewing: bool = false,
+    hidden_panel: @import("../chrome/hidden_panel.zig").State = .{},
 
-    // Toast
-    toast_buf: [256]u8 = undefined,
-    toast_len: usize = 0,
-    toast_until: f64 = 0,
-    /// The file a "Saved …" line is about (`announcedFile`): clicked, the
-    /// line shows it in the Finder (P8 bars, `downloads_keep.reveal`).
+    // The sheets over the window (chrome/sheet.zig), one at a time: open
+    // them with `sheet.show`. Settings (`tuning`), the bookmarks manager,
+    // History, Downloads; and the Welcome over everything (`welcoming`).
+    tuning: bool = false,
+    bookmarking: bool = false,
+    recalling: bool = false,
+    hoarding: bool = false,
+    welcoming: bool = false,
+    sheet: @import("../chrome/sheet.zig").State = .{},
+    settings: @import("../chrome/settings/frame.zig").State = .{},
+    welcome: @import("../chrome/welcome.zig").State = .{},
+    /// The bookmarks' lists, picks, card and button (chrome/bookmarks/).
+    marks_ui: @import("../chrome/bookmarks/state.zig").State = .{},
+    /// History's hunt, mode and list (chrome/history_panel.zig).
+    recall: @import("../chrome/history_panel.zig").State = .{},
+
+    // The bars (chrome/bars.zig): a line that rises from the bottom, says
+    // one thing and leaves (`announcement`, on `gpa`, until `announced_until`
+    // on `ui.clock`); the file it is about (`announcedFile`), shown in the
+    // Finder when pressed; and a page asking on the bar (`asking`).
+    announcement: ?[]u8 = null,
+    announced_until: f64 = 0,
     announced_file: ?[]u8 = null,
+    asking: ?@import("../web/dialogs.zig").Asking = null,
 
-    // Page holes from the last frame (the split divider drags against them).
+    // The page with the keys' hole from the last frame, and the stage's own
+    // state across frames (chrome/split_stage.zig).
     active_page_frame: ui.Rect = .{},
-    left_pane_frame: ui.Rect = .{},
-    right_pane_frame: ui.Rect = .{},
+    stage: @import("../chrome/split_stage.zig").State = .{},
 
     // The window (ContentView): what is open over it, the ground last
     // given to its NSWindow, the room the page leaves, an edge being pulled.
@@ -160,7 +180,7 @@ pub const Browser = struct {
     overlay_anchor: ui.Rect = .{},
     applied_ground: ?ui.Color = null,
     room: room.State = .{},
-    edge_drag: ?EdgeDrag = null,
+    edge_drag: ?side_panels.EdgeDrag = null,
     /// The strip's own state across frames (tab_bar.zig), and the tab
     /// carried along the strip or the column (tab_drag.zig).
     strip: @import("../chrome/tab_bar.zig").Strip = .{},
@@ -180,6 +200,25 @@ pub const Browser = struct {
     link_status: @import("../chrome/link_bubble.zig").Status = .{},
     /// The page in front, offered to other devices (Sharing.swift `handoffActivity`).
     handoff_activity: ?objc.Object = null,
+    /// A link's page, peeked at over this one (chrome/peek.zig), and the
+    /// layer's state; ⌃Tab's switcher (chrome/tab_switcher.zig).
+    peek_tab: ?*Tab = null,
+    peek_ui: @import("../chrome/peek.zig").State = .{},
+    switcher: @import("../chrome/tab_switcher.zig").TabSwitcher = .{},
+
+    // MARK: peek and ⌃Tab's switcher (chrome/peek.zig, chrome/tab_switcher.zig)
+    pub const peek = @import("../chrome/peek.zig").peek;
+    pub const closePeek = @import("../chrome/peek.zig").closePeek;
+    pub const keepPeek = @import("../chrome/peek.zig").keepPeek;
+    pub const switchTabs = @import("../chrome/tab_switcher.zig").switchTabs;
+    pub const commitTabSwitch = @import("../chrome/tab_switcher.zig").commitTabSwitch;
+
+    // MARK: bookmarks (chrome/bookmarks/actions.zig)
+    pub const bookmarkCurrent = marks_ops.bookmarkCurrent;
+    pub const toggleBookmarks = marks_ops.toggleBookmarks;
+    pub const pickBookmark = marks_ops.pickBookmark;
+    pub const openBookmarks = marks_ops.openBookmarks;
+    pub const pageKept = marks_ops.pageKept;
 
     // MARK: tabs (browser_tabs.zig)
     pub const displayedTabs = tabs_ops.displayedTabs;
@@ -206,13 +245,36 @@ pub const Browser = struct {
     pub const adopt = tabs_ops.adopt;
     pub const setActive = tabs_ops.setActive;
     pub const indexOf = tabs_ops.indexOf;
-    pub const inSplit = tabs_ops.inSplit;
-    pub const partnerOf = tabs_ops.partnerOf;
-    pub const detachSplit = tabs_ops.detachSplit;
+
+    // MARK: Split View (split.zig)
+    pub const splitFor = split_ops.splitFor;
+    pub const activeSplit = split_ops.activeSplit;
+    pub const inSplit = split_ops.inSplit;
+    pub const partnerOf = split_ops.partnerOf;
+    pub const standsInRow = split_ops.standsInRow;
+    pub const entry = split_ops.entry;
+    pub const canSplit = split_ops.canSplit;
+    pub const pair = split_ops.pair;
+    pub const startSplit = split_ops.startSplit;
+    pub const detachSplit = split_ops.detachSplit;
+    pub const setSplitFraction = split_ops.setSplitFraction;
+    pub const focusPane = split_ops.focusPane;
+    pub const focusPaneSide = split_ops.focusPaneSide;
+    pub const focusOtherPane = split_ops.focusOtherPane;
+    pub const openInSplit = split_ops.openInSplit;
+    pub const swapSplit = split_ops.swapSplit;
+    pub const evenSplit = split_ops.evenSplit;
+    pub const closeSplit = split_ops.closeSplit;
+    pub const fill = split_ops.fill;
+    pub const splitViewChanged = split_ops.splitViewChanged;
+
+    // MARK: tabs, again (browser_tabs.zig)
     pub const letGo = tabs_ops.letGo;
     pub const take = tabs_ops.take;
     pub const copyAddress = tabs_ops.copyAddress;
     pub const copyMarkdownLink = tabs_ops.copyMarkdownLink;
+    pub const pasteAndGo = tabs_ops.pasteAndGo;
+    pub const pauseMedia = tabs_ops.pauseMedia;
 
     // MARK: closing and coming back (browser_closed.zig)
     pub const close = closed_ops.close;
@@ -237,8 +299,6 @@ pub const Browser = struct {
     pub const restoreSession = rows_ops.restoreSession;
     pub const loadRow = rows_ops.loadRow;
     pub const showRow = rows_ops.showRow;
-    pub const currentPair = rows_ops.currentPair;
-    pub const applyPair = rows_ops.applyPair;
 
     // MARK: a tab to another window (browser_windows.zig)
     pub const moveToWindow = windows_ops.moveToWindow;
@@ -354,6 +414,8 @@ pub const Browser = struct {
             // Asked to stay out of the way: it starts that way (see Fold.swift).
             .folded = kea.prefs.sidebar and kea.prefs.side_hides,
             .omni = omni_ops.Omni.init(kea.gpa),
+            // The first window of the run, until the Welcome has been seen.
+            .welcoming = kea.browsers.items.len == 0 and !kea.prefs.welcomed,
         };
         if (record) |r| {
             var it = r.rows.map.iterator();
@@ -384,11 +446,21 @@ pub const Browser = struct {
         if (self.remembering) |t| t.browser = null;
         sleep_ops.unwatch(self);
         self.kea.fetches.unbind(self);
-        if (self.announced_file) |f| self.gpa.free(f);
+        self.hush();
+        // A page still waiting on the bar is refused, never left holding.
+        if (self.asking) |a| {
+            self.asking = null;
+            @import("../web/dialogs.zig").answer(a.ask, false, null);
+        }
+        if (self.peek_tab) |t| self.letGo(t);
+        self.peek_tab = null;
         if (self.stage_host) |sh| sh.destroy();
         if (self.lights) |l| l.drop();
         for (self.tabs.items) |t| t.destroy();
         self.tabs.deinit(self.gpa);
+        self.splits.deinit(self.gpa);
+        self.displayed.deinit(self.gpa);
+        self.stage.deinit(self.gpa);
         for (self.parked.values()) |*row| row.deinit(self.gpa);
         self.parked.deinit(self.gpa);
         for (self.ghosts.items) |g| g.deinit(self.gpa);
@@ -401,18 +473,23 @@ pub const Browser = struct {
             self.gpa.free(v);
         }
         self.record_rows.deinit(self.gpa);
-        self.marks_filter_buf.deinit();
         self.omni.deinit(self.gpa);
         self.tab_draft.deinit();
         self.omnibox.deinit(self.gpa);
-        self.find_buf.deinit();
+        self.settings.deinit(self.gpa);
+        self.find_bar.deinit();
+        self.recall.deinit();
         self.finder.deinit(self.gpa);
         @import("../web/curtain_js.zig").deinit(self);
         self.strip.deinit(self.gpa);
         @import("../chrome/fold.zig").stop(self);
         self.column.deinit(self.gpa);
         self.spaces_ui.deinit();
+        // The manager going with its window: what it did can't be undone elsewhere.
+        if (self.marks_ui.manager_seen) self.bookmarks.stopUndo();
+        self.marks_ui.deinit(self.gpa);
         self.link_status.deinit(self.gpa);
+        self.switcher.deinit(self.gpa);
         handoff_ops.forget(self);
         self.gpa.destroy(self);
     }
@@ -445,14 +522,13 @@ pub const Browser = struct {
         const self: *Browser = @ptrCast(@alignCast(ctx orelse return));
         // The column moved or changed sides: the lights follow it.
         if (self.lights) |l| l.follow();
-        if (holes.len >= 1) {
-            self.left_pane_frame = holes[0];
-            if (self.focused_pane == .left or self.split_right_id == null) self.active_page_frame = holes[0];
-        }
-        if (holes.len >= 2) {
-            self.right_pane_frame = holes[1];
-            if (self.focused_pane == .right) self.active_page_frame = holes[1];
-        }
+        // The panes' holes come first, in the stage's order.
+        const panes = self.stage.shown();
+        for (panes, 0..) |pane, i| if (i < holes.len and pane.tab == self.active_id) {
+            self.active_page_frame = holes[i];
+            return;
+        };
+        if (holes.len >= 1) self.active_page_frame = holes[0];
     }
 
     pub fn redraw(self: *Browser) void {
@@ -461,27 +537,26 @@ pub const Browser = struct {
         if (w.surface) |s| s.requestFrame();
     }
 
+    /// Each pane's page into its slot, in the order the stage last drew
+    /// their holes (chrome/split_stage.zig): none for a page out in the
+    /// floating window (`PaneStage.page`).
     pub fn syncStageHost(self: *Browser) void {
         const sh = self.stage_host orelse return;
-        const primary = self.tabById(self.active_id);
-        const secondary = if (self.prefs.split_view and self.split_right_id != null) self.tabById(self.split_right_id.?) else null;
-        // The page's corners are the card's (`Page(corner: cards ? cardRadius : 0)`);
-        // a page out in the floating window is that window's (`PaneStage.page`).
-        const framed = self.prefs.sidebar;
-        const page = struct {
-            fn of(t: ?*Tab) ?objc.Object {
-                const tab = t orelse return null;
-                return if (tab.floating) null else tab.web;
-            }
-        }.of;
-        sh.setPanes(page(primary), page(secondary), framed);
+        // Two panes and one leaving (split_stage.State.panes): with Peek's, nanoui's 4 holes.
+        var pages: [3]?objc.Object = .{ null, null, null };
+        var alphas: [3]f32 = .{ 1, 1, 1 };
+        const panes = self.stage.shown();
+        for (panes, 0..) |pane, i| {
+            alphas[i] = pane.alpha;
+            const t = self.tabById(pane.tab) orelse continue;
+            pages[i] = if (t.floating) null else t.web;
+        }
+        // The page's corners are the card's (`Page(corner: cards ? cardRadius : 0)`).
+        sh.setPanes(pages[0..panes.len], alphas[0..panes.len], self.prefs.sidebar);
     }
 
-    /// The page with the keys: the focused pane's.
+    /// The page with the keys (`active`).
     pub fn activeTab(self: *Browser) ?*Tab {
-        if (self.focused_pane == .right) {
-            if (self.split_right_id) |rid| if (self.tabById(rid)) |rt| return rt;
-        }
         return self.tabById(self.active_id);
     }
 
@@ -490,55 +565,33 @@ pub const Browser = struct {
         return null;
     }
 
-    /// Interim Split View: `right_id` beside the tab in front, next to it in
-    /// the row, as `pair` puts it (P7 ports `TabSplit`).
-    pub fn pairSplit(self: *Browser, right_id: u64) void {
-        if (!self.prefs.split_view or right_id == self.active_id) return;
-        const right = self.tabById(right_id) orelse return;
-        const from = self.indexOf(right).?;
-        _ = self.tabs.orderedRemove(from);
-        const left = self.indexOf(self.tabById(self.active_id) orelse return).?;
-        self.tabs.insert(self.gpa, left + 1, right) catch @panic("OOM");
-        self.split_right_id = right_id;
-        self.kept_pair = null;
-        self.split_fraction = 0.5;
-        self.rememberSession();
-        self.redraw();
-    }
-
-    pub fn swapSplit(self: *Browser) void {
-        const rid = self.split_right_id orelse return;
-        self.split_right_id = self.active_id;
-        self.active_id = rid;
-        self.split_fraction = 1.0 - self.split_fraction;
-        if (self.tabById(rid)) |front| @import("../web/dialogs.zig").presentHeld(front);
-        self.redraw();
-    }
-
-    pub fn evenSplit(self: *Browser) void {
-        self.split_fraction = 0.5;
-        self.redraw();
-    }
-
-    pub fn closeSplit(self: *Browser) void {
-        self.split_right_id = null;
-        self.focused_pane = .left;
-        self.redraw();
-    }
-
     pub fn announce(self: *Browser, msg: []const u8) void {
         self.announceFile(msg, null);
     }
 
-    /// `announce(_:file:)`: a line about a file stays long enough to be clicked.
+    /// `announce(_:file:)`: a line about a file stays long enough to be
+    /// clicked; VoiceOver hears it too.
     pub fn announceFile(self: *Browser, msg: []const u8, file: ?[]const u8) void {
-        self.toast_len = @min(msg.len, self.toast_buf.len);
-        @memcpy(self.toast_buf[0..self.toast_len], msg[0..self.toast_len]);
+        const text = self.gpa.dupe(u8, msg) catch return;
         const copy = if (file) |f| self.gpa.dupe(u8, f) catch null else null;
-        if (self.announced_file) |old| self.gpa.free(old);
+        self.hush();
+        self.announcement = text;
         self.announced_file = copy;
-        self.toast_until = ui.clock.now() + @as(f64, if (file == null) 1.7 else 4);
+        self.announced_until = ui.clock.now() + @as(f64, if (file == null) 1.7 else 4);
         if (self.window) |w| nanoui.a11y.announce(w.nswindow, msg);
         self.redraw();
     }
+
+    /// The announcement gone, and its file.
+    pub fn hush(self: *Browser) void {
+        if (self.announcement) |old| self.gpa.free(old);
+        if (self.announced_file) |old| self.gpa.free(old);
+        self.announcement = null;
+        self.announced_file = null;
+    }
+
+    // MARK: what is kept, and getting rid of it (browser_clear.zig)
+    pub const clearHistory = clear_ops.clearHistory;
+    pub const clearSites = clear_ops.clearSites;
+    pub const clearCache = clear_ops.clearCache;
 };

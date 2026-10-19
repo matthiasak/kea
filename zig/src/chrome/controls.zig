@@ -189,7 +189,7 @@ pub fn steps(c: *ui.Context, p: *const Palette, stops: []const f64, value: *f64,
         changed = true;
         c.changed = true;
     }
-    ui.text(c, now, .{ .size = 11.5, .color = p.ink });
+    ui.text(c, now, .{ .size = 11.5, .color = p.ink, .tabular = true });
     c.end();
     if (step(c, p, "plus", "Add", above, value)) changed = true;
     return changed;

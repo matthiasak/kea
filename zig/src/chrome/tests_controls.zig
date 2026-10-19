@@ -221,7 +221,8 @@ test "presence returns null after a hidden item fully leaves" {
     try testing.expect(s.progress == null);
 }
 
-test "overlay closes on outside press and Esc" {
+// Esc closing it is the key monitor's (app/keys.zig `escape`, ui-test site card).
+test "overlay closes on outside press" {
     var s: S = .{ .which = .overlay };
     var t: ui.Tester = undefined;
     try start(&t, &s);
@@ -236,11 +237,6 @@ test "overlay closes on outside press and Esc" {
     t.click(60, 90);
     try testing.expect(s.open != null);
     t.click(300, 300);
-    try testing.expect(s.open == null);
-    t.click(50, 35);
-    t.settle(1);
-    try testing.expect(s.open != null);
-    try testing.expect(t.shortcut(.{ .key = ui.Shortcut.escape }));
     try testing.expect(s.open == null);
 }
 

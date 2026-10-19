@@ -9,6 +9,7 @@ const url = @import("url.zig");
 const address = @import("../model/address.zig");
 const Store = @import("store.zig").Store;
 const Uuid = json.Uuid;
+const undo_ops = @import("bookmarks_undo.zig");
 
 pub const Bookmark = struct {
     id: Uuid,
@@ -44,7 +45,7 @@ pub const Bookmark = struct {
         return out;
     }
 
-    fn kids(b: Bookmark) []Bookmark {
+    pub fn kids(b: Bookmark) []Bookmark {
         return b.children orelse &.{};
     }
 };
@@ -64,6 +65,8 @@ pub const Bookmarks = struct {
     kept: std.StringHashMapUnmanaged(void) = .empty,
     /// Bumped on every change.
     revision: u64 = 0,
+    /// Changes undoable while the manager is open (bookmarks_undo.zig).
+    history: undo_ops.History = .{},
 
     pub const file = "bookmarks.json";
     /// Which browser filled the empty top level, the first time.
@@ -82,6 +85,7 @@ pub const Bookmarks = struct {
     pub fn deinit(self: *Bookmarks) void {
         self.kept.deinit(self.gpa);
         self.arena.deinit();
+        self.history.deinit(self.gpa);
     }
 
     // MARK: reading
@@ -400,7 +404,8 @@ pub const Bookmarks = struct {
 
     /// The tree swapped in and saved, changed or not (imports).
     pub fn set(self: *Bookmarks, w: *Work) void {
-        self.arena.deinit();
+        // Nothing changed (an import bringing nothing new): nothing to undo.
+        if (same(w.roots, self.roots)) self.arena.deinit() else undo_ops.retire(self);
         self.arena = w.arena;
         self.roots = w.roots;
         self.revision +%= 1;
@@ -425,6 +430,10 @@ pub const Bookmarks = struct {
     pub const takeNoting = merge.takeNoting;
     pub const withdraw = merge.withdraw;
     pub const @"union" = merge.@"union";
+    pub const undo = undo_ops.undo;
+    pub const redo = undo_ops.redo;
+    pub const startUndo = undo_ops.start;
+    pub const stopUndo = undo_ops.stop;
 };
 
 // ponytail: id sets are slices scanned linearly, O(n·m); a hash set if a
@@ -549,4 +558,5 @@ fn siteOf(b: Bookmark) []const u8 {
 
 test {
     _ = @import("bookmarks_tests.zig");
+    _ = @import("bookmarks_file.zig");
 }

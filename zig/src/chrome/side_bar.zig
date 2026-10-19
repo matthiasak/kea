@@ -14,7 +14,7 @@ const metrics = @import("../design/metrics.zig");
 const motion = @import("../design/motion.zig");
 const controls = @import("controls.zig");
 const lights = @import("lights.zig");
-const panels = @import("panels.zig");
+const side_panels = @import("side_panels.zig");
 const tab_bar = @import("tab_bar.zig");
 const pin_grid = @import("pin_grid.zig");
 const side_rows = @import("side_rows.zig");
@@ -147,7 +147,7 @@ pub fn sideBar(b: *Browser, c: *ui.Context, p: *const Palette, on_frame: bool, x
 
     const inner_x: f32 = if (on_right) 0 else w - 1;
     if (!on_frame) _ = c.leaf(.{ .absolute = true, .offset = .{ .x = inner_x }, .width = px(1), .height = .fill, .background = p.hairline }, .none, null);
-    panels.edgeHandle(b, c, p, "side_width", metrics.side_min, metrics.side_max, metrics.side, !on_right, if (on_right) 0 else w - 9);
+    side_panels.edgeHandle(b, c, p, "side_width", metrics.side_min, metrics.side_max, metrics.side, !on_right, if (on_right) 0 else w - 9);
 }
 
 /// The column's ground: the window's beside the card, the page's otherwise,
@@ -179,8 +179,12 @@ fn rowsEnd(b: *Browser, c: *ui.Context) f32 {
         for (b.tab_groups.items) |g| rows += (b.visibleTabsIn(arena, g) catch @panic("OOM")).len;
         headings = @as(f32, @floatFromInt(b.tab_groups.items.len)) * (groups_view.height + gap);
     }
-    // ponytail: a pair is one place until P7's SplitTabItem makes it two lines.
-    const loose_h = @as(f32, @floatFromInt(rows)) * (row + gap) + headings;
+    // A pair is two lines (SplitTabItem): a second row in its one place.
+    var pairs: usize = 0;
+    if (b.prefs.split_view) for (b.splits.items) |pair| {
+        if (b.tabById(pair.left())) |t| pairs += @intFromBool(t.pin == null);
+    };
+    const loose_h = @as(f32, @floatFromInt(rows)) * (row + gap) + @as(f32, @floatFromInt(pairs)) * row + headings;
     return metrics.strip + pin_block + list_block + loose_h + row + 8;
 }
 
@@ -337,14 +341,12 @@ fn newTabRow(b: *Browser, c: *ui.Context, p: *const Palette, interactive: bool) 
     if (interactive and it.clicked) b.newTab();
 }
 
-/// `SideFoot`: the space's door, bookmarks; never wider than the column.
+/// `SideFoot`: the space's door, bookmarks, downloads; never wider than the column.
 fn foot(b: *Browser, c: *ui.Context, p: *const Palette) void {
     _ = c.open(.{ .absolute = true, .offset = .{ .y = c.size.h - foot_height }, .direction = .row, .gap = 2, .width = .fill, .height = px(26), .padding = .xy(10, 0), .align_items = .center }, "side-foot");
     defer c.end();
     if (b.prefs.uses_spaces) spaces_view.spaceDot(b, c, p);
-    // ponytail: the bookmarks door opens the side panel until P8's BookmarkDoor and its dropdown.
-    if (controls.door(c, p, "book", .{ .on = b.marks_open, .help = "Bookmarks   ⌃⌘B" }).clicked) {
-        b.marks_open = !b.marks_open;
-        b.syncStageHost();
-    }
+    @import("bookmarks/door.zig").door(b, c, p, .trailing);
+    // Only while a download is running, and a moment after.
+    @import("fetch_door.zig").door(b, c, p, "foot");
 }

@@ -94,11 +94,11 @@ fn retitleNow(t: *Tab) void {
 }
 
 /// `onKeys`: with two pages up, the keys going to the other one make it
-/// the focused page (interim pair until P7's `focusPane`).
+/// the focused page.
 pub fn pageTookKeys(b: *Browser, t: *Tab) void {
-    if (!b.inSplit(t) or b.activeTab() == t) return;
-    b.focused_pane = if (b.split_right_id == t.id) .right else .left;
-    b.redraw();
+    const p = b.activeSplit() orelse return;
+    if (!p.contains(t.id) or b.active_id == t.id) return;
+    b.focusPane(t);
 }
 
 var zoom_shown: i64 = -1;

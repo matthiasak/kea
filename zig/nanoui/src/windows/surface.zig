@@ -139,6 +139,7 @@ pub const Surface = struct {
             .resize_up_down => 32645,
             .open_hand, .closed_hand => 32646,
             .not_allowed => 32648,
+            .crosshair => 32515,
         };
         _ = w.SetCursor(w.LoadCursorW(null, id));
     }

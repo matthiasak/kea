@@ -147,7 +147,7 @@ fn blankTarget(h: *Harness) !void {
 
 /// A left click at `x`, `y` of the view (top left, points), sent to it as
 /// AppKit would.
-fn clickAt(view: objc.Object, x: f64, y: f64, flags: objc.NSUInteger) void {
+pub fn clickAt(view: objc.Object, x: f64, y: f64, flags: objc.NSUInteger) void {
     const window = objc.msg(?objc.Object, view, "window", .{}) orelse return;
     const at = objc.msg(objc.CGPoint, view, "convertPoint:toView:", .{ objc.CGPoint{ .x = x, .y = y }, @as(?objc.Object, null) });
     const number = objc.msg(objc.NSInteger, window, "windowNumber", .{});

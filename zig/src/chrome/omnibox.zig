@@ -58,8 +58,11 @@ pub const State = struct {
 };
 
 pub const Options = struct {
-    /// Sized to a pane of a split (P7) rather than to the window.
+    /// Sized to a pane of a split rather than to the window.
     fitted: bool = false,
+    /// A kea fact under the field on a blank page; a pair's blank page
+    /// lists the open tabs there instead (`OpenTabs`).
+    facts: bool = true,
 };
 
 /// The field over `area`, the page's part of the window.
@@ -94,7 +97,7 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette, area: ui.Rect, opts:
     defer ui.end(c);
     if (st.over) scrim(b, c, p, area);
     field(b, c, p, st, x, y, w, showing);
-    if (!st.over and b.prefs.kea_facts) kea_fact.view(b, c, p, .{ .w = area.w, .h = area.h }, y, 1);
+    if (!st.over and opts.facts and b.prefs.kea_facts) kea_fact.view(b, c, p, .{ .w = area.w, .h = area.h }, y, 1);
     if (omnibox_list.list(b, c, p, x, y + field_height + 8, w)) |click| switch (click) {
         .lock => _ = b.lockSiteOffer(),
         .offer => |i| if (i < b.omni.offers.len) b.takeOffer(b.omni.offers[i]),

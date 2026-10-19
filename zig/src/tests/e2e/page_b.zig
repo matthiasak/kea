@@ -94,7 +94,7 @@ fn littleKeeps(h: *Harness) !void {
     try h.expect(tab.web == page and std.mem.eql(u8, tab.title(), "Little"), "the page was loaded again", .{});
     h.frame();
     const sh = b.stage_host orelse return h.fail("no stage", .{});
-    try h.expect(sh.slots[0].webview == page, "the window's stage doesn't hold the kept page", .{});
+    try h.expect(sh.slots.items[0].webview == page, "the window's stage doesn't hold the kept page", .{});
     try h.expect(objc.msg(?objc.Object, page, "superview", .{}) == sh.stage_view, "the kept page isn't in the window", .{});
 }
 
@@ -144,19 +144,19 @@ fn floats(h: *Harness) !void {
     h.waitFor(t, lifted, 5, "the page to float") catch return h.fail("floating {}, panel {}", .{ t.floating, app.float_panel.currentPanel() != null });
     const p = app.float_panel.currentPanel().?;
     const host = p.host orelse return h.fail("the panel has no stage", .{});
-    try h.expect(host.slots[0].webview == page, "the panel's stage doesn't hold the page", .{});
+    try h.expect(host.slots.items[0].webview == page, "the panel's stage doesn't hold the page", .{});
     try h.expect(objc.msg(?objc.Object, page, "superview", .{}) == host.stage_view, "the page isn't in the panel", .{});
     try h.expect(!objc.msg(objc.BOOL, p.window.nswindow, "isVisible", .{}), "a hidden run's panel is on screen", .{});
     h.frame();
     const sh = b.stage_host orelse return h.fail("no stage", .{});
-    try h.expect(sh.slots[0].webview != page, "the window's stage still holds the floating page", .{});
+    try h.expect(sh.slots.items[0].webview != page, "the window's stage still holds the floating page", .{});
     try h.expect(std.mem.eql(u8, try web.eval(h, t, "document.documentElement.classList.contains('kea-floating')"), "1"), "everything but the video is still there", .{});
 
     // ⇧⌘P again: home.
     app.float.toggle(b);
     try h.waitFor(t, landed, 5, "the page to land");
     h.frame();
-    try h.expect(sh.slots[0].webview == page, "the window's stage didn't take the page back", .{});
+    try h.expect(sh.slots.items[0].webview == page, "the window's stage didn't take the page back", .{});
     try h.expect(objc.msg(?objc.Object, page, "superview", .{}) == sh.stage_view, "the page isn't back in the window", .{});
     h.pump(1.2);
     try h.expect(std.mem.eql(u8, try web.eval(h, t, "document.documentElement.classList.contains('kea-floating')"), "0"), "the page wasn't put back as it was", .{});

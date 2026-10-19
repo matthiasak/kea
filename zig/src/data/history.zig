@@ -45,6 +45,9 @@ pub const History = struct {
     saving: ?*Pending = null,
     /// `recent()`; its addresses are owned here.
     recent_cache: ?[]Trace = null,
+    /// Goes up with every change: lists drawn from the history (the
+    /// History panel) know when to work themselves out again.
+    generation: u64 = 0,
 
     /// In place, since a save in flight points back here; loads the file.
     pub fn init(self: *History, gpa: std.mem.Allocator, store: *Store) void {
@@ -77,6 +80,7 @@ pub const History = struct {
 
     /// Swift's `visits` `didSet`.
     fn changed(self: *History) void {
+        self.generation +%= 1;
         const cache = self.recent_cache orelse return;
         for (cache) |t| self.gpa.free(t.address);
         self.gpa.free(cache);

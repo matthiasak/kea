@@ -14,7 +14,7 @@ pub const Case = struct {
     run: *const fn (*Harness) anyerror!void,
 };
 
-const cases = @import("smoke.zig").cases ++ @import("windows.zig").cases ++ @import("favicons.zig").cases ++ @import("web.zig").cases ++ @import("links.zig").cases ++ @import("downloads.zig").cases ++ @import("page_features.zig").cases ++ @import("page_b.zig").cases;
+const cases = @import("smoke.zig").cases ++ @import("windows.zig").cases ++ @import("favicons.zig").cases ++ @import("web.zig").cases ++ @import("links.zig").cases ++ @import("downloads.zig").cases ++ @import("page_features.zig").cases ++ @import("page_b.zig").cases ++ @import("side_panels.zig").cases ++ @import("peek_switch.zig").cases ++ @import("split.zig").cases ++ @import("find_bar.zig").cases ++ @import("menus.zig").cases;
 
 pub const Harness = struct {
     gpa: std.mem.Allocator,
@@ -35,7 +35,12 @@ pub const Harness = struct {
             .scheme_handler = h.handler,
         });
         h.kea = k;
+        // As if launched before: the Welcome isn't what a case is about.
+        k.prefs.set("welcomed", true);
         const b = try k.newBrowser();
+        // The menu bar and the key monitor, as the app installs them.
+        app.menus.install(k);
+        app.keys.install(k);
         h.frame();
         return b;
     }
@@ -81,22 +86,32 @@ pub const Harness = struct {
         if (!ok) return h.fail(fmt, args);
     }
 
-    /// Sends a key equivalent to the window's view, as AppKit would on a
-    /// key press (`key` is the character, `code` its virtual key code).
+    /// A key pressed in the case's window, as AppKit has it: through the
+    /// app (`sendEvent:`), so the key monitor sees it first and the menu
+    /// bar's key equivalents next. `key` is the character, `code` its
+    /// virtual key code.
     pub fn press(h: *Harness, key: []const u8, code: u16, cmd: bool, ctrl: bool) void {
-        const pool = objc.Pool.push();
-        defer pool.pop();
-        const w = h.browser().window orelse return;
-        const s = w.surface orelse return;
         var flags: objc.NSUInteger = 0;
         if (cmd) flags |= 1 << 20;
         if (ctrl) flags |= 1 << 18;
+        h.send(10, key, code, flags);
+    }
+
+    /// An `NSEvent` of `kind` (10 key down, 12 flags changed) for the
+    /// case's window, sent through the app.
+    pub fn send(h: *Harness, kind: objc.NSUInteger, key: []const u8, code: u16, flags: objc.NSUInteger) void {
+        const pool = objc.Pool.push();
+        defer pool.pop();
+        const w = h.browser().window orelse return;
         const ev = objc.msg(?objc.Object, objc.class("NSEvent"), "keyEventWithType:location:modifierFlags:timestamp:windowNumber:context:characters:charactersIgnoringModifiers:isARepeat:keyCode:", .{
-            @as(objc.NSUInteger, 10), objc.CGPoint{}, flags, @as(f64, 0),
+            kind,                                                        objc.CGPoint{}, flags, ui.clock.now(),
             objc.msg(objc.NSInteger, w.nswindow, "windowNumber", .{}), @as(?objc.Object, null),
             objc.nsString(key), objc.nsString(key), objc.NO, code,
         }) orelse return;
-        _ = objc.msg(objc.BOOL, s.nsview, "performKeyEquivalent:", .{ev});
+        objc.msg(void, ui_app.nsapp, "sendEvent:", .{ev});
+        // Handed to the page first: AppKit offers a key equivalent to the
+        // key window, which a hidden one never is, so it is offered here.
+        if (kind == 10 and app.keys.handedToPage(ev)) _ = objc.msg(objc.BOOL, w.nswindow, "performKeyEquivalent:", .{ev});
     }
 
     /// The contents of `name` in the case's root, or null.
@@ -134,6 +149,8 @@ pub fn main(init: std.process.Init) !void {
         var h: Harness = .{ .gpa = gpa, .temp = try app.Temp.init(gpa), .handler = handler, .http = http };
         const result = case.run(&h);
         h.quit();
+        // A surface closed with a frame on its way is freed by that frame.
+        nanoui.runFor(0.01);
         h.temp.deinit(gpa);
         if (result) |_| {
             std.debug.print("ok   {s}\n", .{case.name});

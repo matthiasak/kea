@@ -134,34 +134,45 @@ pub fn listen() !u16 {
     return std.mem.bigToNative(u16, addr.port);
 }
 
+/// A thread per connection: WebKit may hold one open without asking
+/// anything (a link click it was told to cancel), and the next must not
+/// wait behind it.
 fn serve(fd: c_int) void {
     while (true) {
         const client = sock.accept(fd, null, null);
         if (client < 0) continue;
-        defer _ = sock.close(client);
-        var req: [4096]u8 = undefined;
-        const n = sock.read(client, &req, req.len);
-        if (n <= 0) continue;
-        // "GET <path> HTTP/1.1"
-        var parts = std.mem.splitScalar(u8, req[0..@intCast(n)], ' ');
-        _ = parts.next();
-        const path = parts.next() orelse "/";
-        // WebKit won't download from a custom scheme: `/download?name=N`
-        // is an http attachment here (the plan's P5.8 fallback).
-        const download_route = "/download?name=";
-        if (std.mem.startsWith(u8, path, download_route)) {
-            var dl_head_buf: [512]u8 = undefined;
-            const dl_head = std.fmt.bufPrint(&dl_head_buf, "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Disposition: attachment; filename={s}\r\nContent-Length: 4096\r\nConnection: close\r\n\r\n", .{path[download_route.len..]}) catch continue;
-            const file: [4096]u8 = @splat('k');
-            _ = sock.write(client, dl_head.ptr, dl_head.len);
-            _ = sock.write(client, &file, file.len);
+        const th = std.Thread.spawn(.{}, answer, .{client}) catch {
+            _ = sock.close(client);
             continue;
-        }
-        var body_buf: [1024]u8 = undefined;
-        const body = std.fmt.bufPrint(&body_buf, "<html><head><title>Local {s}</title></head><body>{s}</body></html>", .{ path, path }) catch continue;
-        var head_buf: [256]u8 = undefined;
-        const head = std.fmt.bufPrint(&head_buf, "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {d}\r\nConnection: close\r\n\r\n", .{body.len}) catch continue;
-        _ = sock.write(client, head.ptr, head.len);
-        _ = sock.write(client, body.ptr, body.len);
+        };
+        th.detach();
     }
+}
+
+fn answer(client: c_int) void {
+    defer _ = sock.close(client);
+    var req: [4096]u8 = undefined;
+    const n = sock.read(client, &req, req.len);
+    if (n <= 0) return;
+    // "GET <path> HTTP/1.1"
+    var parts = std.mem.splitScalar(u8, req[0..@intCast(n)], ' ');
+    _ = parts.next();
+    const path = parts.next() orelse "/";
+    // WebKit won't download from a custom scheme: `/download?name=N`
+    // is an http attachment here (the plan's P5.8 fallback).
+    const download_route = "/download?name=";
+    if (std.mem.startsWith(u8, path, download_route)) {
+        var dl_head_buf: [512]u8 = undefined;
+        const dl_head = std.fmt.bufPrint(&dl_head_buf, "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Disposition: attachment; filename={s}\r\nContent-Length: 4096\r\nConnection: close\r\n\r\n", .{path[download_route.len..]}) catch return;
+        const file: [4096]u8 = @splat('k');
+        _ = sock.write(client, dl_head.ptr, dl_head.len);
+        _ = sock.write(client, &file, file.len);
+        return;
+    }
+    var body_buf: [1024]u8 = undefined;
+    const body = std.fmt.bufPrint(&body_buf, "<html><head><title>Local {s}</title></head><body>{s}</body></html>", .{ path, path }) catch return;
+    var head_buf: [256]u8 = undefined;
+    const head = std.fmt.bufPrint(&head_buf, "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {d}\r\nConnection: close\r\n\r\n", .{body.len}) catch return;
+    _ = sock.write(client, head.ptr, head.len);
+    _ = sock.write(client, body.ptr, body.len);
 }

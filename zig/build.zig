@@ -14,6 +14,9 @@ const frameworks = [_][]const u8{
     "Security",
     "SecurityInterface",
     "UserNotifications",
+    "SystemConfiguration",
+    "AuthenticationServices",
+    "LocalAuthentication",
 };
 
 fn linkMacFrameworks(mod: *std.Build.Module, b: *std.Build, target: std.Build.ResolvedTarget) void {
@@ -26,6 +29,7 @@ fn linkMacFrameworks(mod: *std.Build.Module, b: *std.Build, target: std.Build.Re
     }
     for (frameworks) |f| mod.linkFramework(f, .{});
     mod.linkSystemLibrary("objc", .{});
+    mod.linkSystemLibrary("sqlite3", .{});
 }
 
 fn appModule(b: *std.Build, root: []const u8, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, imports: []const std.Build.Module.Import) *std.Build.Module {

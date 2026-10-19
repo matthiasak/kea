@@ -37,16 +37,14 @@ pub const key = "kea.overlay";
 /// after all else; true when there is one, then the caller builds its
 /// content and calls `ui.end`. `style` is the box's own (size, fill,
 /// radius, shadow); its place comes from `anchor` (the opener's rect,
-/// a press on which is left to the opener). A press outside it or Esc
-/// sets `open` to null.
+/// a press on which is left to the opener). A press outside it sets
+/// `open` to null; so does Esc, from the key monitor (app/keys.zig).
 pub fn begin(c: *ui.Context, open: *?Overlay, anchor: ui.Rect, style: ui.Style, place: Place) bool {
     if (open.* == null) return false;
     const id = c.peekId(key);
     const last = c.rects.get(id);
     const m = c.input.mouse;
-    if (c.shortcut(.{ .key = ui.Shortcut.escape }) or
-        (c.input.pressed and last != null and !last.?.contains(m) and !anchor.contains(m)))
-    {
+    if (c.input.pressed and last != null and !last.?.contains(m) and !anchor.contains(m)) {
         open.* = null;
         c.changed = true;
         return false;

@@ -178,6 +178,7 @@ pub const Surface = struct {
             .open_hand => "grab",
             .closed_hand => "grabbing",
             .not_allowed => "not-allowed",
+            .crosshair => "crosshair",
         };
         g.gdk_window_set_cursor(win, g.gdk_cursor_new_from_name(g.gdk_display_get_default(), name));
     }

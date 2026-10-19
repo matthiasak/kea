@@ -23,7 +23,62 @@ const states = [_]State{
     .{ .name = "p6-site-card", .opts = .{ .sidebar = false, .tabs = 2 }, .setup = siteCard },
     .{ .name = "p6-omnibox-list", .opts = .{ .sidebar = false, .tabs = 2 }, .setup = omniboxList },
     .{ .name = "p6-site-chip", .opts = .{ .sidebar = false, .tabs = 2 }, .setup = siteChip },
+    .{ .name = "p8-side-panel", .opts = .{ .sidebar = true, .tabs = 2 }, .setup = sidePanel },
+    .{ .name = "p7-split", .opts = .{ .sidebar = true, .tabs = 2 }, .setup = splitPair },
+    .{ .name = "p7-peek", .opts = .{ .sidebar = true, .tabs = 2 }, .setup = peekOpen },
+    .{ .name = "p7-switcher", .opts = .{ .sidebar = true, .tabs = 7 }, .setup = switcherUp },
+    .{ .name = "p8-settings-general", .opts = .{ .sidebar = true, .tabs = 2 }, .setup = settingsOn(.general) },
+    .{ .name = "p8-settings-tabs", .opts = .{ .sidebar = true, .tabs = 2 }, .setup = settingsOn(.tabs) },
+    .{ .name = "p8-settings-shortcuts", .opts = .{ .sidebar = true, .tabs = 2 }, .setup = settingsOn(.shortcuts) },
+    .{ .name = "p8-settings-downloads", .opts = .{ .sidebar = true, .tabs = 2 }, .setup = settingsOn(.downloads) },
+    .{ .name = "p8-settings-privacy", .opts = .{ .sidebar = true, .tabs = 2 }, .setup = settingsOn(.privacy) },
+    .{ .name = "p8-settings-about", .opts = .{ .sidebar = true, .tabs = 2 }, .setup = settingsOn(.about) },
+    .{ .name = "p8-welcome", .opts = .{ .sidebar = true, .welcome = true } },
+    .{ .name = "p8-history", .opts = .{ .sidebar = true, .tabs = 2 }, .setup = @import("snapshots_recall.zig").history },
+    .{ .name = "p8-downloads", .opts = .{ .sidebar = true, .tabs = 2 }, .setup = @import("snapshots_recall.zig").downloads },
+    .{ .name = "p8-find", .opts = .{ .sidebar = false, .tabs = 2 }, .setup = @import("snapshots_recall.zig").find },
+    .{ .name = "p8-bars", .opts = .{ .sidebar = false, .tabs = 2 }, .setup = @import("snapshots_recall.zig").bars },
+    .{ .name = "p8-bookmarks-manager", .opts = .{ .sidebar = true, .tabs = 2 }, .setup = @import("snapshots_bookmarks.zig").manager },
+    .{ .name = "p8-bookmarks-bar", .opts = .{ .sidebar = false, .tabs = 2 }, .setup = @import("snapshots_bookmarks.zig").bar },
 };
+
+/// Settings open on `page`.
+fn settingsOn(comptime page: @import("kea").settings.Page) *const fn (*Fixture) void {
+    return struct {
+        fn setup(f: *Fixture) void {
+            @import("kea").settings.open(f.browser, page);
+        }
+    }.setup;
+}
+
+/// Split View on: the two opened tabs a pair, the right with the keys.
+fn splitPair(f: *Fixture) void {
+    const b = f.browser;
+    b.prefs.set("split_view", true);
+    b.select(b.tabs.items[1]);
+    b.pair(b.tabs.items[2], b.tabs.items[1], false);
+}
+
+/// A page in front, and a link of it peeked at over it.
+fn peekOpen(f: *Fixture) void {
+    const b = f.browser;
+    b.select(b.tabs.items[1]);
+    b.peek("https://www.example.com/", b.activeTab().?);
+}
+
+/// ⌃Tab held: the switcher's eight cards, the tab left last picked.
+fn switcherUp(f: *Fixture) void {
+    f.browser.select(f.browser.tabs.items[1]);
+    _ = f.press("\t", 48, .{ .ctrl = true });
+    f.tester.advance(0.2);
+}
+
+/// The bookmarks' column, on the side away from the tabs, with two kept.
+fn sidePanel(f: *Fixture) void {
+    _ = f.kea.bookmarks.add("https://ziglang.org/", "Zig");
+    _ = f.kea.bookmarks.add("https://www.example.com/", "Example Domain");
+    f.kea.prefs.set("bookmarks_sidebar", true);
+}
 
 /// Three squares, a group of two named "Reading", three loose rows.
 fn pinsAndGroups(f: *Fixture) void {

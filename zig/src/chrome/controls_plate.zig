@@ -69,7 +69,7 @@ pub fn line(c: *ui.Context, p: *const Palette, title: []const u8, detail: ?[]con
     ui.row(c, .{ .gap = 16, .width = .fill, .padding = .xy(14, 11), .align_items = .center });
     ui.column(c, .{ .gap = 3, .grow = 1, .min_width = 0 });
     ui.text(c, title, .{ .size = 13, .color = p.ink });
-    if (detail) |d| ui.text(c, d, .{ .size = 11.5, .color = p.muted, .wrap = true });
+    if (detail) |d| ui.text(c, d, .{ .size = 11.5, .color = p.muted, .wrap = true, .max_lines = 3 });
     ui.end(c);
     // `Spacer(minLength: 8)`: at least 16 + 8 + 16 before the control.
     _ = c.leaf(.{ .min_width = 8, .width = .{ .px = 8 } }, .none, null);
@@ -84,12 +84,18 @@ pub fn caption(c: *ui.Context, p: *const Palette, str: []const u8) void {
 
 /// `Hunt`: the field for narrowing a list, with a cross to empty it.
 pub fn hunt(c: *ui.Context, p: *const Palette, buf: *ui.TextBuffer, prompt: []const u8) ui.TextFieldResult {
+    return huntFocus(c, p, buf, prompt, false);
+}
+
+/// `Hunt` with `.focused($hunting)` set: the field takes the keys now.
+pub fn huntFocus(c: *ui.Context, p: *const Palette, buf: *ui.TextBuffer, prompt: []const u8, focus: bool) ui.TextFieldResult {
     ui.row(c, .{ .gap = 8, .width = .fill, .padding = .xy(12, 8), .radius = 10, .background = p.wash, .align_items = .center });
     defer ui.end(c);
     ui.icon(c, "magnifyingglass", .{ .size = 11, .weight = .medium, .color = p.muted });
     ui.column(c, .{ .grow = 1 });
     if (buf.text().len == 0)
         _ = c.leaf(.{ .absolute = true, .offset = .{ .y = 2 } }, .{ .text = .{ .str = prompt, .style = .{ .size = 13 }, .color = p.muted.alpha(0.7) } }, null);
+    if (focus) ui.focusNext(c, false);
     const r = ui.textField(c, buf, .{ .bare = true, .size = 13, .width = .fill });
     ui.end(c);
     if (buf.text().len > 0) {

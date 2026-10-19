@@ -1,8 +1,7 @@
 //! What stands over one page in its hole (Stage.swift `Page`): the picture
 //! of a page waking, the sentence that says it never came (`Trouble`), the
 //! sideways swipe's disc or held list, and — for a page of the pair on
-//! screen, or a hidden run — its question (the interim `PaneQuestionCard`,
-//! P7 ports the real one).
+//! screen, or a hidden run — its question (`PaneQuestionCard`).
 const std = @import("std");
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
@@ -53,7 +52,7 @@ fn trouble(c: *ui.Context, p: *const Palette, t: *Tab, message: []const u8) void
     defer c.end();
     _ = c.interact(i, .{});
     ui.text(c, message, .{ .size = 14, .color = p.ink });
-    if (controls.pill(c, p, "Try again", .{ .filled = true }).clicked) t.reload();
+    if (controls.pill(c, p, "Try again", .{ .filled = true }).clicked) t.reload(false);
 }
 
 /// `Disc`: white with a hairline, a line of ink wound round it as the
@@ -120,25 +119,48 @@ fn list(c: *ui.Context, p: *const Palette, pull: swipe.Pull) void {
     }
 }
 
-/// A question over this page alone.
+/// `PaneQuestionCard`: what this page asked, over this page alone. The
+/// page dims and takes no click; the card is named for the site asking,
+/// plain, and for its first half second takes no click either, so one
+/// already on its way can't land on OK. A click on either focuses the page.
 fn question(c: *ui.Context, p: *const Palette, t: *Tab) void {
     const q = t.question().?;
-    ui.column(c, .{ .absolute = true, .width = .fill, .height = .fill, .align_items = .center, .justify = .center });
-    defer ui.end(c);
-    var shadow = card.swiftShadow(0.16, 12, 6);
-    shadow.knockout = true;
-    const i = c.open(.{ .direction = .column, .width = px(340), .padding = .all(18), .radius = 14, .background = p.ground, .border = p.hairline, .shadow = shadow, .gap = 10 }, null);
+    const waited = ui.clock.now() - q.asked;
+    const ready = waited >= 0.5;
+    if (!ready) c.frameIn(@floatCast(0.5 - waited));
+    const dim = c.open(.{ .absolute = true, .width = .fill, .height = .fill, .background = p.ground.alpha(0.62), .align_items = .center, .padding = .{ .top = 56, .left = 16, .right = 16 } }, null);
     defer c.end();
-    _ = c.interact(i, .{});
-    if (q.host.len > 0) ui.text(c, q.host, .{ .size = 13, .weight = .semibold, .color = p.ink });
-    ui.text(c, q.message, .{ .size = 13.5, .color = p.ink, .wrap = true });
+    const page = c.interact(dim, .{});
+    var shadow = card.swiftShadow(0.14, 18, 6);
+    shadow.knockout = true;
+    const i = c.open(.{ .direction = .column, .width = .fill, .max_width = 380, .padding = .all(18), .radius = 14, .background = p.ground, .border = p.hairline, .shadow = shadow, .gap = 10 }, null);
+    defer c.end();
+    const box = c.interact(i, .{});
+    if (page.clicked or box.clicked) if (t.browser) |b| b.focusPane(t);
+    c.addA11y(i, .group, c.print("{s} asks", .{if (q.host.len == 0) "This page" else q.host}), "", false, true);
+    ui.text(c, if (q.host.len == 0) "This page says" else q.host, .{ .size = 13, .weight = .semibold, .color = p.ink, .truncate = true });
+    ui.scroll(c, .{ .width = .fill, .max_height = 200, .scroll_bar = false });
+    ui.text(c, q.message, .{ .size = 13, .color = p.ink, .wrap = true });
+    ui.end(c);
     if (q.kind == .prompt) {
-        ui.row(c, .{ .width = .fill, .padding = .xy(10, 6), .radius = 8, .background = p.wash });
-        _ = ui.textField(c, &q.input, .{ .bare = true, .width = .fill, .size = 13, .selection_color = p.ink.alpha(0.12), .caret_color = p.ink });
+        ui.row(c, .{ .width = .fill, .padding = .xy(7, 4), .radius = 6, .background = p.ground, .border = p.hairline });
+        const typed = ui.textField(c, &q.input, .{ .bare = true, .width = .fill, .size = 13, .selection_color = p.ink.alpha(0.12), .caret_color = p.ink });
         ui.end(c);
+        if (typed.submitted and ready) return t.answerQuestion(true, null);
     }
-    ui.row(c, .{ .width = .fill, .justify = .end, .gap = 8 });
+    ui.row(c, .{ .width = .fill, .justify = .end, .gap = 8, .padding = .{ .top = 2 } });
     defer ui.end(c);
-    if (q.kind != .alert and controls.pill(c, p, "Cancel", .{}).clicked) return t.answerQuestion(false, null);
-    if (controls.pill(c, p, "OK", .{ .filled = true }).clicked) t.answerQuestion(true, null);
+    if (q.kind != .alert and choice(c, p, "Cancel", false, ready)) return t.answerQuestion(false, null);
+    if (choice(c, p, "OK", true, ready)) t.answerQuestion(true, null);
+}
+
+/// A plain capsule: OK in ink, Cancel in its faint grey; half there and
+/// taking no click until the card is ready.
+fn choice(c: *ui.Context, p: *const Palette, title: []const u8, strong: bool, ready: bool) bool {
+    const i = c.open(.{ .padding = .xy(14, 0), .height = px(26), .radius = 13, .align_items = .center, .background = if (strong) p.ink else p.ink.alpha(0.07), .opacity = if (ready) 1 else 0.5, .control = ready }, null);
+    defer c.end();
+    const it = if (ready) c.interact(i, .{}) else null;
+    c.addA11y(i, .button, title, "", false, ready);
+    ui.text(c, title, .{ .size = 12.5, .weight = if (strong) .medium else .regular, .color = if (strong) p.ground else p.ink });
+    return if (it) |x| x.clicked else false;
 }

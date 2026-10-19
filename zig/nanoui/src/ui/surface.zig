@@ -293,6 +293,7 @@ pub const Surface = struct {
             .open_hand => "openHandCursor",
             .closed_hand => "closedHandCursor",
             .not_allowed => "operationNotAllowedCursor",
+            .crosshair => "crosshairCursor",
         };
         objc.msg(void, objc.msg(objc.Object, objc.class("NSCursor"), name, .{}), "set", .{});
     }

@@ -332,7 +332,6 @@ pub fn newSpaceCard(b: *Browser, c: *ui.Context, p: *const Palette, inline_: boo
         c.end();
         c.end();
     }
-    if (b.overlay == null and c.shortcut(.{ .key = ui.Shortcut.escape })) cancel(b);
 }
 
 fn buttons(b: *Browser, c: *ui.Context, p: *const Palette) void {
@@ -409,8 +408,8 @@ fn create(b: *Browser, c: *ui.Context) void {
     c.changed = true;
 }
 
-/// Back to the space it was made from, the way it came.
-fn cancel(b: *Browser) void {
+/// Back to the space it was made from, the way it came (Esc, from the key monitor).
+pub fn cancel(b: *Browser) void {
     b.spaces_ui.card_open = false;
     space_swipe.cancelSpaceCreation(b);
     const back = b.kea.spaceIndex(b.space_id) orelse 0;
