@@ -56,17 +56,17 @@ fn dockNewWindow(kea: *Kea, _: *nanoui.menu.Item) void {
 
 // MARK: opening
 
-/// The oldest window's when `rows` is null; otherwise one with that row.
-pub fn open(kea: *Kea, rows: ?session.Shape, frame: ?CGRect, id: ?Uuid) !*Browser {
-    const b = try Browser.create(kea, rows);
+/// The oldest window's when `record` is null; otherwise another window's,
+/// from `windows.json`, ⇧⌘T or new (`Browser(record:)` then `Browsers.open`).
+pub fn open(kea: *Kea, record: ?*const WindowRecord, frame: ?CGRect) !*Browser {
+    const b = try Browser.create(kea, record);
     errdefer b.destroy();
-    if (id) |i| b.record_id = i;
     try kea.browsers.append(kea.gpa, b);
     errdefer _ = kea.browsers.pop();
     if (kea.opts.headless) return b;
     const app = kea.ui_app orelse return b;
     watchFrames(kea);
-    const first = rows == null;
+    const first = record == null;
     const front_b = front(kea, b);
     const beside: ?*nanoui.Window = if (front_b) |f| f.window else null;
     // A new window from one in full screen: in full screen of its own, sized
@@ -125,7 +125,8 @@ pub fn newWindow(kea: *Kea) !*Browser {
         show(b);
         return b;
     };
-    return open(kea, .{ .tabs = &.{}, .active = 0 }, null, null);
+    const record: WindowRecord = .{ .id = Uuid.random(), .space = if (front(kea, null)) |f| f.space_id else Uuid.first };
+    return open(kea, &record, null);
 }
 
 /// Brings a browser's window on screen.
@@ -141,7 +142,7 @@ pub fn ensureWindow(kea: *Kea) void {
     // A test run started hidden stays so.
     if (kea.opts.root != null or kea.opts.hidden) return;
     for (kea.browsers.items) |b| if (b.shut) return show(b);
-    if (front(kea, null)) |f| show(f) else _ = open(kea, null, null, null) catch {};
+    if (front(kea, null)) |f| show(f) else _ = open(kea, null, null) catch {};
 }
 
 fn comeForward(kea: *Kea) void {
@@ -171,9 +172,7 @@ pub fn restore(kea: *Kea) void {
 }
 
 fn reopenRecord(kea: *Kea, r: *const WindowRecord) !*Browser {
-    var key = r.space.string();
-    const rows = r.rows.map.get(&key) orelse session.Shape{ .tabs = &.{}, .active = 0 };
-    return open(kea, rows, rect(r.frame), r.id);
+    return open(kea, r, rect(r.frame));
 }
 
 /// `WindowRecord.rect`: the saved frame, when it's a real window's.
@@ -224,7 +223,7 @@ fn onClose(ctx: *anyopaque, _: *nanoui.Window) void {
 fn remember(kea: *Kea, b: *Browser) void {
     var arena: std.heap.ArenaAllocator = .init(kea.gpa);
     defer arena.deinit();
-    const r = record(arena.allocator(), b, true) catch return;
+    const r = recordOf(arena.allocator(), b, true) catch return;
     const bytes = json.encode(kea.gpa, r) catch return;
     kea.windows.closed.append(kea.gpa, .{ .record = bytes, .at = ui.clock.now() }) catch return kea.gpa.free(bytes);
     if (kea.windows.closed.items.len > 10) kea.gpa.free(kea.windows.closed.orderedRemove(0).record);
@@ -232,8 +231,7 @@ fn remember(kea: *Kea, b: *Browser) void {
 
 /// The oldest window closed: this one's rows go into the session files now.
 fn becomePrimary(b: *Browser) void {
-    b.uses_files = true;
-    b.flushSession();
+    b.becomePrimary();
     // The first window, opened next launch, comes back where this one is.
     if (b.kea.opts.root == null and !b.kea.opts.hidden) if (b.window) |w|
         objc.msg(void, w.nswindow, "saveFrameUsingName:", .{objc.nsString("kea")});
@@ -250,29 +248,23 @@ pub fn reopenClosedWindow(kea: *Kea) bool {
     return true;
 }
 
-/// ⇧⌘T (`Browser.reopen`): a window closed after the last tab was comes
-/// back first, as in Safari and Chrome; otherwise the tab.
-pub fn reopen(b: *Browser) void {
-    const closed = b.kea.windows.closed.items;
-    const tab_at = if (b.closed_tabs.items.len > 0) b.closed_tabs.items[b.closed_tabs.items.len - 1].at else -std.math.inf(f64);
-    if (closed.len > 0 and closed[closed.len - 1].at > tab_at and reopenClosedWindow(b.kea)) return;
-    b.reopenClosedTab();
+/// When the newest window kept for ⇧⌘T was closed (`Browsers.lastClosedAt`).
+pub fn lastClosedAt(kea: *Kea) ?f64 {
+    const last = kea.windows.closed.getLastOrNull() orelse return null;
+    return last.at;
 }
 
 // MARK: saving
 
 /// A window's state as a record: frame, space and, when asked, its rows.
-fn record(arena: std.mem.Allocator, b: *Browser, rows: bool) !WindowRecord {
-    var r: WindowRecord = .{ .id = b.record_id };
+fn recordOf(arena: std.mem.Allocator, b: *Browser, rows: bool) !WindowRecord {
+    var r: WindowRecord = .{ .id = b.record_id, .space = b.space_id };
     if (b.window) |w| {
         const pool = objc.Pool.push();
         defer pool.pop();
         r.frame = try arena.dupe(u8, objc.fromNSString(NSStringFromRect(objc.msg(CGRect, w.nswindow, "frame", .{}))));
     }
-    if (rows) {
-        const key = r.space.string();
-        try r.rows.map.put(arena, try arena.dupe(u8, &key), try b.row(arena));
-    }
+    if (rows) r.rows = try b.allRows(arena);
     return r;
 }
 
@@ -283,7 +275,7 @@ pub fn save(kea: *Kea, now: bool) void {
     var arena: std.heap.ArenaAllocator = .init(kea.gpa);
     defer arena.deinit();
     const records = arena.allocator().alloc(WindowRecord, kea.browsers.items.len) catch return;
-    for (kea.browsers.items, records, 0..) |b, *r, i| r.* = record(arena.allocator(), b, i > 0) catch return;
+    for (kea.browsers.items, records, 0..) |b, *r, i| r.* = recordOf(arena.allocator(), b, i > 0) catch return;
     windows_file.write(&kea.store, records, now);
 }
 

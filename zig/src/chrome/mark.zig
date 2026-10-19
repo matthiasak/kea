@@ -3,7 +3,8 @@
 const ui = @import("nanoui").ui;
 const Palette = @import("../design/palette.zig").Palette;
 
-/// A site's icon: `key` names it (its host) so it is decoded once.
+/// A site's icon (`Favicons.icon`): `key` names this picture of it (its
+/// site and a serial), so it is decoded once and again when it changes.
 pub const Icon = struct { key: []const u8, png: []const u8 };
 
 pub fn mark(c: *ui.Context, p: *const Palette, icon: ?Icon, letter: []const u8, size: f32, dim: bool) void {

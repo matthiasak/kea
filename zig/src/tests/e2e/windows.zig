@@ -58,7 +58,7 @@ fn closing(h: *Harness) !void {
     const second = try app.browsers.newWindow(k);
     var url_buf: [128]u8 = undefined;
     const url = try std.fmt.bufPrint(&url_buf, "{s}/page?title=W", .{h.http});
-    _ = second.openTab(url, true, false);
+    _ = second.open(url, .{ .foreground = true });
     objc.msg(void, second.window.?.nswindow, "performClose:", .{@as(?objc.Object, null)});
     h.pump(0.1);
     try h.expect(k.browsers.items.len == 1 and k.windows.closed.items.len == 1, "{d} browsers, {d} closed", .{ k.browsers.items.len, k.windows.closed.items.len });

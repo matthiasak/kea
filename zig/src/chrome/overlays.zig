@@ -15,6 +15,8 @@ pub const Overlay = union(enum) {
     /// The back or forward list held open, of tab id.
     history_hold: u64,
     space_name,
+    /// The new space's icons, from its card (`NewSpaceCard.icons`).
+    space_icons,
 };
 
 pub const Place = struct {

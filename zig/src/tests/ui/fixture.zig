@@ -32,7 +32,7 @@ pub const Fixture = struct {
         const b = try k.newBrowser();
         for (0..opts.tabs) |i| {
             var buf: [64]u8 = undefined;
-            _ = b.openTab(try std.fmt.bufPrint(&buf, "kea-test://site/page?title=Tab%20{d}", .{i + 1}), false, false);
+            _ = b.open(try std.fmt.bufPrint(&buf, "kea-test://site/page?title=Tab%20{d}", .{i + 1}), .{ .foreground = false, .at_end = true });
         }
         f.* = .{ .gpa = gpa, .temp = temp, .kea = k, .browser = b, .tester = undefined };
         try f.tester.init(gpa, ui.View.init(b, app.window_view.view), .{

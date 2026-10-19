@@ -11,6 +11,9 @@ const objc = nanoui.objc;
 
 const fixtures = [_]struct { []const u8, []const u8 }{
     .{ "hello.html", @embedFile("fixtures/hello.html") },
+    .{ "favicon.html", @embedFile("fixtures/favicon.html") },
+    .{ "questions.html", @embedFile("fixtures/questions.html") },
+    .{ "links.html", @embedFile("fixtures/links.html") },
 };
 
 /// Tasks `/slow` still owes a finish; a stopped task leaves the list.

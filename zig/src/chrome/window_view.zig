@@ -17,10 +17,16 @@ const motion = @import("../design/motion.zig");
 const card = @import("../design/card.zig");
 const Room = @import("room.zig").Room;
 const panels = @import("panels.zig");
-const interim_tabs = @import("interim_tabs.zig");
+const side_bar = @import("side_bar.zig");
+const fold = @import("fold.zig");
+const space_swipe = @import("space_swipe.zig");
+const spaces_view = @import("spaces_view.zig");
+const groups_view = @import("groups_view.zig");
+const tab_bar = @import("tab_bar.zig");
 const overlays = @import("overlays.zig");
 const controls = @import("controls.zig");
 const browsers = @import("../app/browsers.zig");
+const page_layers = @import("page_layers.zig");
 
 const px = struct {
     fn v(n: f32) ui.Length {
@@ -35,6 +41,8 @@ pub fn view(b: *Browser, c: *ui.Context) void {
     // The strip and the column say where the window is dragged from.
     c.title_bar_height = 0;
     handleShortcuts(b, c);
+    space_swipe.frame(b, c);
+    groups_view.beginFrame(b);
 
     const r = room(b, c);
     applyGround(b, p, r);
@@ -53,10 +61,11 @@ pub fn view(b: *Browser, c: *ui.Context) void {
     if (r.sidebar() or slide.w > chrome.w + 0.5) {
         const on_right = b.prefs.side_position == .right;
         const x = if (on_right) c.size.w - slide.w else slide.w - b.prefs.side_width;
-        interim_tabs.sideBar(b, c, p, !on_right, r.cards(), x);
+        side_bar.sideBar(b, c, p, r.cards(), x);
     }
-    if (!b.prefs.sidebar and !r.folded and !r.fullscreen) interim_tabs.topBar(b, c, p);
+    if (!b.prefs.sidebar and !r.folded and !r.fullscreen) tab_bar.tabBar(b, c, p);
     if (r.barShown()) drawBookmarksBar(b, c, p, r);
+    if (!r.fullscreen) fold.view(b, c, p);
 
     // Over everything, in App.swift's order. Fold, bars, Peek, panels and
     // sheets, the tab switcher and the import's card come with their phases.
@@ -73,6 +82,7 @@ fn room(b: *Browser, c: *ui.Context) Room {
     const prefs = b.prefs;
     return .{
         .sidebar_pref = prefs.sidebar,
+        .folded = b.folded,
         .side_right = prefs.side_position == .right,
         .side_width = prefs.side_width,
         .bar_pref = prefs.bookmarks_bar,
@@ -169,52 +179,15 @@ fn drawDivider(b: *Browser, c: *ui.Context, p: *const Palette) void {
     _ = c.leaf(.{ .width = px(1), .height = .fill, .background = p.faint }, .none, null);
 }
 
-/// One page's hole, and what stands over that page alone: its failure,
-/// its question, the find pill. Returns the hole's box.
+/// One page's hole, and what stands over that page alone (`page_layers`)
+/// and the find pill. Returns the hole's box.
 fn drawPane(b: *Browser, c: *ui.Context, p: *const Palette, tab_opt: ?*Tab, key_name: []const u8, weight: f32, focused: bool) u32 {
     const idx = c.open(.{ .grow = @max(0.1, weight), .height = .fill, .align_items = .center, .justify = .center }, key_name);
     defer c.end();
     c.addStageHoleNode(idx);
+    if (tab_opt) |t| page_layers.draw(c, p, t);
     if (focused and b.find_open) panels.findBar(b, c, p);
-    const t = tab_opt orelse return idx;
-    if (t.failure()) |err_msg| {
-        paneCard(c, p, 380, .center);
-        ui.text(c, err_msg, .{ .size = 14, .color = p.ink, .wrap = true });
-        if (controls.pill(c, p, "Try again", .{}).clicked) t.reload();
-        ui.end(c);
-    } else if (t.question) |*q| {
-        paneCard(c, p, 340, .stretch);
-        ui.text(c, q.text(), .{ .size = 13.5, .color = p.ink, .wrap = true });
-        if (q.kind == .prompt) {
-            ui.row(c, .{ .width = .fill, .padding = .xy(10, 6), .radius = 8, .background = p.wash });
-            _ = ui.textField(c, &q.input_buf, .{ .bare = true, .width = .fill, .size = 13, .selection_color = p.ink.alpha(0.12), .caret_color = p.ink });
-            ui.end(c);
-        }
-        ui.row(c, .{ .width = .fill, .justify = .end, .gap = 8 });
-        if (q.kind != .alert and controls.pill(c, p, "Cancel", .{}).clicked) t.answerDialog(false, null);
-        if (controls.pill(c, p, "OK", .{}).clicked) t.answerDialog(true, null);
-        ui.end(c);
-        ui.end(c);
-    }
     return idx;
-}
-
-/// A card standing on the page; close with `ui.end`.
-fn paneCard(c: *ui.Context, p: *const Palette, width: f32, alignment: @FieldType(ui.Style, "align_items")) void {
-    var shadow = card.swiftShadow(0.16, 12, 6);
-    shadow.knockout = true;
-    const i = c.open(.{
-        .direction = .column,
-        .width = px(width),
-        .padding = .all(18),
-        .radius = 14,
-        .background = p.ground,
-        .border = p.hairline,
-        .shadow = shadow,
-        .align_items = alignment,
-        .gap = 10,
-    }, null);
-    _ = c.interact(i, .{});
 }
 
 /// `BookmarksBar`: under the strip, or beside the column's top on the
@@ -254,7 +227,7 @@ fn drawBookmarksBar(b: *Browser, c: *ui.Context, p: *const Palette, r: Room) voi
         c.end();
         if (bm.url) |u| {
             if (it.clicked) b.goUrl(u);
-            if (it.middle_clicked) _ = b.openTab(u, false, false);
+            if (it.middle_clicked) _ = b.open(u, .{ .foreground = false, .from = b.activeTab(), .may_wait = true });
         }
     }
 }
@@ -264,12 +237,16 @@ fn drawBookmarksBar(b: *Browser, c: *ui.Context, p: *const Palette, r: Room) voi
 /// that opens it.
 fn drawOverlay(b: *Browser, c: *ui.Context, p: *const Palette) void {
     if (!overlays.begin(c, &b.overlay, b.overlay_anchor, .{ .background = p.ground, .radius = 14, .border = p.hairline, .clip = true }, .{})) return;
+    switch (b.overlay.?) {
+        .space_icons => spaces_view.iconsPopover(b, c, p),
+        else => {},
+    }
     ui.end(c);
 }
 
 /// A new tab in front, the field up over it (`Browser.newTab`).
 pub fn newTab(b: *Browser) void {
-    _ = b.openTab("", true, false);
+    b.newTab();
     b.omni_open = true;
     b.omni_buf.clear();
 }
@@ -285,11 +262,11 @@ fn handleShortcuts(b: *Browser, c: *ui.Context) void {
         // ponytail: here until P8's command registry takes ⌘N.
         _ = browsers.newWindow(b.kea) catch {};
     } else if (c.shortcut(.{ .key = 't', .cmd = true, .shift = true })) {
-        browsers.reopen(b);
+        b.reopen();
     } else if (c.shortcut(.{ .key = 't', .cmd = true })) {
         newTab(b);
     } else if (c.shortcut(.{ .key = 'w', .cmd = true })) {
-        if (b.activeTab()) |t| b.closeTab(t.id);
+        b.closeFront();
     } else if (c.shortcut(.{ .key = 'l', .cmd = true })) {
         editAddress(b);
     } else if (c.shortcut(.{ .key = 'r', .cmd = true })) {
@@ -301,6 +278,12 @@ fn handleShortcuts(b: *Browser, c: *ui.Context) void {
     } else if (c.shortcut(.{ .key = 's', .cmd = true, .ctrl = true })) {
         b.prefs.set("sidebar", !b.prefs.sidebar);
         b.syncStageHost();
+    } else if (c.shortcut(.{ .key = 's', .cmd = true })) {
+        // ponytail: here until P8's command registry takes `view.fold`.
+        fold.toggleFold(b);
+    } else if (if (b.prefs.uses_spaces) spaceDigit(c) else null) |n| {
+        // ⌃1…⌃9, the spaces in their order, only with spaces on (`ContentView.take`).
+        b.switchSpaceIndex(n);
     } else if (c.shortcut(.{ .key = 'b', .cmd = true, .ctrl = true })) {
         b.marks_open = !b.marks_open;
         b.syncStageHost();
@@ -313,14 +296,21 @@ fn handleShortcuts(b: *Browser, c: *ui.Context) void {
                 b.announce("Bookmark removed");
             } else if (b.bookmarks.add(t.url(), t.title()) != null) b.announce("Bookmark added");
         }
+    } else if (c.shortcut(.{ .key = '+', .cmd = true }) or c.shortcut(.{ .key = '=', .cmd = true })) {
+        // ponytail: here until P8's command registry takes `view.zoomIn` and its kin.
+        if (b.activeTab()) |t| t.magnifyBy(1.1);
+    } else if (c.shortcut(.{ .key = '-', .cmd = true })) {
+        if (b.activeTab()) |t| t.magnifyBy(1.0 / 1.1);
+    } else if (c.shortcut(.{ .key = '0', .cmd = true })) {
+        if (b.activeTab()) |t| t.resetZoom();
     } else if (c.shortcut(.{ .key = '[', .cmd = true })) {
         if (b.activeTab()) |t| t.goBack();
     } else if (c.shortcut(.{ .key = ']', .cmd = true })) {
         if (b.activeTab()) |t| t.goForward();
     } else if (c.shortcut(.{ .key = '\t', .ctrl = true, .shift = true })) {
-        b.stepTab(-1);
+        b.step(-1);
     } else if (c.shortcut(.{ .key = '\t', .ctrl = true })) {
-        b.stepTab(1);
+        b.step(1);
     } else if (b.overlay == null and c.shortcut(.{ .key = 0x1b })) {
         if (b.omni_open) {
             b.omni_open = false;
@@ -331,4 +321,9 @@ fn handleShortcuts(b: *Browser, c: *ui.Context) void {
             if (t.loading) t.stopLoading();
         }
     }
+}
+
+fn spaceDigit(c: *ui.Context) ?usize {
+    for (0..9) |n| if (c.shortcut(.{ .key = @intCast('1' + n), .ctrl = true })) return n;
+    return null;
 }

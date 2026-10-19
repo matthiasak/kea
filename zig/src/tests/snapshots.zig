@@ -10,13 +10,37 @@ const Options = @import("ui/fixture.zig").Options;
 const State = struct {
     name: []const u8,
     opts: Options,
+    /// Brings the fixture to the state before it is drawn.
+    setup: ?*const fn (*Fixture) void = null,
 };
 
 const states = [_]State{
     .{ .name = "p0-default", .opts = .{} },
     .{ .name = "p3-cards", .opts = .{ .sidebar = true, .tabs = 3 } },
     .{ .name = "p3-strip", .opts = .{ .sidebar = false, .tabs = 3 } },
+    .{ .name = "p4-strip-12-tabs", .opts = .{ .sidebar = false, .tabs = 11 } },
+    .{ .name = "p4-column-pins-groups", .opts = .{ .sidebar = true, .tabs = 7 }, .setup = pinsAndGroups },
 };
+
+/// Three squares, a group of two named "Reading", three loose rows.
+fn pinsAndGroups(f: *Fixture) void {
+    const b = f.browser;
+    b.prefs.set("uses_tab_groups", true);
+    // Pinning moves each to the head: pinned from a copy of the row.
+    var row: [8]*@import("kea").Tab = undefined;
+    @memcpy(row[0..b.tabs.items.len], b.tabs.items);
+    for (row[1..4]) |t| b.pin(t, false);
+    var loose: [8]*@import("kea").Tab = undefined;
+    var n: usize = 0;
+    for (b.tabs.items) |t| if (t.pin == null) {
+        loose[n] = t;
+        n += 1;
+    };
+    const id = b.addTabGroup(loose[n - 1]);
+    b.moveToGroup(loose[n - 2], id);
+    b.renameTabGroup(id, "Reading");
+    b.editing_group_id = null;
+}
 
 pub fn main(init: std.process.Init) !void {
     const gpa = init.gpa;
@@ -40,6 +64,7 @@ pub fn main(init: std.process.Init) !void {
             var f: Fixture = undefined;
             try f.init(gpa, opts);
             defer f.deinit();
+            if (s.setup) |setup| setup(&f);
             f.tester.settle(2);
             // The window's ground, which the hosted window paints behind the view.
             if (f.browser.applied_ground) |g| f.tester.theme.background = g;

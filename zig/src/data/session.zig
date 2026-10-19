@@ -287,9 +287,12 @@ test "browser session keeps a quoted title and never a private tab" {
         const k = try Kea.create(testing.allocator, null, .{ .root = t.root, .suite = t.suite, .headless = true });
         defer k.destroy();
         const b = try k.newBrowser();
-        b.openTab("https://example.com/", true, false).setTitle("He said \"hi\"");
-        _ = b.openTab("https://secret.example/", false, true);
-        b.openTab("https://pinned.example/", false, false).pinned = true;
+        const example = b.open("https://example.com/", .{ .foreground = true });
+        example.setTitle("He said \"hi\"");
+        b.newShyTab();
+        b.activeTab().?.go("https://secret.example/");
+        b.select(example);
+        b.pin(b.open("https://pinned.example/", .{ .foreground = false }), false);
     }
     const k = try Kea.create(testing.allocator, null, .{ .root = t.root, .suite = t.suite, .headless = true });
     defer k.destroy();
@@ -298,7 +301,7 @@ test "browser session keeps a quoted title and never a private tab" {
     for (b.tabs.items) |tab| {
         try testing.expect(std.mem.indexOf(u8, tab.url(), "secret") == null);
         if (std.mem.eql(u8, tab.title(), "He said \"hi\"")) titles += 1;
-        if (std.mem.eql(u8, tab.url(), "https://pinned.example/")) try testing.expect(tab.pinned);
+        if (std.mem.eql(u8, tab.url(), "https://pinned.example/")) try testing.expect(tab.pin != null);
     }
     try testing.expectEqual(@as(usize, 1), titles);
     try testing.expectEqualStrings("He said \"hi\"", b.tabById(b.active_id).?.title());

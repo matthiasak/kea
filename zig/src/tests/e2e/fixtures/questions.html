@@ -1,0 +1,13 @@
+<!doctype html>
+<html><head><title>Questions</title></head>
+<body>
+<p>Asks once loaded, by its fragment: <code>#alert</code> or <code>#prompt</code>.</p>
+<script>
+window.addEventListener('load', function () {
+  setTimeout(function () {
+    if (location.hash === '#alert') { alert('Hello from the page'); window.done = true; }
+    if (location.hash === '#prompt') { window.answer = prompt('Your name?', 'kea'); }
+  }, 0);
+});
+</script>
+</body></html>

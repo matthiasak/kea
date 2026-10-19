@@ -20,16 +20,14 @@ pub const cases = [_]Case{
 };
 
 fn titled(t: *app.Tab) bool {
-    t.syncState();
     return std.mem.eql(u8, t.title(), "Zig Guide");
 }
 
 fn tabFail(h: *Harness, t: *app.Tab) error{CaseFailed} {
-    return h.fail("timed out: title '{s}', url '{s}', loading {}, failure '{s}'", .{ t.title(), t.url(), t.loading, t.failure() orelse "" });
+    return h.fail("timed out: title '{s}', url '{s}', loading {}, failure '{s}'", .{ t.title(), t.url(), t.loading, t.failure orelse "" });
 }
 
 fn finished(t: *app.Tab) bool {
-    t.syncState();
     return !t.loading and t.progress >= 1;
 }
 
@@ -57,12 +55,12 @@ fn quarantine(h: *Harness) !void {
 
 fn loadsTitle(h: *Harness) !void {
     const b = try h.start();
-    const t = b.openTab("kea-test://site/page?title=Zig%20Guide&body=hi", true, false);
+    const t = b.open("kea-test://site/page?title=Zig%20Guide&body=hi", .{ .foreground = true });
     h.waitFor(t, titled, 10, "the title") catch return tabFail(h, t);
 }
 
 fn openLoaded(h: *Harness, b: *app.Browser, url: []const u8) !*app.Tab {
-    const t = b.openTab(url, true, false);
+    const t = b.open(url, .{ .foreground = true });
     try h.waitFor(t, finished, 10, url);
     return t;
 }
@@ -71,7 +69,7 @@ fn splitHalves(h: *Harness) !void {
     const b = try h.start();
     const left = try openLoaded(h, b, "kea-test://site/page?title=Left");
     const right = try openLoaded(h, b, "kea-test://site/f/hello.html");
-    b.selectTab(left.id);
+    b.select(left);
     h.frame();
     const single = b.active_page_frame.w;
     b.prefs.set("split_view", true); // off unless asked for, as in Swift
@@ -129,21 +127,18 @@ fn siteChip(h: *Harness) !void {
 /// WebKit holds `/slow`'s first bytes until the rest arrives 8 s later:
 /// the load stays in flight.
 fn loadingSlow(t: *app.Tab) bool {
-    t.syncState();
     return t.loading and t.progress > 0.1;
 }
 
 fn stopSlow(h: *Harness) !void {
     const b = try h.start();
-    const t = b.openTab("kea-test://site/slow", true, false);
+    const t = b.open("kea-test://site/slow", .{ .foreground = true });
     h.waitFor(t, loadingSlow, 10, "the slow load to start") catch return tabFail(h, t);
     h.pump(0.3);
-    t.syncState();
     try h.expect(t.loading, "/slow finished before ⌘.", .{});
     h.press(".", 47, true, false); // ⌘.
     h.pump(0.3);
-    t.syncState();
-    try h.expect(!t.loading and t.stopped, "still loading after ⌘.", .{});
+    try h.expect(!t.loading, "still loading after ⌘.", .{});
     const wv = t.web orelse return h.fail("no webview", .{});
     try h.expect(!objc.msg(objc.BOOL, wv, "isLoading", .{}), "WebKit still loading after ⌘.", .{});
 }
@@ -151,7 +146,8 @@ fn stopSlow(h: *Harness) !void {
 fn quitFlushes(h: *Harness) !void {
     const b = try h.start();
     var buf: [128]u8 = undefined;
-    _ = b.openTab(try std.fmt.bufPrint(&buf, "{s}/flushed-on-quit", .{h.http}), true, false);
+    // The visit is recorded as the page finishes (Browser.swift:4892).
+    _ = try openLoaded(h, b, try std.fmt.bufPrint(&buf, "{s}/flushed-on-quit", .{h.http}));
     h.quit();
     const hist = h.readFile("history.json") orelse return h.fail("no history.json", .{});
     defer h.gpa.free(hist);
@@ -162,13 +158,13 @@ fn closeSplitTab(h: *Harness) !void {
     const b = try h.start();
     const left = try openLoaded(h, b, "kea-test://site/page?title=Left");
     const right = try openLoaded(h, b, "kea-test://site/page?title=Right");
-    b.selectTab(left.id);
+    b.select(left);
     b.prefs.set("split_view", true);
     b.pairSplit(right.id);
     h.frame();
     const freed = left.web.?;
     const right_web = right.web.?;
-    b.closeTab(left.id);
+    b.close(left);
     h.pump(0.2); // a frame places webviews: any stale slot would message the freed one
     const sh = b.stage_host.?;
     for (sh.slots) |slot| try h.expect(slot.webview != freed, "a slot still holds the closed tab's webview", .{});

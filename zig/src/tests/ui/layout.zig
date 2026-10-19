@@ -89,7 +89,7 @@ fn expectPageClear(opts: Options) !void {
     var f: Fixture = undefined;
     try f.init(gpa, opts);
     defer f.deinit();
-    _ = f.browser.openTab("kea-test://site/page", true, false);
+    _ = f.browser.open("kea-test://site/page", .{ .foreground = true });
     f.tester.settle(1);
     try std.testing.expect(!f.browser.omni_open);
     const hole = f.holes()[0];

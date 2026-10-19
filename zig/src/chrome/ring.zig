@@ -16,7 +16,7 @@ const Picture = struct {
     scale: f32,
     dark: bool,
     /// A turn of the ring (`turn`), or a step of progress (out of 100).
-    kind: enum(u8) { turn, progress },
+    kind: enum(u8) { turn, progress, wind },
     step: u32,
 };
 
@@ -74,6 +74,18 @@ fn paint(b: cg.Bitmap, p: Picture) void {
             cg.CGContextAddArc(b.ctx, mid, mid, r, std.math.pi / 2.0, std.math.pi / 2.0 - tau * done, 1);
             cg.CGContextStrokePath(b.ctx);
         },
+        .wind => {
+            // The swipe disc's line (Stage.swift `Disc`): ink, 1.5 wide,
+            // inset 0.75, wound from twelve o'clock clockwise.
+            const lw: f64 = 1.5;
+            if (p.step == 0) return;
+            cg.CGContextSetLineWidth(b.ctx, lw);
+            b.stroke(pal.ink);
+            const r = mid - 0.75 - lw / 2;
+            const done = @as(f64, @floatFromInt(p.step)) / 100;
+            cg.CGContextAddArc(b.ctx, mid, mid, r, std.math.pi / 2.0, std.math.pi / 2.0 - tau * done, 1);
+            cg.CGContextStrokePath(b.ctx);
+        },
     }
 }
 
@@ -102,6 +114,11 @@ pub fn ring(c: *ui.Context, size: f32) void {
 pub fn progressArc(c: *ui.Context, size: f32, fraction: f32) void {
     const f = ui.tween(c, c.peekId(null), 0x6172_63, std.math.clamp(fraction, 0, 1), 0.2, motion.quick_curve);
     show(c, .{ .size = size, .scale = c.scale, .dark = c.theme.dark, .kind = .progress, .step = @intFromFloat(@round(f * 100)) });
+}
+
+/// The swipe disc's wound line, `fraction` of the way round.
+pub fn windArc(c: *ui.Context, size: f32, fraction: f32) void {
+    show(c, .{ .size = size, .scale = c.scale, .dark = c.theme.dark, .kind = .wind, .step = @intFromFloat(@round(std.math.clamp(fraction, 0, 1) * 100)) });
 }
 
 test "ring pictures are PNGs and the turn follows the clock" {

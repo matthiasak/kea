@@ -40,6 +40,25 @@ pub extern "c" fn CGImageDestinationCreateWithData(data: CFDataRef, kind: CFStri
 pub extern "c" fn CGImageDestinationAddImage(dest: Destination, image: Image, properties: ?*anyopaque) void;
 pub extern "c" fn CGImageDestinationFinalize(dest: Destination) bool;
 
+pub const Source = *opaque {};
+pub const interpolation_high: i32 = 3;
+pub extern "c" fn CFDataCreate(allocator: ?*anyopaque, bytes: [*]const u8, len: isize) ?CFDataRef;
+pub extern "c" fn CGImageSourceCreateWithData(data: CFDataRef, options: ?objc.Object) ?Source;
+pub extern "c" fn CGImageSourceGetType(source: Source) ?CFStringRef;
+pub extern "c" fn CGImageSourceGetCount(source: Source) usize;
+pub extern "c" fn CGImageSourceCopyPropertiesAtIndex(source: Source, index: usize, options: ?objc.Object) ?objc.Object;
+pub extern "c" fn CGImageSourceCreateThumbnailAtIndex(source: Source, index: usize, options: ?objc.Object) ?Image;
+pub extern "c" const kCGImageSourceShouldCache: CFStringRef;
+pub extern "c" const kCGImageSourceCreateThumbnailFromImageAlways: CFStringRef;
+pub extern "c" const kCGImageSourceThumbnailMaxPixelSize: CFStringRef;
+pub extern "c" const kCGImageSourceCreateThumbnailWithTransform: CFStringRef;
+pub extern "c" const kCGImagePropertyPixelWidth: CFStringRef;
+pub extern "c" const kCGImagePropertyPixelHeight: CFStringRef;
+pub extern "c" fn CGImageGetWidth(image: Image) usize;
+pub extern "c" fn CGImageGetHeight(image: Image) usize;
+pub extern "c" fn CGContextDrawImage(ctx: Context, rect: objc.CGRect, image: Image) void;
+pub extern "c" fn CGContextSetInterpolationQuality(ctx: Context, quality: i32) void;
+
 /// An sRGB picture of `w`×`h` points at `scale` pixels a point, drawn in
 /// points with y up (CoreGraphics' own way).
 pub const Bitmap = struct {

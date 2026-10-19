@@ -229,11 +229,16 @@ pub const close_zone: ui.Size = .{ .w = 30, .h = 28 };
 pub const close_zone_compact: ui.Size = .{ .w = 22, .h = 22 };
 
 pub fn closeDisc(c: *ui.Context, p: *const Palette, armed: bool, zone_size: ui.Size) ui.Interaction {
+    return closeDiscIcon(c, p, armed, zone_size, "xmark");
+}
+
+/// The same disc wearing `icon` (a pinned row's "minus": put down, not closed).
+pub fn closeDiscIcon(c: *ui.Context, p: *const Palette, armed: bool, zone_size: ui.Size, icon: []const u8) ui.Interaction {
     const slot = c.open(.{ .width = px(15), .height = px(15) }, null);
     defer c.end();
     const o = motion.quickTo(c, c.node(slot).id, 0, if (armed) 1 else 0);
     _ = c.open(.{ .width = .fill, .height = .fill, .radius = 7.5, .background = p.ink.alpha(0.07), .opacity = o, .align_items = .center, .justify = .center }, null);
-    ui.icon(c, "xmark", .{ .size = 8, .weight = .semibold, .color = p.muted });
+    ui.icon(c, icon, .{ .size = 8, .weight = .semibold, .color = p.muted });
     c.end();
     if (!armed) return no_press;
     const zone = c.open(.{ .absolute = true, .offset = .{ .x = (15 - zone_size.w) / 2, .y = (15 - zone_size.h) / 2 }, .width = px(zone_size.w), .height = px(zone_size.h), .control = true }, null);

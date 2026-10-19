@@ -11,7 +11,11 @@ const Bookmarks = @import("../data/bookmarks.zig").Bookmarks;
 const SiteSearch = @import("../data/site_search.zig").SiteSearch;
 const Pins = @import("../data/pins.zig").Pins;
 const Browser = @import("../model/browser.zig").Browser;
+const spaces = @import("../data/spaces.zig");
+const Space = spaces.Space;
+const Uuid = @import("../data/json.zig").Uuid;
 const kea_import = @import("../data/kea_import.zig");
+const Favicons = @import("../web/favicons.zig").Favicons;
 
 /// The app's name wherever Swift's strings name Kea the app.
 pub const app_name = "KeaZig";
@@ -39,8 +43,18 @@ pub const Kea = struct {
     bookmarks: Bookmarks,
     site_search: SiteSearch,
     pins: Pins,
+    /// Every space, the first first (`Browser.spaces`, one list for every window).
+    spaces: std.json.Parsed([]Space),
     browsers: std.ArrayList(*Browser) = .empty,
     windows: browsers.Windows = .{},
+    /// Tab ids, unique across windows: a tab moved to another keeps its own.
+    next_tab_id: u64 = 1,
+    /// Each space's own WebKit store, made once (`Spaces.stores`).
+    stores: std.AutoArrayHashMapUnmanaged(Uuid, objc.Object) = .empty,
+    /// Sites' icons, every window's (`Favicons.shared`).
+    favicons: *Favicons = undefined,
+    /// Two fingers between spaces, every window's (`SpaceSwipe.shared`).
+    swipe: @import("../chrome/space_swipe.zig").SpaceSwipe = .{},
 
     pub fn create(gpa: std.mem.Allocator, ui_app: ?*nanoui.App, opts: Options) !*Kea {
         const self = try gpa.create(Kea);
@@ -57,6 +71,7 @@ pub const Kea = struct {
             .bookmarks = undefined,
             .site_search = undefined,
             .pins = undefined,
+            .spaces = undefined,
         };
         self.prefs = Prefs.init(gpa, &self.store, .{
             .testing = opts.root != null,
@@ -66,6 +81,10 @@ pub const Kea = struct {
         self.bookmarks = Bookmarks.init(gpa, &self.store);
         self.site_search = SiteSearch.init(gpa, &self.store);
         self.pins = Pins.init(gpa, &self.store);
+        self.spaces = spaces.read(&self.store);
+        // What a deleted space left behind, if WebKit wouldn't let it go then.
+        @import("../model/spaces.zig").sweep(self);
+        self.favicons = try Favicons.create(self);
         // Hidden runs get no Dock icon and never take focus.
         if (opts.hidden) if (ui_app) |a| {
             _ = objc.msg(objc.BOOL, a.nsapp, "setActivationPolicy:", .{@as(objc.NSInteger, 2)});
@@ -75,9 +94,14 @@ pub const Kea = struct {
 
     pub fn destroy(self: *Kea) void {
         self.flush();
+        self.swipe.stop();
         browsers.closeAll(self);
         self.browsers.deinit(self.gpa);
         self.browsers = .empty;
+        for (self.stores.values()) |s| objc.release(s);
+        self.stores.deinit(self.gpa);
+        self.favicons.deinit();
+        self.spaces.deinit();
         self.pins.deinit();
         self.site_search.deinit();
         self.bookmarks.deinit();
@@ -96,14 +120,64 @@ pub const Kea = struct {
         self.store.disk.drain();
     }
 
-    /// The list of spaces changed (`Spaces.changed`): every window follows.
+    /// The list of spaces changed (`Spaces.changed`, written by
+    /// `data/spaces.write`): read again, and a window showing a space that
+    /// went goes back to the first.
     pub fn spacesChanged(self: *Kea) void {
+        self.spaces.deinit();
+        self.spaces = spaces.read(&self.store);
+        for (self.browsers.items) |b| {
+            if (self.spaceIndex(b.space_id) == null) b.switchSpace(Uuid.first);
+            b.redraw();
+        }
+    }
+
+    pub fn spaceIndex(self: *const Kea, id: Uuid) ?usize {
+        for (self.spaces.value, 0..) |s, i| if (s.id.eql(id)) return i;
+        return null;
+    }
+
+    pub fn tabId(self: *Kea) u64 {
+        defer self.next_tab_id += 1;
+        return self.next_tab_id;
+    }
+
+    /// An icon arrived (`Favicons.arrived`): every window shows it on every
+    /// tab of that site.
+    pub fn iconsChanged(self: *Kea) void {
         for (self.browsers.items) |b| b.redraw();
+    }
+
+    /// A space's pins changed in one window; the others follow (`Pins.changed`).
+    pub fn pinsChanged(self: *Kea, from: *Browser, space: Uuid) void {
+        for (self.browsers.items) |b| if (b != from) b.pinsChanged(space);
+    }
+
+    /// `Spaces.store(for:)`: null for the default store — the first space's,
+    /// and every space signed in with it — and always under tests, whose
+    /// tabs keep nothing (`Tab.buildWeb`); otherwise the space's own.
+    pub fn dataStore(self: *Kea, space: Uuid) ?objc.Object {
+        if (self.opts.root != null or self.opts.headless or space.eql(Uuid.first)) return null;
+        const at = self.spaceIndex(space) orelse return null;
+        if (self.spaces.value[at].sharesSignIns == true) return null;
+        if (self.stores.get(space)) |made| return made;
+        const cls = objc.class("WKWebsiteDataStore");
+        if (!objc.msg(objc.BOOL, cls, "respondsToSelector:", .{objc.sel("dataStoreForIdentifier:")})) return null;
+        const pool = objc.Pool.push();
+        defer pool.pop();
+        const uuid = objc.msg(objc.Object, objc.alloc("NSUUID"), "initWithUUIDBytes:", .{&space.bytes});
+        defer objc.release(uuid);
+        const made = objc.retain(objc.msg(objc.Object, cls, "dataStoreForIdentifier:", .{uuid}));
+        self.stores.put(self.gpa, space, made) catch {
+            objc.release(made);
+            return null;
+        };
+        return made;
     }
 
     /// The oldest window's browser, its tabs from the session files; in a
     /// window of its own unless headless (`app/browsers.zig`).
     pub fn newBrowser(self: *Kea) !*Browser {
-        return browsers.open(self, null, null, null);
+        return browsers.open(self, null, null);
     }
 };

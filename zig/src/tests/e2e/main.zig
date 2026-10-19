@@ -14,7 +14,7 @@ pub const Case = struct {
     run: *const fn (*Harness) anyerror!void,
 };
 
-const cases = @import("smoke.zig").cases ++ @import("windows.zig").cases;
+const cases = @import("smoke.zig").cases ++ @import("windows.zig").cases ++ @import("favicons.zig").cases ++ @import("web.zig").cases;
 
 pub const Harness = struct {
     gpa: std.mem.Allocator,
@@ -110,7 +110,9 @@ pub const Harness = struct {
 var ui_app: *nanoui.App = undefined;
 
 pub fn main(init: std.process.Init) !void {
-    const gpa = init.gpa;
+    // Cases get their own allocator so a leak fails the run, not just prints.
+    var dbg: std.heap.DebugAllocator(.{}) = .init;
+    const gpa = dbg.allocator();
     ui_app = try nanoui.App.create(init, .{ .name = app.kea.app_name, .quit_on_last_window_closed = false });
     defer ui_app.destroy();
     _ = objc.msg(objc.BOOL, ui_app.nsapp, "setActivationPolicy:", .{@as(objc.NSInteger, 2)});
@@ -137,6 +139,10 @@ pub fn main(init: std.process.Init) !void {
             const why = if (err == error.CaseFailed) h.reason else @errorName(err);
             std.debug.print("FAIL {s}: {s}\n", .{ case.name, why });
         }
+    }
+    if (dbg.deinit() == .leak) {
+        std.debug.print("e2e cases leaked memory\n", .{});
+        std.process.exit(1);
     }
     if (failed > 0) {
         std.debug.print("{d} of {d} e2e cases failed\n", .{ failed, cases.len });

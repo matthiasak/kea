@@ -8,16 +8,39 @@
 //! App.swift): the three as they look while the app isn't the one in use,
 //! drawn in `Palette.resting` exactly over the real ones, since macOS's own
 //! come out nearly white on a light window.
+//!
+//! And `DragStrip` (Stage.swift): the empty chrome the window is moved by.
 const std = @import("std");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;
+const ui = nanoui.ui;
 const metrics = @import("../design/metrics.zig");
 const palette = @import("../design/palette.zig");
 const Prefs = @import("../data/prefs.zig").Prefs;
+const Browser = @import("../model/browser.zig").Browser;
 
 const CGRect = objc.CGRect;
 const CGPoint = objc.CGPoint;
 const CGSize = objc.CGSize;
+
+/// `DragStrip`: empty chrome that moves the window. A double click opens a
+/// new tab where the strip is an empty tab row (`onDoubleClick`), and
+/// otherwise does what a title bar's does: fills the screen.
+// ponytail: zooms whatever `AppleActionOnDoubleClick` says; read it when someone sets Minimize.
+pub fn dragStrip(b: *Browser, c: *ui.Context, style: ui.Style, on_double: enum { zoom, new_tab }) void {
+    var s = style;
+    s.window_drag = true;
+    const i = c.open(s, null);
+    c.end();
+    const it = c.interact(i, .{});
+    // The window's background, not a control: no hand over it.
+    if (c.hot == it.id) c.cursor_hand = false;
+    if (!it.double_clicked) return;
+    switch (on_double) {
+        .new_tab => @import("window_view.zig").newTab(b),
+        .zoom => if (b.window) |w| w.zoom(),
+    }
+}
 
 /// Where the close button's centre goes, from the window's top-left: where a
 /// unified toolbar put it, which `metrics.lights` and `side_lights` measure from.
@@ -91,8 +114,8 @@ pub const Lights = struct {
         objc.setZig(self.observer, self);
         const center = notificationCenter();
         for ([_][]const u8{
-            "NSWindowDidResizeNotification",     "NSWindowDidEndLiveResizeNotification",
-            "NSWindowDidBecomeKeyNotification",  "NSWindowDidResignKeyNotification",
+            "NSWindowDidResizeNotification",         "NSWindowDidEndLiveResizeNotification",
+            "NSWindowDidBecomeKeyNotification",      "NSWindowDidResignKeyNotification",
             "NSWindowDidExitFullScreenNotification", "NSWindowDidChangeScreenNotification",
         }) |name| observe(center, self.observer, name, window);
         // The title bar's own views moving is the surest sign AppKit has just

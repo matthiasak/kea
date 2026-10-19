@@ -56,6 +56,8 @@ test {
     _ = @import("data/pins.zig");
     _ = @import("data/spaces.zig");
     _ = @import("web/tab.zig");
+    _ = @import("web/dialogs.zig");
+    _ = @import("web/favicons.zig");
     _ = @import("web/stage_host.zig");
     _ = @import("model/browser.zig");
     _ = @import("chrome/window_view.zig");
@@ -65,5 +67,7 @@ test {
     _ = @import("chrome/ring.zig");
     _ = @import("chrome/tests_controls.zig");
     _ = @import("chrome/lights.zig");
+    _ = @import("chrome/tab_width.zig");
+    _ = @import("chrome/pin_grid.zig");
     _ = @import("app/browsers.zig");
 }
