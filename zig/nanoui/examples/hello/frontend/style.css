@@ -1,0 +1,65 @@
+:root {
+  color-scheme: light dark;
+  --bg: #f5f5f7;
+  --card: #fff;
+  --text: #1d1d1f;
+  --muted: #6e6e73;
+  --border: #d2d2d7;
+  --accent: #0a84ff;
+  font: 14px/1.4 -apple-system, BlinkMacSystemFont, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1c1c1e;
+    --card: #2c2c2e;
+    --text: #f5f5f7;
+    --muted: #98989d;
+    --border: #48484a;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); user-select: none; }
+.titlebar {
+  --app-region: drag;
+  height: 38px;
+  padding: 0 14px 0 84px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--muted);
+  font-weight: 500;
+}
+main { padding: 8px 24px 24px; display: grid; gap: 16px; }
+.card { background: var(--card); border-radius: 12px; padding: 18px; box-shadow: 0 4px 16px #0001; }
+h2 { margin: 0 0 12px; font-size: 17px; display: flex; gap: 8px; align-items: center; }
+.row { display: flex; gap: 8px; }
+input:not([type]) {
+  flex: 1;
+  font: inherit;
+  padding: 7px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--text);
+  outline: none;
+}
+input:not([type]):focus { border-color: var(--accent); box-shadow: 0 0 0 3px #0a84ff33; }
+button {
+  font: inherit;
+  font-weight: 500;
+  padding: 7px 14px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #fff;
+}
+button:active { filter: brightness(0.9); }
+button.ghost { background: transparent; color: var(--muted); padding: 2px 8px; font-size: 18px; }
+ul { list-style: none; padding: 0; margin: 12px 0 0; }
+li { display: flex; align-items: center; gap: 10px; padding: 6px 0; border-top: 1px solid var(--border); }
+li span { flex: 1; }
+li.done span { text-decoration: line-through; color: var(--muted); }
+.pill { font-size: 12px; color: var(--muted); background: var(--bg); padding: 2px 8px; border-radius: 10px; font-weight: 500; }
+.muted { color: var(--muted); margin: 12px 0 0; }
+.error { color: #ff3b30; margin: 8px 0 0; min-height: 1em; }
+code { font: 12px ui-monospace, monospace; }

@@ -1,0 +1,41 @@
+# Releases nanoui when a version tag is pushed (as mygo does): checks that
+# the tag is the version in build.zig.zon (tools/version.sh), runs the
+# tests, and opens the GitHub release with notes generated from what
+# changed, unless the release was already made by hand. A tag with a
+# hyphen (v0.3.0-rc.1) is a prerelease.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+
+jobs:
+  release:
+    runs-on: macos-15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.0
+      - name: Check the version
+        run: sh tools/version.sh --check "$GITHUB_REF_NAME"
+      - run: zig build lines
+      - run: zig build test
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            exit 0
+          fi
+          flags=""
+          case "$GITHUB_REF_NAME" in *-*) flags="--prerelease" ;; esac
+          gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes --title "nanoui ${GITHUB_REF_NAME#v}" $flags

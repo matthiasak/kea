@@ -1,0 +1,6 @@
+[submodule "apps/nanoterm"]
+	path = apps/nanoterm
+	url = https://github.com/justrach/nanoterm.git
+[submodule "apps/nanomon"]
+	path = apps/nanomon
+	url = https://github.com/justrach/nanomon.git

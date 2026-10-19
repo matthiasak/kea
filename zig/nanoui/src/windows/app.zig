@@ -1,0 +1,148 @@
+//! The application on Windows: the message loop, windows, menus'
+//! accelerators and timers. Headless runs (`--nanoui-snapshot`) open no
+//! window.
+const std = @import("std");
+const w = @import("win32.zig");
+const dev = @import("../dev.zig");
+const window_mod = @import("window.zig");
+const menu_mod = @import("../menu_accel.zig");
+const ui = @import("../ui/ui.zig");
+const Window = window_mod.Window;
+
+pub const Options = struct {
+    name: []const u8 = "nanoui",
+    quit_on_last_window_closed: bool = true,
+};
+
+const Timer = struct { id: usize, ctx: ?*anyopaque, func: *const fn (?*anyopaque) callconv(.c) void };
+var timers: [64]?Timer = @splat(null);
+
+fn onTimer(_: ?w.HWND, _: u32, id: usize, _: u32) callconv(.winapi) void {
+    _ = w.KillTimer(null, id);
+    for (&timers) |*slot| if (slot.*) |t| if (t.id == id) {
+        slot.* = null;
+        t.func(t.ctx);
+        return;
+    };
+}
+
+pub const App = struct {
+    gpa: std.mem.Allocator,
+    io: std.Io,
+    options: Options,
+    windows: std.ArrayList(*Window) = .empty,
+    main_menu: ?*menu_mod.Menu = null,
+    flags: dev.Flags = .{},
+    gui: bool = false,
+    running: bool = false,
+    stopping: bool = false,
+    debug: bool = false,
+
+    pub fn create(init: std.process.Init, options: Options) !*App {
+        const gpa = init.gpa;
+        const self = try gpa.create(App);
+        errdefer gpa.destroy(self);
+        const flags = try dev.Flags.parse(init);
+        self.* = .{ .gpa = gpa, .io = init.io, .options = options, .flags = flags, .debug = init.environ_map.get("NANOUI_DEBUG") != null };
+        self.gui = flags.snapshot == null and flags.generate_dir == null;
+        // Pixels, not stretched bitmaps: nanoui draws at the monitor's DPI.
+        if (self.gui) _ = w.SetProcessDPIAware();
+        return self;
+    }
+
+    pub fn destroy(self: *App) void {
+        while (self.windows.items.len > 0) self.windows.items[self.windows.items.len - 1].close();
+        self.windows.deinit(self.gpa);
+        if (self.main_menu) |m| m.destroy();
+        self.gpa.destroy(self);
+    }
+
+    pub fn bind(self: *App, service: anytype) !void {
+        _ = self;
+        _ = service;
+    }
+
+    pub fn registerEvent(self: *App, comptime E: type) !void {
+        _ = self;
+        _ = E;
+    }
+
+    pub fn newWindow(self: *App, options: window_mod.Options) !*Window {
+        const win = try Window.create(self, options);
+        errdefer win.close();
+        try self.windows.append(self.gpa, win);
+        return win;
+    }
+
+    pub fn removeWindow(self: *App, win: *Window) void {
+        for (self.windows.items, 0..) |item, i| if (item == win) {
+            _ = self.windows.orderedRemove(i);
+            break;
+        };
+        if (self.windows.items.len == 0 and self.options.quit_on_last_window_closed and self.running) self.quit();
+    }
+
+    pub fn run(self: *App) !void {
+        if (self.flags.generate_dir != null) return error.PagesUnsupported;
+        if (self.flags.snapshot) |path| return dev.snapshot(self, path);
+        if (self.stopping or !self.gui) return;
+        self.running = true;
+        var msg: w.MSG = undefined;
+        while (w.GetMessageW(&msg, null, 0, 0) > 0) {
+            _ = w.TranslateMessage(&msg);
+            _ = w.DispatchMessageW(&msg);
+        }
+        self.running = false;
+    }
+
+    pub fn quit(self: *App) void {
+        if (self.stopping) return;
+        self.stopping = true;
+        if (self.running) w.PostQuitMessage(0);
+    }
+
+    pub fn after(ms: u64, ctx: ?*anyopaque, func: *const fn (?*anyopaque) callconv(.c) void) void {
+        const id = w.SetTimer(null, 0, @intCast(@max(1, ms)), onTimer);
+        if (id == 0) return;
+        for (&timers) |*slot| if (slot.* == null) {
+            slot.* = .{ .id = id, .ctx = ctx, .func = func };
+            return;
+        };
+    }
+
+    pub fn setMenu(self: *App, template: []const menu_mod.MenuItem) !void {
+        const m = try menu_mod.Menu.create(self.gpa, template);
+        if (self.main_menu) |old| old.destroy();
+        self.main_menu = m;
+    }
+
+    pub fn menuItem(self: *App, id: []const u8) ?*menu_mod.Item {
+        const m = self.main_menu orelse return null;
+        return m.item(id);
+    }
+
+    pub fn newTray(self: *App, opts: anytype) !noreturn {
+        _ = self;
+        _ = opts;
+        return error.TraysUnsupported;
+    }
+
+    pub fn accelerator(self: *App, sc: ui.Shortcut) bool {
+        const m = self.main_menu orelse return false;
+        const it = m.match(sc) orelse return false;
+        if (it.role) |role| switch (role) {
+            .quit => {
+                self.quit();
+                return true;
+            },
+            .close => {
+                if (self.windows.items.len > 0) self.windows.items[0].close();
+                return true;
+            },
+            .copy, .cut, .paste, .select_all, .undo, .redo, .delete => return false,
+            else => {},
+        };
+        menu_mod.Menu.activate(it);
+        return true;
+    }
+};

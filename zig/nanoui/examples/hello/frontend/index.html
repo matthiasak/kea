@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Hello</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <header class="titlebar">
+      <span>nanoui · webview</span>
+      <span id="uptime" class="pill">0s</span>
+    </header>
+    <main>
+      <section class="card">
+        <h2>Greeter</h2>
+        <form id="greet-form" class="row">
+          <input id="name" placeholder="Your name" autocomplete="off" />
+          <button type="submit">Greet</button>
+        </form>
+        <p id="greeting" class="muted">Calls <code>Greeter.greet</code> in Zig.</p>
+      </section>
+      <section class="card">
+        <h2>Todos <span id="count" class="pill"></span></h2>
+        <form id="todo-form" class="row">
+          <input id="title" placeholder="Something to do" autocomplete="off" />
+          <button type="submit">Add</button>
+        </form>
+        <ul id="todos"></ul>
+        <p id="error" class="error"></p>
+      </section>
+    </main>
+    <script type="module" src="/main.js"></script>
+  </body>
+</html>

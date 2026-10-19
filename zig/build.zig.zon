@@ -1,0 +1,17 @@
+.{
+    .name = .kea_zig,
+    .version = "0.1.0",
+    .fingerprint = 0x4557d1124b79722e,
+    .minimum_zig_version = "0.17.0",
+    .dependencies = .{
+        .nanoui = .{
+            .path = "nanoui",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "include",
+    },
+}

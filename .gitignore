@@ -2,6 +2,12 @@
 .build/
 build/
 .swiftpm/
+.zig-cache/
+zig-out/
+zig/.zig-cache/
+zig/zig-out/
+zig/nanoui/.zig-cache/
+zig/nanoui/zig-out/
 *.xcuserstate
 .DS_Store
 
