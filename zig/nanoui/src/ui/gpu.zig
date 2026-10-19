@@ -45,6 +45,10 @@ pub const Kind = struct {
     /// `border_color` its tone (low, high, curve, saturation), and
     /// `border_width` the blur of what shows through, all in points.
     pub const glass: f32 = 4;
+    /// A shadow drawn outside its box only (`Shadow.knockout`): what is
+    /// under the box shows through it. `uv`'s x, y: where the box is from
+    /// the shadow's rect, in points.
+    pub const shadow_out: f32 = 5;
 };
 
 pub fn color4(c: types.Color) [4]f32 {

@@ -11,12 +11,30 @@ pub const ElementPayload = struct {
     surface: *Surface,
     id: u64,
     role: ctx_mod.A11yRole,
-    label: [128]u8 = undefined,
-    label_len: usize = 0,
-    value: [128]u8 = undefined,
-    value_len: usize = 0,
+    /// On `gpa` (the surface's), replaced on each update.
+    label: []u8 = &.{},
+    value: []u8 = &.{},
     selected: bool = false,
     enabled: bool = true,
+
+    /// Takes the item's state, its label and value copied.
+    pub fn update(p: *ElementPayload, gpa: std.mem.Allocator, it: ctx_mod.A11yItem) void {
+        p.role = it.role;
+        p.selected = it.selected;
+        p.enabled = it.enabled;
+        if (!std.mem.eql(u8, p.label, it.label)) p.label = swap(gpa, p.label, it.label);
+        if (!std.mem.eql(u8, p.value, it.value)) p.value = swap(gpa, p.value, it.value);
+    }
+
+    fn swap(gpa: std.mem.Allocator, old: []u8, new: []const u8) []u8 {
+        gpa.free(old);
+        return gpa.dupe(u8, new) catch &.{};
+    }
+
+    pub fn deinit(p: *ElementPayload, gpa: std.mem.Allocator) void {
+        gpa.free(p.label);
+        gpa.free(p.value);
+    }
 };
 
 pub const methods = [_]objc.Method{
@@ -67,15 +85,7 @@ fn viewChildren(obj: objc.Object, _: objc.SEL) callconv(.c) objc.Object {
             gop.value_ptr.* = el;
         }
         const el = gop.value_ptr.*;
-        if (payloadOf(el)) |p| {
-            p.role = it.role;
-            p.selected = it.selected;
-            p.enabled = it.enabled;
-            p.label_len = @min(it.label.len, p.label.len);
-            @memcpy(p.label[0..p.label_len], it.label[0..p.label_len]);
-            p.value_len = @min(it.value.len, p.value.len);
-            @memcpy(p.value[0..p.value_len], it.value[0..p.value_len]);
-        }
+        if (payloadOf(el)) |p| p.update(s.gpa, it);
         objc.msg(void, arr, "addObject:", .{el});
     }
     return arr;
@@ -86,6 +96,7 @@ pub fn clearCache(s: *Surface) void {
     while (it.next()) |el_ptr| {
         if (payloadOf(el_ptr.*)) |p| {
             objc.setZig(el_ptr.*, null);
+            p.deinit(s.gpa);
             s.gpa.destroy(p);
         }
         objc.release(el_ptr.*);
@@ -100,6 +111,7 @@ fn payloadOf(obj: objc.Object) ?*ElementPayload {
 fn elemDealloc(obj: objc.Object, _: objc.SEL) callconv(.c) void {
     if (payloadOf(obj)) |p| {
         objc.setZig(obj, null);
+        p.deinit(p.surface.gpa);
         p.surface.gpa.destroy(p);
     }
     objc.msgSuper(void, obj, objc.class("NSAccessibilityElement"), "dealloc", .{});
@@ -135,6 +147,11 @@ fn elemRole(obj: objc.Object, _: objc.SEL) callconv(.c) objc.Object {
         .checkbox, .switch_toggle => "AXCheckBox",
         .group => "AXGroup",
         .static_text => "AXStaticText",
+        .list => "AXList",
+        .row => "AXRow",
+        .image => "AXImage",
+        .menu_button => "AXMenuButton",
+        .popover => "AXPopover",
     });
 }
 
@@ -149,12 +166,12 @@ fn elemSubrole(obj: objc.Object, _: objc.SEL) callconv(.c) ?objc.Object {
 
 fn elemLabel(obj: objc.Object, _: objc.SEL) callconv(.c) objc.Object {
     const p = payloadOf(obj) orelse return objc.nsString("");
-    return objc.nsString(p.label[0..p.label_len]);
+    return objc.nsString(p.label);
 }
 
 fn elemValue(obj: objc.Object, _: objc.SEL) callconv(.c) objc.Object {
     const p = payloadOf(obj) orelse return objc.nsString("");
-    if (p.value_len > 0) return objc.nsString(p.value[0..p.value_len]);
+    if (p.value.len > 0) return objc.nsString(p.value);
     return switch (p.role) {
         .checkbox, .switch_toggle, .tab, .radio_button => objc.msg(objc.Object, objc.class("NSNumber"), "numberWithBool:", .{if (p.selected) objc.YES else objc.NO}),
         else => objc.nsString(""),
@@ -179,6 +196,7 @@ fn elemPress(obj: objc.Object, _: objc.SEL) callconv(.c) objc.BOOL {
     s.ctx.input.mouse = .{ .x = r.x + r.w * 0.5, .y = r.y + r.h * 0.5 };
     s.ctx.updateHot();
     s.ctx.input.click_count = 1;
+    s.ctx.input.button = .left;
     s.ctx.pointerDown();
     s.frame();
     s.ctx.pointerUp();

@@ -1,7 +1,7 @@
 //! The connection between a window and its native UI: an NSView hosting
-//! the Metal layer, turning AppKit events into input and drawing frames on
-//! demand. Nothing polls: a frame runs on input, on resize, or while an
-//! animation moves, at most every display refresh.
+//! the Metal layer, drawing frames on demand (its events: surface_events.zig).
+//! Nothing polls: a frame runs on input, on resize, or while an animation
+//! moves, at most every display refresh.
 const std = @import("std");
 const objc = @import("../objc.zig");
 const cf = @import("cf.zig");
@@ -15,8 +15,8 @@ const ctx_mod = @import("context.zig");
 const Context = ctx_mod.Context;
 const ui = @import("ui.zig");
 const Window = @import("../window.zig").Window;
-
 const a11y = @import("a11y.zig");
+const events = @import("surface_events.zig");
 pub const Surface = struct {
     gpa: std.mem.Allocator,
     window: *Window,
@@ -50,6 +50,12 @@ pub const Surface = struct {
     after_frame_ctx: ?*anyopaque = null,
     after_frame: ?*const fn (ctx: ?*anyopaque, s: *Surface) void = null,
     a11y_cache: std.AutoHashMapUnmanaged(u64, objc.Object) = .empty,
+    /// Behind a stage (`attachBackdrop`): every frame presents in the
+    /// Core Animation transaction that moves the pages, so they never part.
+    hosted: bool = false,
+    /// The focused box after the last frame, and the tooltip shown.
+    last_focus: u64 = 0,
+    tip: ?[]const u8 = null,
 
     pub fn create(window: *Window, view: ui.View, theme_override: ?Theme) !*Surface {
         const gpa = window.app.gpa;
@@ -62,7 +68,7 @@ pub const Surface = struct {
             .name = "NanoUIView",
             .superclass = "NSView",
             .protocols = &.{"NSTextInputClient"},
-            .methods = &view_methods,
+            .methods = &events.methods,
         });
         const content = objc.msg(objc.Object, window.nswindow, "contentView", .{});
         const bounds = objc.msg(objc.CGRect, content, "bounds", .{});
@@ -89,6 +95,13 @@ pub const Surface = struct {
         objc.msg(void, window.nswindow, "setContentView:", .{nsview});
         objc.msg(void, window.nswindow, "setAcceptsMouseMovedEvents:", .{objc.YES});
         _ = objc.msg(objc.BOOL, window.nswindow, "makeFirstResponder:", .{nsview});
+        {
+            const pool = objc.Pool.push();
+            defer pool.pop();
+            const arr = objc.msg(objc.Object, objc.class("NSMutableArray"), "array", .{});
+            for (events.drag_types) |t| objc.msg(void, arr, "addObject:", .{objc.nsString(t)});
+            objc.msg(void, nsview, "registerForDraggedTypes:", .{arr});
+        }
         if (objc.msg(objc.BOOL, nsview, "respondsToSelector:", .{objc.sel("displayLinkWithTarget:selector:")})) {
             const link = objc.retain(objc.msg(objc.Object, nsview, "displayLinkWithTarget:selector:", .{ nsview, objc.sel("displayLinkFired:") }));
             objc.msg(void, link, "setPaused:", .{objc.YES});
@@ -115,6 +128,7 @@ pub const Surface = struct {
         objc.release(self.nsview);
         self.instances.deinit(self.gpa);
         self.pasted.deinit(self.gpa);
+        if (self.tip) |t| self.gpa.free(t);
         self.text_queue.deinit(self.gpa);
         self.ctx.deinit();
         self.text.deinit();
@@ -123,7 +137,7 @@ pub const Surface = struct {
         if (self.tick_scheduled) self.dead = true else self.gpa.destroy(self);
     }
 
-    fn updateGeometry(self: *Surface) void {
+    pub fn updateGeometry(self: *Surface) void {
         const b = objc.msg(objc.CGRect, self.nsview, "bounds", .{});
         self.size = .{ .w = @floatCast(b.size.width), .h = @floatCast(b.size.height) };
         self.scale = @floatCast(objc.msg(f64, self.window.nswindow, "backingScaleFactor", .{}));
@@ -177,8 +191,10 @@ pub const Surface = struct {
         const dt: f32 = if (self.last_frame_time > 0) @floatCast(@min(now - self.last_frame_time, 0.1)) else 1.0 / 60.0;
         self.last_frame_time = now;
         self.ctx.transparent_root = self.transparent;
+        c.reduce_motion = objc.msg(objc.BOOL, objc.msg(objc.Object, objc.class("NSWorkspace"), "sharedWorkspace", .{}), "accessibilityDisplayShouldReduceMotion", .{});
         const r = frame_mod.run(c, self.view, &self.text, &self.instances, self.size, self.scale, self.theme(), dt, now - self.start_time);
         if (self.after_frame) |af| af(self.after_frame_ctx, self);
+        self.afterFocus();
         if (!vis and self.ctx.frame > 1) {
             self.setPaced(false);
             return;
@@ -208,7 +224,7 @@ pub const Surface = struct {
         const host_class = objc.defineClass(.{
             .name = "NanoUIHostView",
             .superclass = "NSView",
-            .methods = &.{.{ .name = "isFlipped", .imp = &yes, .types = "c@:" }},
+            .methods = &.{.{ .name = "isFlipped", .imp = &events.yes, .types = "c@:" }},
         });
         const b = objc.msg(objc.CGRect, self.nsview, "bounds", .{});
         const host = objc.msg(objc.Object, objc.msg(objc.Object, host_class, "alloc", .{}), "initWithFrame:", .{b});
@@ -225,6 +241,8 @@ pub const Surface = struct {
         objc.msg(void, host, "addSubview:", .{self.nsview});
         objc.release(host);
         self.setTransparent(true);
+        self.hosted = true;
+        self.renderer.setLiveResize(true);
     }
 
     /// Draws a frame at the display's next refresh: for changes from
@@ -261,7 +279,7 @@ pub const Surface = struct {
         if (self.visible() and self.pending) self.frame();
     }
 
-    fn updateCursor(self: *Surface) void {
+    pub fn updateCursor(self: *Surface) void {
         if (self.transparent and self.ctx.inStageHoleAt(self.ctx.input.mouse)) return;
         const want: ctx_mod.Cursor = self.ctx.cursor orelse if (self.ctx.cursor_text) .text else if (self.ctx.cursor_hand) .hand else .arrow;
         if (want == self.cursor) return;
@@ -272,8 +290,28 @@ pub const Surface = struct {
             .text => "IBeamCursor",
             .resize_left_right => "resizeLeftRightCursor",
             .resize_up_down => "resizeUpDownCursor",
+            .open_hand => "openHandCursor",
+            .closed_hand => "closedHandCursor",
+            .not_allowed => "operationNotAllowedCursor",
         };
         objc.msg(void, objc.msg(objc.Object, objc.class("NSCursor"), name, .{}), "set", .{});
+    }
+
+    /// After a frame: a box newly focused takes the keyboard for the view
+    /// (`focusNext` while a page had it), and the hot box's help shows.
+    fn afterFocus(self: *Surface) void {
+        const c = &self.ctx;
+        if (c.focus != 0 and c.focus != self.last_focus) {
+            const first = objc.msg(?objc.Object, self.window.nswindow, "firstResponder", .{});
+            if (first == null or first.? != self.nsview) _ = objc.msg(objc.BOOL, self.window.nswindow, "makeFirstResponder:", .{self.nsview});
+        }
+        self.last_focus = c.focus;
+        const tip = c.hotHelp();
+        const same = if (tip) |t| (if (self.tip) |old| std.mem.eql(u8, t, old) else false) else self.tip == null;
+        if (same) return;
+        if (self.tip) |old| self.gpa.free(old);
+        self.tip = if (tip) |t| self.gpa.dupe(u8, t) catch null else null;
+        objc.msg(void, self.nsview, "setToolTip:", .{if (self.tip) |t| objc.nsString(t) else @as(?objc.Object, null)});
     }
 
     fn scheduleTick(self: *Surface) void {
@@ -289,285 +327,12 @@ pub const Surface = struct {
         self.frame();
     }
 
-    fn setMouse(self: *Surface, event: objc.Object) void {
-        const p = objc.msg(objc.CGPoint, event, "locationInWindow", .{});
+    /// A point in the window's coordinates, in the view's (flipped) points.
+    pub fn toView(self: *Surface, p: objc.CGPoint) types.Point {
         const local = objc.msg(objc.CGPoint, self.nsview, "convertPoint:fromView:", .{ p, @as(?objc.Object, null) });
-        self.ctx.input.mouse = .{ .x = @floatCast(local.x), .y = @floatCast(local.y) };
-        const flags = objc.msg(objc.NSUInteger, event, "modifierFlags", .{});
-        self.ctx.input.shift = flags & (1 << 17) != 0;
-        self.ctx.input.cmd = flags & (1 << 20) != 0;
-        self.ctx.input.ctrl = flags & (1 << 18) != 0;
-        self.ctx.input.alt = flags & (1 << 19) != 0;
+        return .{ .x = @floatCast(local.x), .y = @floatCast(local.y) };
     }
 };
 
 // The run loop knows its common modes by this object, not by its name.
 extern "c" const NSRunLoopCommonModes: objc.Object;
-
-const view_methods = [_]objc.Method{
-                .{ .name = "isFlipped", .imp = &yes, .types = "c@:" },
-                .{ .name = "acceptsFirstResponder", .imp = &yes, .types = "c@:" },
-                .{ .name = "acceptsFirstMouse:", .imp = &yes1, .types = "c@:@" },
-                .{ .name = "hitTest:", .imp = &hitTest, .types = "@@:{CGPoint=dd}" },
-                .{ .name = "mouseDown:", .imp = &mouseDown, .types = "v@:@" },
-                .{ .name = "mouseUp:", .imp = &mouseUp, .types = "v@:@" },
-                .{ .name = "mouseDragged:", .imp = &mouseDragged, .types = "v@:@" },
-                .{ .name = "mouseMoved:", .imp = &mouseMoved, .types = "v@:@" },
-                .{ .name = "mouseExited:", .imp = &mouseExited, .types = "v@:@" },
-                .{ .name = "scrollWheel:", .imp = &scrollWheel, .types = "v@:@" },
-                .{ .name = "keyDown:", .imp = &keyDown, .types = "v@:@" },
-                .{ .name = "performKeyEquivalent:", .imp = &performKeyEquivalent, .types = "c@:@" },
-                .{ .name = "paste:", .imp = &paste, .types = "v@:@" },
-                .{ .name = "setFrameSize:", .imp = &setFrameSize, .types = "v@:{CGSize=dd}" },
-                .{ .name = "viewDidChangeBackingProperties", .imp = &backingChanged, .types = "v@:" },
-                .{ .name = "viewDidChangeEffectiveAppearance", .imp = &backingChanged, .types = "v@:" },
-                .{ .name = "updateTrackingAreas", .imp = &updateTrackingAreas, .types = "v@:" },
-                .{ .name = "displayLinkFired:", .imp = &displayLinkFired, .types = "v@:@" },
-                .{ .name = "viewWillStartLiveResize", .imp = &liveResizeStart, .types = "v@:" },
-                .{ .name = "viewDidEndLiveResize", .imp = &liveResizeEnd, .types = "v@:" },
-} ++ textinput.methods ++ a11y.methods;
-
-fn surfaceOf(obj: objc.Object) ?*Surface {
-    return objc.getZig(Surface, obj);
-}
-
-fn yes(_: objc.Object, _: objc.SEL) callconv(.c) objc.BOOL {
-    return objc.YES;
-}
-
-fn yes1(_: objc.Object, _: objc.SEL, _: ?objc.Object) callconv(.c) objc.BOOL {
-    return objc.YES;
-}
-
-fn hitTest(obj: objc.Object, _: objc.SEL, point: objc.CGPoint) callconv(.c) ?objc.Object {
-    const s = surfaceOf(obj) orelse return null;
-    const super = objc.msg(?objc.Object, obj, "superview", .{});
-    const local = objc.msg(objc.CGPoint, obj, "convertPoint:fromView:", .{ point, super });
-    const p: types.Point = .{ .x = @floatCast(local.x), .y = @floatCast(local.y) };
-    if (p.x < 0 or p.y < 0 or p.x >= s.size.w or p.y >= s.size.h) return null;
-    if (s.transparent and s.ctx.inStageHoleAt(p)) return null;
-    return obj;
-}
-
-fn performKeyEquivalent(obj: objc.Object, sel_in: objc.SEL, event: objc.Object) callconv(.c) objc.BOOL {
-    const s = surfaceOf(obj) orelse return objc.NO;
-    const flags = objc.msg(objc.NSUInteger, event, "modifierFlags", .{});
-    if (flags & ((1 << 20) | (1 << 18)) == 0) return objc.NO;
-    s.ctx.shortcut_taken = false;
-    keyDown(obj, sel_in, event);
-    return if (s.ctx.shortcut_taken) objc.YES else objc.NO;
-}
-
-fn mouseDown(obj: objc.Object, _: objc.SEL, event: objc.Object) callconv(.c) void {
-    const s = surfaceOf(obj) orelse return;
-    _ = objc.msg(objc.BOOL, s.window.nswindow, "makeFirstResponder:", .{obj});
-    s.setMouse(event);
-    s.ctx.updateHot();
-    s.ctx.input.click_count = @intCast(objc.msg(objc.NSInteger, event, "clickCount", .{}));
-    // Under a hidden title bar, the top strip moves the window as a title bar would.
-    if (s.window.title_bar == .hidden and s.ctx.input.mouse.y < s.ctx.title_bar_height and s.ctx.hot == 0) {
-        if (s.ctx.input.click_count == 2) s.window.zoom() else objc.msg(void, s.window.nswindow, "performWindowDragWithEvent:", .{event});
-        return;
-    }
-    s.ctx.pointerDown();
-    s.frame();
-}
-
-fn mouseUp(obj: objc.Object, _: objc.SEL, event: objc.Object) callconv(.c) void {
-    const s = surfaceOf(obj) orelse return;
-    s.setMouse(event);
-    s.ctx.updateHot();
-    s.ctx.pointerUp();
-    s.frame();
-}
-
-fn mouseDragged(obj: objc.Object, _: objc.SEL, event: objc.Object) callconv(.c) void {
-    const s = surfaceOf(obj) orelse return;
-    s.setMouse(event);
-    s.ctx.updateHot();
-    s.frame();
-}
-
-fn mouseMoved(obj: objc.Object, _: objc.SEL, event: objc.Object) callconv(.c) void {
-    const s = surfaceOf(obj) orelse return;
-    s.setMouse(event);
-    const before = s.ctx.hot;
-    s.ctx.updateHot();
-    if (s.ctx.hot != before or s.ctx.wants_moves) return s.frame();
-    // Onto or off text that selects, inside the same box: the cursor only.
-    const over = s.ctx.pointerOverText();
-    if (over != s.ctx.cursor_text) {
-        s.ctx.cursor_text = over;
-        s.updateCursor();
-    }
-}
-
-fn mouseExited(obj: objc.Object, _: objc.SEL, _: objc.Object) callconv(.c) void {
-    const s = surfaceOf(obj) orelse return;
-    s.ctx.input.mouse = .{ .x = -1e6, .y = -1e6 };
-    if (s.ctx.hot != 0) {
-        s.ctx.updateHot();
-        s.frame();
-    }
-}
-
-fn scrollWheel(obj: objc.Object, _: objc.SEL, event: objc.Object) callconv(.c) void {
-    const s = surfaceOf(obj) orelse return;
-    s.setMouse(event);
-    var dy: f32 = @floatCast(objc.msg(f64, event, "scrollingDeltaY", .{}));
-    if (!objc.msg(objc.BOOL, event, "hasPreciseScrollingDeltas", .{})) dy *= 12;
-    if (s.ctx.applyScroll(dy)) {
-        s.frame();
-        s.ctx.updateHot();
-    } else if (s.ctx.wants_wheel) {
-        s.ctx.input.scroll = .{ .y = dy };
-        s.frame();
-    }
-}
-
-fn keyDown(obj: objc.Object, _: objc.SEL, event: objc.Object) callconv(.c) void {
-    const s = surfaceOf(obj) orelse return;
-    const code = objc.msg(u16, event, "keyCode", .{});
-    const flags = objc.msg(objc.NSUInteger, event, "modifierFlags", .{});
-    const in = &s.ctx.input;
-    in.cmd = flags & (1 << 20) != 0;
-    in.shift = flags & (1 << 17) != 0;
-    in.ctrl = flags & (1 << 18) != 0;
-    in.alt = flags & (1 << 19) != 0;
-    // Key combinations go to the view first, which may take them.
-    const ign = objc.fromNSString(objc.msg(?objc.Object, event, "charactersIgnoringModifiers", .{}));
-    if (ign.len > 0) {
-        const cp = std.unicode.utf8Decode(ign[0..cf.seqLen(ign[0])]) catch 0;
-        const key: u21 = if (cp < 128) std.ascii.toLower(@intCast(cp)) else cp;
-        const ctrl = flags & (1 << 18) != 0;
-        const alt = flags & (1 << 19) != 0;
-        const special = key == 0xF700 or key == 0xF701 or key == '\t' or key == 0x1b;
-        // Option too: a text field with Emacs's keys takes ⌥B, ⌥F, ⌥D.
-        if (in.cmd or ctrl or alt or special) {
-            s.ctx.shortcut_taken = false;
-            in.shortcut = .{ .key = key, .cmd = in.cmd, .ctrl = ctrl, .alt = alt, .shift = in.shift };
-            s.frame();
-            in.shortcut = null;
-            if (s.ctx.shortcut_taken) return;
-        }
-    }
-    // A focused text field gets the event through the input system:
-    // accents, input methods, the system's key bindings.
-    if (textinput.interpret(s, event)) return;
-    in.key = switch (code) {
-        51 => .backspace,
-        117 => .delete,
-        123 => .left,
-        124 => .right,
-        125 => .down,
-        126 => .up,
-        115 => .home,
-        119 => .end,
-        36, 76 => .enter,
-        48 => .tab,
-        53 => .escape,
-        116 => .page_up,
-        121 => .page_down,
-        122 => .f1,
-        120 => .f2,
-        99 => .f3,
-        118 => .f4,
-        96 => .f5,
-        97 => .f6,
-        98 => .f7,
-        100 => .f8,
-        101 => .f9,
-        109 => .f10,
-        103 => .f11,
-        111 => .f12,
-        else => null,
-    };
-    var buf: [64]u8 = undefined;
-    var n: usize = 0;
-    if (in.key == null and !in.cmd and flags & (1 << 18) == 0) {
-        const chars = objc.fromNSString(objc.msg(?objc.Object, event, "characters", .{}));
-        // Printable text only: no controls, no function keys (U+F700…).
-        var i: usize = 0;
-        while (i < chars.len) {
-            const len = cf.seqLen(chars[i]);
-            const seq = chars[i..@min(chars.len, i + len)];
-            const printable = seq[0] >= 0x20 and seq[0] != 0x7f and !(seq.len == 3 and seq[0] == 0xef and seq[1] >= 0x9c and seq[1] <= 0x9f);
-            if (printable and n + seq.len <= buf.len) {
-                @memcpy(buf[n .. n + seq.len], seq);
-                n += seq.len;
-            }
-            i += len;
-        }
-    }
-    in.chars = buf[0..n];
-    if (in.key == null and n == 0) return;
-    s.frame();
-}
-
-fn paste(obj: objc.Object, _: objc.SEL, _: ?objc.Object) callconv(.c) void {
-    const s = surfaceOf(obj) orelse return;
-    // ⌘V goes to the view first, as other shortcuts do: it may paste what
-    // is not text (an image).
-    s.ctx.shortcut_taken = false;
-    s.ctx.input.shortcut = .{ .key = 'v', .cmd = true };
-    s.frame();
-    s.ctx.input.shortcut = null;
-    if (s.ctx.shortcut_taken) return;
-    const pb = objc.msg(objc.Object, objc.class("NSPasteboard"), "generalPasteboard", .{});
-    const str = objc.msg(?objc.Object, pb, "stringForType:", .{objc.nsString("public.utf8-plain-text")});
-    const bytes = objc.fromNSString(str);
-    // One line: newlines become spaces.
-    s.pasted.clearRetainingCapacity();
-    s.pasted.appendSlice(s.gpa, bytes) catch return;
-    for (s.pasted.items) |*ch| if (ch.* == '\n' or ch.* == '\r') {
-        ch.* = ' ';
-    };
-    textinput.paste(s, s.pasted.items);
-}
-
-fn displayLinkFired(obj: objc.Object, _: objc.SEL, _: objc.Object) callconv(.c) void {
-    const s = surfaceOf(obj) orelse return;
-    s.frame();
-}
-
-fn liveResizeStart(obj: objc.Object, _: objc.SEL) callconv(.c) void {
-    objc.msgSuper(void, obj, objc.class("NSView"), "viewWillStartLiveResize", .{});
-    const s = surfaceOf(obj) orelse return;
-    s.renderer.setLiveResize(true);
-}
-
-fn liveResizeEnd(obj: objc.Object, _: objc.SEL) callconv(.c) void {
-    objc.msgSuper(void, obj, objc.class("NSView"), "viewDidEndLiveResize", .{});
-    const s = surfaceOf(obj) orelse return;
-    s.renderer.setLiveResize(false);
-    s.frame();
-}
-
-fn setFrameSize(obj: objc.Object, _: objc.SEL, size: objc.CGSize) callconv(.c) void {
-    objc.msgSuper(void, obj, objc.class("NSView"), "setFrameSize:", .{size});
-    const s = surfaceOf(obj) orelse return;
-    s.updateGeometry();
-    s.frame();
-}
-
-fn backingChanged(obj: objc.Object, _: objc.SEL) callconv(.c) void {
-    const s = surfaceOf(obj) orelse return;
-    s.updateGeometry();
-    s.frame();
-}
-
-fn updateTrackingAreas(obj: objc.Object, _: objc.SEL) callconv(.c) void {
-    objc.msgSuper(void, obj, objc.class("NSView"), "updateTrackingAreas", .{});
-    const s = surfaceOf(obj) orelse return;
-    if (s.tracking) |t| {
-        objc.msg(void, obj, "removeTrackingArea:", .{t});
-        objc.release(t);
-    }
-    // Entered and exited, moved, always active, in the visible rect.
-    const opts: objc.NSUInteger = 0x01 | 0x02 | 0x80 | 0x200;
-    const area = objc.msg(objc.Object, objc.alloc("NSTrackingArea"), "initWithRect:options:owner:userInfo:", .{
-        objc.CGRect{}, opts, obj, @as(?objc.Object, null),
-    });
-    objc.msg(void, obj, "addTrackingArea:", .{area});
-    s.tracking = area;
-}

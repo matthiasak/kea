@@ -63,6 +63,14 @@ pub fn MenuItem(comptime Item: type) type {
         id: []const u8 = "",
         submenu: ?[]const Self = null,
         click: ?Click(Item) = null,
+        /// Called before its submenu shows (a menu bar menu, a lazy one):
+        /// fill it with `Item.setSubmenu`, refresh titles and checks.
+        on_open: ?Click(Item) = null,
+        /// Shown in place of the item before it while Option is held.
+        alternate: bool = false,
+        /// An SF Symbol's name, or a picture's PNG bytes shown at 16 pt (a favicon).
+        image_symbol: []const u8 = "",
+        image_png: []const u8 = "",
         is_separator: bool = false,
 
         pub const separator: Self = .{ .is_separator = true };

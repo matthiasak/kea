@@ -33,15 +33,19 @@ fn paintNode(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, clip:
     if (opacity <= 0.001) return;
     const clip4 = metal.clip4(clip);
     const rect4: [4]f32 = .{ r.x, r.y, r.w, r.h };
+    // What the box and its subtree emit, for `Style.scale`.
+    const start = out.items.len;
 
     if (visible.w > 0 and visible.h > 0) {
         if (st.shadow) |sh| push(c, out, .{
             .rect = .{ r.x, r.y + sh.y, r.w, r.h },
             .color = metal.color4(sh.color.alpha(opacity)),
+            // A knocked out shadow is cut by the box, where it is from the shadow.
+            .uv = if (sh.knockout) .{ 0, -sh.y, 0, 0 } else .{ 0, 0, 0, 0 },
             .radius = st.radius,
             // CSS's blur radius is twice the Gaussian's standard deviation.
             .border_width = sh.blur / 2,
-            .kind = metal.Kind.shadow,
+            .kind = if (sh.knockout) metal.Kind.shadow_out else metal.Kind.shadow,
             .clip = clip4,
         });
         // Glass takes the background's place.
@@ -86,7 +90,7 @@ fn paintNode(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, clip:
     if (n.interactive and visible.w > 0 and visible.h > 0) c.addHit(n.id, index, visible, false);
 
     var child_clip = clip;
-    if (st.clip) child_clip = visible;
+    if (st.clip or st.scroll_x) child_clip = visible;
     if (st.scroll) {
         child_clip = visible;
         c.addHit(n.id, index, visible, true);
@@ -94,9 +98,32 @@ fn paintNode(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, clip:
     const first = out.items.len;
     var child = n.first_child;
     while (child != none) : (child = c.node(child).next) paintNode(c, out, child, child_clip, opacity, selectable);
-    if ((st.clip or st.scroll) and st.radius > 0) roundClip(out.items[first..], r, visible, st.radius);
+    if ((st.clip or st.scroll or st.scroll_x) and st.radius > 0) roundClip(out.items[first..], r, visible, st.radius);
 
-    if (st.scroll) paintScrollbar(c, out, n, visible, opacity);
+    if (st.scroll and st.scroll_bar) paintScrollbar(c, out, n, visible, opacity);
+    if (st.scroll_x and st.scroll_bar) paintScrollbarX(c, out, n, visible, opacity);
+    if (st.scale != 1) scaleItems(out.items[start..], r, st.scale, st.scale_anchor, clip4);
+}
+
+/// Maps instances around the anchor of `box` (fractions of it) by `s`,
+/// still within `outer`, the clip the box was given. Glass keeps its
+/// bezel and rim (`uv`, in points) as they are.
+fn scaleItems(items: []metal.Instance, box: types.Rect, s: f32, anchor: types.Point, outer: [4]f32) void {
+    const ax = box.x + box.w * anchor.x;
+    const ay = box.y + box.h * anchor.y;
+    for (items) |*i| {
+        i.rect = .{ ax + (i.rect[0] - ax) * s, ay + (i.rect[1] - ay) * s, i.rect[2] * s, i.rect[3] * s };
+        i.clip = .{
+            @max(outer[0], ax + (i.clip[0] - ax) * s), @max(outer[1], ay + (i.clip[1] - ay) * s),
+            @min(outer[2], ax + (i.clip[2] - ax) * s), @min(outer[3], ay + (i.clip[3] - ay) * s),
+        };
+        i.radius *= s;
+        // A border's width, a shadow's blur, a pane's backdrop blur.
+        i.border_width *= s;
+        if (i.kind == metal.Kind.shadow_out) i.uv = .{ i.uv[0] * s, i.uv[1] * s, 0, 0 };
+        const round = metal.clipCorners(i.clip_round);
+        if (round.corners != 0) i.clip_round = metal.clipRound(round.radius * s, round.corners);
+    }
 }
 
 fn paintText(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, n: ctx_mod.Node, t: ctx_mod.Content.Text, clip4: [4]f32, opacity: f32, selectable: bool) void {
@@ -107,10 +134,10 @@ fn paintText(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, n: ct
     if (t.style.wrap) {
         for (t.lines, 0..) |l, i| {
             const y = inner.y + lh * @as(f32, @floatFromInt(i));
-            textRun(c, out, t, l.start, l.end, inner.x, y, f, lh, clip4, opacity, sel);
+            textRun(c, out, t, l.start, l.end, inner.x, y, f, lh, clip4, opacity, sel, n.rect.x + n.rect.w);
         }
     } else {
-        textRun(c, out, t, 0, t.str.len, inner.x, inner.y, f, lh, clip4, opacity, sel);
+        textRun(c, out, t, 0, t.str.len, inner.x, inner.y, f, lh, clip4, opacity, sel, n.rect.x + n.rect.w);
     }
 }
 
@@ -119,7 +146,8 @@ fn paintText(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, n: ct
 /// horizontal extent.
 const Sel = struct { id: u64, index: u32, x0: f32, x1: f32 };
 
-fn textRun(c: *Context, out: *std.ArrayList(metal.Instance), t: ctx_mod.Content.Text, start: usize, end: usize, x: f32, y: f32, f: text_mod.Font, lh: f32, clip4: [4]f32, opacity: f32, sel: ?Sel) void {
+/// `right` is the box's right edge, where a fade (`TextStyle.fade`) ends.
+fn textRun(c: *Context, out: *std.ArrayList(metal.Instance), t: ctx_mod.Content.Text, start: usize, end: usize, x: f32, y: f32, f: text_mod.Font, lh: f32, clip4: [4]f32, opacity: f32, sel: ?Sel, right: f32) void {
     const style = t.style;
     // Cull lines wholly above or below the clip before shaping them; a
     // selectable one still counts for where the pointer is.
@@ -158,6 +186,10 @@ fn textRun(c: *Context, out: *std.ArrayList(metal.Instance), t: ctx_mod.Content.
             if (span_i < t.spans.len and t.spans[span_i].start <= at) if (t.spans[span_i].color) |sc| {
                 color = metal.color4(sc.alpha(opacity));
             };
+        }
+        if (style.fade) |fd| {
+            color[3] *= std.math.clamp((right - fd.clear - (x + g.x)) / @max(fd.ramp, 0.001), 0, 1);
+            if (color[3] <= 0) continue;
         }
         push(c, out, .{
             .rect = .{ px / scale + sp.x, baseline - g.y + sp.y, sp.w, sp.h },
@@ -256,6 +288,33 @@ fn paintScrollbar(c: *Context, out: *std.ArrayList(metal.Instance), n: ctx_mod.N
     const y = n.rect.y + (view_h - bar_h) * std.math.clamp(t, 0, 1);
     push(c, out, .{
         .rect = .{ n.rect.x + n.rect.w - 7, y + 2, 4, bar_h - 4 },
+        .color = metal.color4(c.theme.muted.alpha(0.5 * opacity)),
+        .radius = 2,
+        .clip = metal.clip4(visible),
+    });
+}
+
+/// The indicator of a box that scrolls sideways, along its bottom.
+fn paintScrollbarX(c: *Context, out: *std.ArrayList(metal.Instance), n: ctx_mod.Node, visible: types.Rect, opacity: f32) void {
+    const offset = c.scroll_x.get(n.id) orelse 0;
+    var x0: f32 = std.math.inf(f32);
+    var x1: f32 = -std.math.inf(f32);
+    var child = n.first_child;
+    while (child != none) : (child = c.node(child).next) {
+        const ch = c.node(child);
+        if (ch.style.absolute) continue;
+        x0 = @min(x0, ch.rect.x);
+        x1 = @max(x1, ch.rect.x + ch.rect.w);
+    }
+    if (x1 <= x0) return;
+    const content_w = x1 - x0 + n.style.padding.horizontal();
+    const view_w = n.rect.w;
+    if (content_w <= view_w + 0.5) return;
+    const bar_w = @max(24, view_w * view_w / content_w);
+    const t = offset / (content_w - view_w);
+    const x = n.rect.x + (view_w - bar_w) * std.math.clamp(t, 0, 1);
+    push(c, out, .{
+        .rect = .{ x + 2, n.rect.y + n.rect.h - 7, bar_w - 4, 4 },
         .color = metal.color4(c.theme.muted.alpha(0.5 * opacity)),
         .radius = 2,
         .clip = metal.clip4(visible),

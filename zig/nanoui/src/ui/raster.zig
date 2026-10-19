@@ -36,7 +36,7 @@ fn unit(v: f32) u8 {
 /// The pixels an instance covers: its quad (grown for a shadow's blur),
 /// within its clip and the frame.
 fn bounds(out: gpu.Pixels, i: *const gpu.Instance, scale: f32) ?[4]usize {
-    const grow: f32 = if (i.kind == gpu.Kind.shadow) i.border_width * 3 else 0;
+    const grow: f32 = if (i.kind == gpu.Kind.shadow or i.kind == gpu.Kind.shadow_out) i.border_width * 3 else 0;
     const x0 = @max(i.rect[0] - grow, i.clip[0]);
     const y0 = @max(i.rect[1] - grow, i.clip[1]);
     const x1 = @min(i.rect[0] + i.rect[2] + grow, i.clip[2]);
@@ -57,7 +57,7 @@ fn drawOne(out: gpu.Pixels, i: *const gpu.Instance, mask: Mask, pictures: Pictur
     const b = bounds(out, i, scale) orelse return;
     if (i.kind == gpu.Kind.text) return glyph(out, i, mask, scale, b);
     if (i.kind == gpu.Kind.image) return picture(out, i, pictures, scale, b);
-    if (i.kind == gpu.Kind.shadow) return shadow(out, i, scale, b);
+    if (i.kind == gpu.Kind.shadow or i.kind == gpu.Kind.shadow_out) return shadow(out, i, scale, b);
     if (i.kind == gpu.Kind.glass) return pane(out, i, scale, b);
     quad(out, i, scale, b);
 }
@@ -328,7 +328,9 @@ fn shadow(out: gpu.Pixels, i: *const gpu.Instance, scale: f32, b: [4]usize) void
         for (b[0]..b[2]) |x| {
             const wx = (@as(f32, @floatFromInt(x)) + 0.5) * inv;
             const pxl = wx - cx;
-            const a = shadowAlpha(pxl, py, hw, hh, r, sigma) * c[3] * clipCover(i, wx, wy, inv);
+            var a = shadowAlpha(pxl, py, hw, hh, r, sigma) * c[3] * clipCover(i, wx, wy, inv);
+            // Knocked out: nothing inside the box (`uv` its offset from the shadow's rect).
+            if (i.kind == gpu.Kind.shadow_out) a *= std.math.clamp(roundedBox(pxl - i.uv[0], py - i.uv[1], hw, hh, r)[0] + 0.5, 0, 1);
             blend(out.bytes, row + x * 4, c[0] * a, c[1] * a, c[2] * a, a);
         }
     }

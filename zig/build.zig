@@ -62,8 +62,11 @@ pub fn build(b: *std.Build) void {
     run_exe.addPassthruArgs();
     b.step("run", "Run KeaZig").dependOn(&run_exe.step);
 
-    // Unit and HistoryRegression tests
-    const tests = b.addTest(.{ .root_module = exe_mod });
+    // Unit and HistoryRegression tests. `-Dtest-root=src/<file>.zig` tests one
+    // module tree in isolation (parallel work on separate modules).
+    const test_root = b.option([]const u8, "test-root", "Root file for `zig build test` (default src/main.zig)");
+    const test_mod = if (test_root) |r| appModule(b, r, target, optimize, &.{.{ .name = "nanoui", .module = nanoui }}) else exe_mod;
+    const tests = b.addTest(.{ .root_module = test_mod });
     b.step("test", "Run KeaZig unit and HistoryRegression tests").dependOn(&b.addRunArtifact(tests).step);
 
     // Headless chrome suites on ui.Tester

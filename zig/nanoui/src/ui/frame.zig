@@ -30,12 +30,13 @@ pub fn run(c: *Context, view: View, ts: *text.TextSystem, instances: *std.ArrayL
     ts.beginFrame();
 
     const t0 = now();
-    if (c.input.pressed) c.selection.pressed = true;
+    if (c.input.pressed and c.input.button == .left) c.selection.pressed = true;
     c.copy_done = false;
     c.copy_requested = false;
     for (c.input.ops) |op| if (op == .command and op.command == .copy) {
         c.copy_requested = true;
     };
+    @import("scroll_x.zig").takeScrollX(c);
     c.begin();
     var passes: u32 = 0;
     while (true) : (passes += 1) {

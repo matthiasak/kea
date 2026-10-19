@@ -18,6 +18,13 @@ const textfield = @import("textfield.zig");
 const ctx_mod = @import("context.zig");
 
 pub const Context = ctx_mod.Context;
+/// Springs and timed curves (`spring`, `springFrom`, `tween`).
+pub const motion = @import("motion.zig");
+pub const Spring = motion.Spring;
+pub const Curve = motion.Curve;
+pub const spring = motion.spring;
+pub const springFrom = motion.springFrom;
+pub const tween = motion.tween;
 pub const Interaction = ctx_mod.Interaction;
 pub const FrameStats = ctx_mod.FrameStats;
 pub const Shortcut = ctx_mod.Shortcut;
@@ -38,6 +45,7 @@ pub const clock = @import("clock.zig");
 pub const png = @import("png.zig");
 
 pub const Point = types.Point;
+pub const Fade = types.Fade;
 pub const Size = types.Size;
 pub const Rect = types.Rect;
 pub const Color = types.Color;
@@ -89,6 +97,14 @@ pub const ListOptions = @import("list.zig").Options;
 pub const ListRows = @import("list.zig").Rows;
 pub const Tester = @import("tester.zig").Tester;
 pub const TesterOptions = @import("tester.zig").Options;
+pub const textArea = @import("textarea.zig").textArea;
+pub const AreaOptions = @import("textarea.zig").AreaOptions;
+/// Focuses the field built next (`c.focusNext`), selecting all its text if asked.
+pub const focusNext = @import("context_hooks.zig").focusNext;
+/// What a drop from another app brought (`Context.dropAt`).
+pub const Drop = @import("input.zig").Drop;
+pub const MouseButton = @import("input.zig").Button;
+pub const ScrollPhase = @import("input.zig").ScrollPhase;
 
 /// What a window of native UI shows: `build` runs on every frame.
 pub const View = struct {
@@ -110,6 +126,9 @@ pub const View = struct {
 };
 
 test {
+    _ = @import("tests_motion.zig");
+    _ = @import("tests_effects.zig");
+    _ = @import("tests_scroll_x.zig");
     _ = types;
     _ = @import("layout.zig");
     _ = textfield;
@@ -131,4 +150,10 @@ test {
     _ = @import("images.zig");
     _ = @import("icons.zig");
     _ = keys;
+    _ = @import("tests_textedit.zig");
+    _ = @import("tests_input.zig");
+    if (@import("builtin").os.tag == .macos) {
+        _ = @import("tests_menu.zig");
+        _ = @import("tests_a11y.zig");
+    }
 }

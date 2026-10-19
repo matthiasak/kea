@@ -85,13 +85,17 @@ pub const Interaction = struct {
     /// The second click of a double click (it is a click too): opens what
     /// a click selects, as a row's inspector.
     double_clicked: bool = false,
+    /// Released over it after a right / middle press on it: a context
+    /// menu, a tab closed with the wheel.
+    right_clicked: bool = false,
+    middle_clicked: bool = false,
     focused: bool,
 };
 
 const Hit = struct { id: u64, index: u32, rect: types.Rect, scroll: bool };
 
-pub const Cursor = enum { arrow, hand, text, resize_left_right, resize_up_down };
-pub const A11yRole = enum { button, tab, text_field, splitter, slider, checkbox, switch_toggle, radio_button, group, static_text };
+pub const Cursor = enum { arrow, hand, text, resize_left_right, resize_up_down, open_hand, closed_hand, not_allowed };
+pub const A11yRole = enum { button, tab, text_field, splitter, slider, checkbox, switch_toggle, radio_button, group, static_text, list, row, image, menu_button, popover };
 pub const A11yItem = struct {
     id: u64,
     node_index: u32,
@@ -175,6 +179,13 @@ pub const Context = struct {
     hot_path: std.ArrayList(u64) = .empty,
     active: u64 = 0,
     focus: u64 = 0,
+    /// `focusNext` asked the field it focuses to select all.
+    focus_select_all: bool = false,
+    /// The hot box's index in the last tree (`none` when nothing is hot).
+    hot_index: u32 = none,
+    /// This frame's help (tooltips) by box id, and the boxes taking drops.
+    helps: std.AutoHashMapUnmanaged(u64, []const u8) = .empty,
+    drop_targets: std.ArrayList(u64) = .empty,
 
     /// How far down from the top of a window with a hidden title bar
     /// its empty space moves the window, as a title bar does: a view with
@@ -197,6 +208,12 @@ pub const Context = struct {
     cursor_text: bool = false,
     /// A cursor a view asks for, over what widgets set (dividers).
     cursor: ?Cursor = null,
+    /// Springs and tweens (`motion.zig`), kept across frames.
+    motion: @import("motion.zig").State = .{},
+    /// The system's Reduce Motion: springs and tweens are their target.
+    reduce_motion: bool = false,
+    /// Horizontal offsets of `scroll_x` boxes, by id.
+    scroll_x: std.AutoHashMapUnmanaged(u64, f32) = .empty,
 
     pub fn init(gpa: std.mem.Allocator, ts: *text.TextSystem) Context {
         return .{ .gpa = gpa, .arena = .init(gpa), .text = ts };
@@ -220,6 +237,10 @@ pub const Context = struct {
         c.scroll_cap.deinit(c.gpa);
         c.scroll_moved.deinit(c.gpa);
         c.selection.deinit(c.gpa);
+        c.motion.deinit(c.gpa);
+        c.scroll_x.deinit(c.gpa);
+        c.helps.deinit(c.gpa);
+        c.drop_targets.deinit(c.gpa);
     }
 
     /// Memory that lives until the end of the frame, for formatted text.
@@ -251,6 +272,8 @@ pub const Context = struct {
         c.wants_wheel = false;
         c.wants_moves = false;
         c.scroll_cap.clearRetainingCapacity();
+        c.helps.clearRetainingCapacity();
+        c.drop_targets.clearRetainingCapacity();
         c.nodes.append(c.gpa, .{
             .id = 0x9e3779b97f4a7c15,
             .style = .{ .width = .{ .px = c.size.w }, .height = .{ .px = c.size.h }, .background = if (c.transparent_root) null else c.theme.background },
@@ -270,6 +293,7 @@ pub const Context = struct {
         c.input.clearEdges();
         c.changed = false;
         if (!c.input.down) c.active = 0;
+        c.focus_select_all = false;
         c.frame += 1;
         // Forget animations of widgets gone for a while.
         if (c.frame % 120 == 0) {
@@ -284,6 +308,7 @@ pub const Context = struct {
                 }
             }
             for (stale[0..n]) |k| _ = c.anims.remove(k);
+            c.motion.prune(c.frame);
         }
     }
 
@@ -358,21 +383,34 @@ pub const Context = struct {
         const hovered = top or std.mem.indexOfScalar(u64, c.hot_path.items, id) != null;
         if (top and c.input.pressed) {
             c.active = id;
-            c.focus = if (opts.focusable) id else 0;
+            if (c.input.button == .left) c.focus = if (opts.focusable) id else 0;
         }
         // A drag that selected text is not a click.
-        const clicked = c.input.released and c.active == id and top and !c.selection.moved;
+        const released = c.input.released and c.active == id and top and !c.selection.moved;
+        const clicked = released and c.input.button == .left;
         if (top) c.cursor_hand = true;
         return .{
             .id = id,
             .rect = rect,
             .hovered = hovered,
-            .pressed = c.active == id and c.input.down,
+            .pressed = c.active == id and c.input.down and c.input.button == .left,
             .clicked = clicked,
             .double_clicked = clicked and c.input.click_count >= 2,
+            .right_clicked = released and c.input.button == .right,
+            .middle_clicked = released and c.input.button == .middle,
             .focused = c.focus == id,
         };
     }
+
+    // Focus, tooltips, drops, window drags: context_hooks.zig.
+    const hooks = @import("context_hooks.zig");
+    pub const focusNext = hooks.focusNext;
+    pub const help = hooks.help;
+    pub const hotHelp = hooks.hotHelp;
+    pub const acceptDrop = hooks.acceptDrop;
+    pub const acceptsDropAt = hooks.acceptsDropAt;
+    pub const dropAt = hooks.dropAt;
+    pub const startsWindowDrag = hooks.startsWindowDrag;
 
     /// Whether this event is the key combination `want`, which the view then
     /// takes: `if (c.shortcut(.{ .key = 'k', .cmd = true })) clear();`
@@ -454,6 +492,7 @@ pub const Context = struct {
     /// The topmost interactive box under the pointer becomes hot.
     pub fn updateHot(c: *Context) void {
         c.hot = 0;
+        c.hot_index = none;
         c.hot_path.clearRetainingCapacity();
         var i = c.hits.items.len;
         while (i > 0) {
@@ -461,6 +500,7 @@ pub const Context = struct {
             const h = c.hits.items[i];
             if (!h.scroll and h.rect.contains(c.input.mouse)) {
                 c.hot = h.id;
+                c.hot_index = h.index;
                 c.hotPath(h);
                 return;
             }
@@ -553,4 +593,5 @@ pub const Context = struct {
             .enabled = enabled,
         }) catch {};
     }
+    pub const setScroll = @import("scroll_x.zig").setScroll;
 };

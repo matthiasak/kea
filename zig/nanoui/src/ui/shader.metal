@@ -2,6 +2,7 @@
 // borders (kind 0), glyph runs and icons sampled from the atlas (kind 1),
 // shadows (kind 2): Gaussian blurs of rounded boxes, as GPUI draws them, or
 // pictures sampled from the image atlas (kind 3), their corners rounded.
+// Shadows of kind 5 are drawn outside their box only (knocked out).
 // Panes of glass (kind 4) have their own fragment function (glass.metal).
 // Each is clipped to its clip rectangle, some of whose corners may be
 // rounded (a box with rounded corners that clips its children).
@@ -34,7 +35,7 @@ vertex VOut vs(uint vid [[vertex_id]], uint iid [[instance_id]],
     Instance i = instances[iid];
     float2 corner = float2(vid & 1, vid >> 1);
     // Shadows reach three standard deviations past their box.
-    float grow = i.kind == 2 ? i.border_width * 3.0 : 0.0;
+    float grow = (i.kind == 2 || i.kind == 5) ? i.border_width * 3.0 : 0.0;
     float2 p = i.rect.xy - grow + corner * (i.rect.zw + 2.0 * grow);
     VOut o;
     o.pos = float4(p / viewport * float2(2.0, -2.0) + float2(-1.0, 1.0), 0.0, 1.0);
@@ -144,9 +145,12 @@ static float4 shade(VOut in, Instance i, texture2d<float> atlas, texture2d<float
         return px * (coverage * i.color.a);
     }
 
-    if (i.kind == 2.0) {
+    if (i.kind == 2.0 || i.kind == 5.0) {
         float sigma = max(i.border_width, 0.25);
         float a = shadow_alpha(p, half_size, r, sigma) * i.color.a;
+        // Knocked out inside the box itself: `uv.xy` is where the box is
+        // from the shadow's rect (the shadow's offset, negated).
+        if (i.kind == 5.0) a *= clamp(rounded_box(p - i.uv.xy, half_size, r) + 0.5, 0.0, 1.0);
         return float4(i.color.rgb * a, a);
     }
 

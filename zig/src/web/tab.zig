@@ -293,6 +293,7 @@ pub const Tab = struct {
     pub fn answerDialog(self: *Tab, ok: bool, text_override: ?[]const u8) void {
         var q = self.question orelse return;
         self.question = null;
+        defer q.input_buf.deinit();
         if (q.completion) |blk| {
             const InvokeAlert = *const fn (*anyopaque) callconv(.c) void;
             const InvokeConfirm = *const fn (*anyopaque, objc.BOOL) callconv(.c) void;

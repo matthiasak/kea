@@ -7,6 +7,7 @@ const ctx_mod = @import("context.zig");
 const Context = ctx_mod.Context;
 const none = ctx_mod.none;
 const rich = @import("text.zig").rich;
+const truncate = @import("truncate.zig");
 
 fn main(d: types.Direction, s: types.Size) f32 {
     return if (d == .row) s.w else s.h;
@@ -49,6 +50,8 @@ pub fn measure(c: *Context, index: u32, avail_w: f32) types.Size {
                 const w = if (rich.styled(t.spans)) rich.layout(c.text, t.str, t.style, t.spans, 0).width else c.text.width(t.str, t.style);
                 content.w = @ceil(w);
                 content.h = lh;
+                // Cut to fit (`truncate.zig`): a row may shrink it.
+                flexible = t.style.truncate;
             }
         },
         .icon => |ic| {
@@ -62,9 +65,10 @@ pub fn measure(c: *Context, index: u32, avail_w: f32) types.Size {
             var child = n.first_child;
             var count: f32 = 0;
             while (child != none) : (child = c.node(child).next) {
-                const s = measure(c, child, inner_w);
+                // A box that scrolls sideways lays its children out at their own widths.
+                const s = measure(c, child, if (st.scroll_x) std.math.inf(f32) else inner_w);
                 if (c.node(child).style.absolute) continue;
-                flexible = flexible or c.node(child).flexible;
+                if (!st.scroll_x) flexible = flexible or c.node(child).flexible;
                 const dir = st.direction;
                 const m = main(dir, s);
                 const x = cross(dir, s);
@@ -87,12 +91,15 @@ pub fn measure(c: *Context, index: u32, avail_w: f32) types.Size {
     // A scrolling box takes the room it is given, not its content's height
     // (CSS's `min-height: 0`): its content scrolls instead.
     if (st.scroll and st.max_height == std.math.inf(f32)) content.h = 0;
+    if (st.scroll_x and st.max_width == std.math.inf(f32)) content.w = 0;
     var size: types.Size = .{
         .w = content.w + st.padding.horizontal(),
         .h = content.h + st.padding.vertical(),
     };
     if (st.width == .px) size.w = st.width.px;
     if (st.height == .px) size.h = st.height.px;
+    // Truncating text is no wider than the room it is given.
+    if (n.content == .text and n.content.text.style.truncate) size.w = @min(size.w, box_w);
     size.w = std.math.clamp(size.w, st.min_width, @max(st.min_width, st.max_width));
     size.h = std.math.clamp(size.h, st.min_height, @max(st.min_height, st.max_height));
     c.node(index).measured = size;
@@ -108,6 +115,7 @@ pub fn arrange(c: *Context, index: u32, rect_in: types.Rect) void {
     rect.x += st.offset.x;
     rect.y += st.offset.y;
     n.rect = rect;
+    if (n.content == .text and n.content.text.style.truncate) truncate.fit(c, index, rect.w);
     if (n.first_child == none) return;
 
     const dir = st.direction;
@@ -182,13 +190,30 @@ pub fn arrange(c: *Context, index: u32, rect_in: types.Rect) void {
         }
     }
 
+    var scroll_x: f32 = 0;
+    if (st.scroll_x) {
+        var content_w = used;
+        if (dir == .column) {
+            content_w = 0;
+            child = n.first_child;
+            while (child != none) : (child = c.node(child).next) {
+                if (!c.node(child).style.absolute) content_w = @max(content_w, c.node(child).measured.w);
+            }
+        }
+        // Moved by the wheel's x before the view was built (`scroll_x.zig`).
+        if (c.scroll_x.getPtr(n.id)) |s| {
+            s.* = std.math.clamp(s.*, 0, @max(0, content_w - inner.w));
+            scroll_x = s.*;
+        }
+    }
+
     child = n.first_child;
     while (child != none) : (child = c.node(child).next) {
         const ch = c.node(child);
         if (ch.style.absolute) {
             const w = if (ch.style.width == .fill) inner.w else ch.measured.w;
             const h = if (ch.style.height == .fill) inner.h else ch.measured.h;
-            arrange(c, child, .{ .x = inner.x, .y = inner.y - scroll_y, .w = w, .h = h });
+            arrange(c, child, .{ .x = inner.x - scroll_x, .y = inner.y - scroll_y, .w = w, .h = h });
             continue;
         }
         const len = mainLen(dir, ch.style);
@@ -196,7 +221,7 @@ pub fn arrange(c: *Context, index: u32, rect_in: types.Rect) void {
         var m = if (len == .fill) 0 else main(dir, ch.measured);
         if (free > 0 and grow_total > 0) m += free * growOf(dir, ch.style) / grow_total;
         // Too little room in a row: boxes of wrapping text give it back.
-        if (free < 0 and shrink_total > 0 and dir == .row and ch.flexible)
+        if (free < 0 and shrink_total > 0 and dir == .row and ch.flexible and !st.scroll_x)
             m = @max(ch.style.min_width, m + free * m / shrink_total);
 
         const clen = crossLen(dir, ch.style);
@@ -222,9 +247,9 @@ pub fn arrange(c: *Context, index: u32, rect_in: types.Rect) void {
             .end => inner_cross - x,
         };
         const r: types.Rect = if (dir == .row)
-            .{ .x = inner.x + pos, .y = inner.y + cpos, .w = m, .h = x }
+            .{ .x = inner.x + pos - scroll_x, .y = inner.y + cpos, .w = m, .h = x }
         else
-            .{ .x = inner.x + cpos, .y = inner.y + pos - scroll_y, .w = x, .h = m };
+            .{ .x = inner.x + cpos - scroll_x, .y = inner.y + pos - scroll_y, .w = x, .h = m };
         arrange(c, child, r);
         pos += m + spacing;
     }

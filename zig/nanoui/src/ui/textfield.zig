@@ -10,26 +10,39 @@ const ctx_mod = @import("context.zig");
 const Context = ctx_mod.Context;
 const EditState = ctx_mod.EditState;
 
-/// The text a field edits, kept by the app.
+/// The text a field edits, kept by the app. Its bytes are on the C heap,
+/// as long as they grow: `deinit` frees them.
 pub const TextBuffer = struct {
-    buf: [1024]u8 = undefined,
-    len: usize = 0,
+    buf: std.ArrayList(u8) = .empty,
     /// Where the caret goes in the next frame, after the app set the text.
     want_caret: ?usize = null,
+    /// The selection (anchor, caret) the next frame applies, as `want_caret`.
+    want_selection: ?[2]usize = null,
+
+    const gpa = std.heap.c_allocator;
+
+    pub fn deinit(b: *TextBuffer) void {
+        b.buf.deinit(gpa);
+        b.* = .{};
+    }
 
     pub fn text(b: *const TextBuffer) []const u8 {
-        return b.buf[0..b.len];
+        return b.buf.items;
     }
 
     /// Replaces the text; the caret goes to its end.
     pub fn set(b: *TextBuffer, s: []const u8) void {
-        b.len = 0;
-        _ = b.replace(0, 0, s);
-        b.want_caret = b.len;
+        const items = b.buf.items;
+        // A part of its own text (trimmed): moved to the front, in place.
+        if (s.len > 0 and @intFromPtr(s.ptr) >= @intFromPtr(items.ptr) and @intFromPtr(s.ptr) < @intFromPtr(items.ptr) + items.len) {
+            std.mem.copyForwards(u8, items[0..s.len], s);
+            b.buf.shrinkRetainingCapacity(s.len);
+        } else _ = b.replace(0, items.len, s);
+        b.want_caret = b.buf.items.len;
     }
 
     pub fn clear(b: *TextBuffer) void {
-        b.len = 0;
+        b.buf.clearRetainingCapacity();
         b.want_caret = 0;
     }
 
@@ -42,19 +55,11 @@ pub const TextBuffer = struct {
         _ = b.replace(from, to, "");
     }
 
-    /// Replaces bytes [from, to) with `s`, as much of it as fits, never
-    /// cutting a UTF-8 sequence; returns the bytes inserted.
+    /// Replaces bytes [from, to) with `s`; returns the bytes inserted:
+    /// all of them, or none (and nothing changes) when memory runs out.
     pub fn replace(b: *TextBuffer, from: usize, to: usize, s: []const u8) usize {
-        const removed = to - from;
-        var n = @min(s.len, b.buf.len - (b.len - removed));
-        while (n > 0 and n < s.len and (s[n] & 0xc0) == 0x80) n -= 1;
-        const tail = b.len - to;
-        const dst = from + n;
-        if (dst < to) std.mem.copyForwards(u8, b.buf[dst .. dst + tail], b.buf[to..b.len]) //
-        else if (dst > to) std.mem.copyBackwards(u8, b.buf[dst .. dst + tail], b.buf[to..b.len]);
-        @memcpy(b.buf[from .. from + n], s[0..n]);
-        b.len = from + n + tail;
-        return n;
+        b.buf.replaceRange(gpa, from, to - from, s) catch return 0;
+        return s.len;
     }
 };
 
@@ -102,6 +107,12 @@ pub const Options = struct {
     bare: bool = false,
     /// The editing keys: the system's, Emacs's or Vim's (keymap.zig).
     keys: keymap.Keymap = .system,
+    /// The selection's fill (the accent at .3 when null) and the caret's
+    /// color (the accent).
+    selection_color: ?types.Color = null,
+    caret_color: ?types.Color = null,
+    /// Gaining the focus selects all the text, as an address field.
+    select_all_on_focus: bool = false,
 };
 
 pub const Result = struct {
@@ -129,7 +140,7 @@ pub fn apply(buffer: *TextBuffer, e: *EditState, op: ctx_mod.TextOp, opts: Optio
         e.caret == s.len and e.anchor == s.len and e.marked == null and !result.accepted)
     {
         const n = buffer.insert(s.len, opts.suggestion);
-        e.caret = buffer.len;
+        e.caret = buffer.text().len;
         e.anchor = e.caret;
         result.changed = n > 0;
         result.accepted = n > 0;
@@ -201,14 +212,14 @@ pub fn apply(buffer: *TextBuffer, e: *EditState, op: ctx_mod.TextOp, opts: Optio
                 .move_right => collapse(e, if (hi > lo) hi else nextBoundary(s, e.caret)),
                 .move_word_left => collapse(e, prevWord(s, e.caret)),
                 .move_word_right => collapse(e, nextWord(s, e.caret)),
-                .move_line_start => collapse(e, 0),
-                .move_line_end => collapse(e, s.len),
+                .move_line_start, .move_up => collapse(e, 0),
+                .move_line_end, .move_down => collapse(e, s.len),
                 .select_left => e.caret = prevBoundary(s, e.caret),
                 .select_right => e.caret = nextBoundary(s, e.caret),
                 .select_word_left => e.caret = prevWord(s, e.caret),
                 .select_word_right => e.caret = nextWord(s, e.caret),
-                .select_line_start => e.caret = 0,
-                .select_line_end => e.caret = s.len,
+                .select_line_start, .select_up => e.caret = 0,
+                .select_line_end, .select_down => e.caret = s.len,
                 .select_all => {
                     e.anchor = 0;
                     e.caret = s.len;
@@ -261,17 +272,7 @@ pub fn textField(c: *Context, buffer: *TextBuffer, opts: Options) Result {
     }
 
     var result: Result = .{ .focused = it.focused };
-    const entry = c.edits.getOrPut(c.gpa, it.id) catch return result;
-    if (!entry.found_existing) entry.value_ptr.* = .{ .caret = buffer.len, .anchor = buffer.len };
-    const e = entry.value_ptr;
-    if (buffer.want_caret) |at| {
-        e.caret = at;
-        e.anchor = at;
-        e.marked = null;
-        buffer.want_caret = null;
-    }
-    e.caret = @min(e.caret, buffer.len);
-    e.anchor = @min(e.anchor, buffer.len);
+    const e = editState(c, it.id, buffer) orelse return result;
 
     // What is drawn: bullets for passwords, one per character.
     const shownOf = struct {
@@ -291,7 +292,7 @@ pub fn textField(c: *Context, buffer: *TextBuffer, opts: Options) Result {
     if (it.focused) {
         if (it.rect) |r| {
             const local_x = c.input.mouse.x - r.x - pad_x + e.scroll_x;
-            if (c.input.pressed and it.hovered) {
+            if (c.input.pressed and c.input.button == .left and it.hovered) {
                 const idx = c.text.indexAt(shownOf(buffer.text(), opts.password, bullets), style, local_x);
                 const at = if (opts.password) byteOfCodepoint(buffer.text(), idx / 3) else idx;
                 e.caret = at;
@@ -309,6 +310,7 @@ pub fn textField(c: *Context, buffer: *TextBuffer, opts: Options) Result {
             }
             if (!c.input.down) e.selecting = false;
         }
+        focusSelect(c, e, opts.select_all_on_focus, buffer.text().len);
         // Emacs's and Vim's keys first; what they take isn't typed. Their
         // undo history: the text before this event, and after it.
         if (opts.keys != .system) e.undo.begin(buffer.text(), e.caret);
@@ -347,6 +349,7 @@ pub fn textField(c: *Context, buffer: *TextBuffer, opts: Options) Result {
     } else {
         e.marked = null;
         e.selecting = false;
+        e.had_focus = false;
     }
 
     const focused = it.focused and c.focus == it.id;
@@ -354,7 +357,9 @@ pub fn textField(c: *Context, buffer: *TextBuffer, opts: Options) Result {
     result.caret = e.caret;
     result.vim_normal = opts.keys == .vim and e.keys.vim_normal;
     result.vim_visual = result.vim_normal and e.keys.vim_visual;
-    const s = buffer.text();
+    // A copy for the frame: the app may set the buffer (moving it) before
+    // the frame is painted, or the input method asks about it.
+    const s = c.alloc().dupe(u8, buffer.text()) catch buffer.text();
     const shown = shownOf(s, opts.password, bullets);
     const lh = c.text.font(style).lineHeight();
     const caret_x = c.text.caretX(shown, style, shownIndex(s, opts.password, e.caret));
@@ -371,7 +376,7 @@ pub fn textField(c: *Context, buffer: *TextBuffer, opts: Options) Result {
     if (focused and hi > lo) {
         const x0 = c.text.caretX(shown, style, shownIndex(s, opts.password, lo));
         const x1 = c.text.caretX(shown, style, shownIndex(s, opts.password, hi));
-        _ = c.leaf(.{ .absolute = true, .width = .{ .px = x1 - x0 }, .height = .{ .px = lh }, .radius = 2, .background = th.accent.alpha(0.3), .offset = .{ .x = x0 - e.scroll_x } }, .none, null);
+        _ = c.leaf(.{ .absolute = true, .width = .{ .px = x1 - x0 }, .height = .{ .px = lh }, .radius = 2, .background = opts.selection_color orelse th.accent.alpha(0.3), .offset = .{ .x = x0 - e.scroll_x } }, .none, null);
     }
     if (s.len == 0) {
         _ = c.leaf(.{ .offset = .{ .x = -e.scroll_x } }, .{ .text = .{ .str = opts.placeholder, .style = style, .color = th.muted } }, null);
@@ -389,7 +394,7 @@ pub fn textField(c: *Context, buffer: *TextBuffer, opts: Options) Result {
         // Vim's normal mode: a block over the character under the caret.
         const block = result.vim_normal;
         const w: f32 = if (!block) 1.5 else if (e.caret < s.len) @max(4, c.text.caretX(shown, style, shownIndex(s, opts.password, @min(s.len, e.caret + 1))) - caret_x) else c.text.width("m", style);
-        _ = c.leaf(.{ .absolute = true, .width = .{ .px = w }, .height = .{ .px = lh }, .background = if (block) th.accent.alpha(0.45) else th.accent, .offset = .{ .x = caret_x - e.scroll_x } }, .none, null);
+        _ = c.leaf(.{ .absolute = true, .width = .{ .px = w }, .height = .{ .px = lh }, .background = if (block) th.accent.alpha(0.45) else opts.caret_color orelse th.accent, .offset = .{ .x = caret_x - e.scroll_x } }, .none, null);
     }
     if (focused) {
         const r = it.rect orelse types.Rect{};
@@ -412,8 +417,45 @@ fn byteOfCodepoint(s: []const u8, n: usize) usize {
     return @min(i, s.len);
 }
 
+/// The editing state of field `id`, with what the app asked of it since
+/// the last frame (`want_caret`, `want_selection`) applied.
+pub fn editState(c: *Context, id: u64, buffer: *TextBuffer) ?*EditState {
+    const len = buffer.text().len;
+    const entry = c.edits.getOrPut(c.gpa, id) catch return null;
+    if (!entry.found_existing) entry.value_ptr.* = .{ .caret = len, .anchor = len };
+    const e = entry.value_ptr;
+    if (buffer.want_caret) |at| {
+        e.caret = at;
+        e.anchor = at;
+        e.marked = null;
+        buffer.want_caret = null;
+    }
+    if (buffer.want_selection) |sel| {
+        e.anchor = sel[0];
+        e.caret = sel[1];
+        e.marked = null;
+        buffer.want_selection = null;
+    }
+    e.caret = @min(e.caret, len);
+    e.anchor = @min(e.anchor, len);
+    return e;
+}
+
+/// A focused field selects all of its `len` bytes when `focusNext` asked
+/// for it, or as it gains the focus with `on_focus`.
+pub fn focusSelect(c: *Context, e: *EditState, on_focus: bool, len: usize) void {
+    if ((on_focus and !e.had_focus) or c.focus_select_all) {
+        e.anchor = 0;
+        e.caret = len;
+        e.selecting = false;
+        c.focus_select_all = false;
+    }
+    e.had_focus = true;
+}
+
 test "buffer edits" {
     var b: TextBuffer = .{};
+    defer b.deinit();
     b.set("hllo");
     _ = b.insert(1, "e");
     try std.testing.expectEqualStrings("hello", b.text());
@@ -432,6 +474,7 @@ fn noClip(_: ?*anyopaque, _: []const u8) void {}
 
 test "composition, selection, commands" {
     var b: TextBuffer = .{};
+    defer b.deinit();
     var e: EditState = .{};
     var r: Result = .{};
     apply(&b, &e, .{ .insert = "hello world" }, .{}, .{ .write = noClip }, &r);
@@ -455,6 +498,7 @@ test "composition, selection, commands" {
 
 test "a suggestion is taken with → at the end" {
     var b: TextBuffer = .{};
+    defer b.deinit();
     var e: EditState = .{};
     var r: Result = .{};
     const opts: Options = .{ .suggestion = "status" };

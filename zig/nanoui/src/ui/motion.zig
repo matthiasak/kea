@@ -1,0 +1,150 @@
+//! Springs and timed curves, as SwiftUI animates: values a view asks for
+//! every frame by id, each moving toward its target from where it is.
+//! A spring is the physical one (mass 1, stiffness (2π/response)²,
+//! damping 4π·damping/response), stepped at 480 Hz; a tween follows a
+//! cubic Bézier over its duration. Under Reduce Motion both are their
+//! target at once.
+const std = @import("std");
+const Context = @import("context.zig").Context;
+
+pub const Spring = struct { response: f32, damping: f32 };
+
+pub const Curve = union(enum) {
+    ease_out,
+    ease_in_out,
+    linear,
+    /// CSS's cubic-bezier(x1, y1, x2, y2).
+    bezier: [4]f32,
+};
+
+const Entry = struct {
+    value: f32,
+    velocity: f32 = 0,
+    target: f32,
+    /// A tween's start value and seconds run.
+    from: f32 = 0,
+    elapsed: f32 = 0,
+    /// The frame it last stepped in: a view built twice in one frame
+    /// steps once. And the frame it was last asked for, for pruning.
+    stepped: u64,
+    used: u64,
+};
+
+pub const State = struct {
+    entries: std.AutoHashMapUnmanaged(u64, Entry) = .empty,
+
+    pub fn deinit(s: *State, gpa: std.mem.Allocator) void {
+        s.entries.deinit(gpa);
+    }
+
+    /// Forgets values not asked for in 120 frames.
+    pub fn prune(s: *State, frame: u64) void {
+        var stale: [64]u64 = undefined;
+        var n: usize = 0;
+        var it = s.entries.iterator();
+        while (it.next()) |e| {
+            if (n == stale.len) break;
+            if (frame - e.value_ptr.used > 120) {
+                stale[n] = e.key_ptr.*;
+                n += 1;
+            }
+        }
+        for (stale[0..n]) |k| _ = s.entries.remove(k);
+    }
+};
+
+fn keyOf(id: u64, salt: u32) u64 {
+    var h = std.hash.Wyhash.init(id ^ 0x6d6f74696f6e);
+    h.update(std.mem.asBytes(&salt));
+    return h.final();
+}
+
+/// The entry for `id`/`salt`, made at `start` the first time; null under
+/// Reduce Motion (its state dropped) or out of memory.
+fn entry(c: *Context, id: u64, salt: u32, start: f32, target: f32) ?*Entry {
+    const k = keyOf(id, salt);
+    if (c.reduce_motion) {
+        _ = c.motion.entries.remove(k);
+        return null;
+    }
+    const gop = c.motion.entries.getOrPut(c.gpa, k) catch return null;
+    if (!gop.found_existing) gop.value_ptr.* = .{ .value = start, .target = target, .from = start, .stepped = c.frame, .used = c.frame };
+    gop.value_ptr.used = c.frame;
+    return gop.value_ptr;
+}
+
+/// `id`'s value springing toward `target`; the first call is `target`.
+pub fn spring(c: *Context, id: u64, salt: u32, target: f32, s: Spring) f32 {
+    return springFrom(c, id, salt, target, target, s);
+}
+
+/// As `spring`, but the first call starts at `from` (an item entering).
+pub fn springFrom(c: *Context, id: u64, salt: u32, from: f32, target: f32, s: Spring) f32 {
+    const e = entry(c, id, salt, from, target) orelse return target;
+    e.target = target;
+    if (e.stepped != c.frame) {
+        e.stepped = c.frame;
+        const stiffness = std.math.pow(f32, 2 * std.math.pi / s.response, 2);
+        const damping = 4 * std.math.pi * s.damping / s.response;
+        const h: f32 = 1.0 / 480.0;
+        const steps: u32 = @intFromFloat(@max(1, @round(@min(c.dt, 0.1) * 480)));
+        for (0..steps) |_| {
+            const a = -stiffness * (e.value - target) - damping * e.velocity;
+            e.velocity += a * h;
+            e.value += e.velocity * h;
+        }
+    }
+    if (@abs(e.value - target) < 0.0005 * @max(1, @abs(target)) and @abs(e.velocity) < 0.01) {
+        e.value = target;
+        e.velocity = 0;
+    } else c.animating = true;
+    return e.value;
+}
+
+/// `id`'s value moving toward `target` over `duration` seconds along
+/// `curve`, from where it was when the target changed; the first call is
+/// `target`.
+pub fn tween(c: *Context, id: u64, salt: u32, target: f32, duration: f32, curve: Curve) f32 {
+    const e = entry(c, id, salt, target, target) orelse return target;
+    if (e.target != target) {
+        e.from = e.value;
+        e.target = target;
+        e.elapsed = 0;
+    }
+    if (e.stepped != c.frame) {
+        e.stepped = c.frame;
+        e.elapsed += @min(c.dt, 0.1);
+    }
+    const p = if (duration <= 0) 1 else @min(1, e.elapsed / duration);
+    e.value = if (p >= 1) target else e.from + (target - e.from) * ease(curve, p);
+    if (e.value != target) c.animating = true;
+    return e.value;
+}
+
+/// The curve's progress at time fraction `x`.
+pub fn ease(curve: Curve, x: f32) f32 {
+    const p: [4]f32 = switch (curve) {
+        .linear => return x,
+        .ease_out => .{ 0, 0, 0.58, 1 },
+        .ease_in_out => .{ 0.42, 0, 0.58, 1 },
+        .bezier => |b| b,
+    };
+    // Solve x(t) = x by Newton's method, then read y(t).
+    var t = x;
+    for (0..6) |_| {
+        const dx = bezierSlope(p[0], p[2], t);
+        if (@abs(dx) < 1e-6) break;
+        t = std.math.clamp(t - (bezierAt(p[0], p[2], t) - x) / dx, 0, 1);
+    }
+    return bezierAt(p[1], p[3], t);
+}
+
+fn bezierAt(a: f32, b: f32, t: f32) f32 {
+    const u = 1 - t;
+    return 3 * u * u * t * a + 3 * u * t * t * b + t * t * t;
+}
+
+fn bezierSlope(a: f32, b: f32, t: f32) f32 {
+    const u = 1 - t;
+    return 3 * u * u * a + 6 * u * t * (b - a) + 3 * t * t * (1 - b);
+}

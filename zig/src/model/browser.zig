@@ -99,6 +99,9 @@ pub const Browser = struct {
         for (self.tabs.items) |t| t.destroy();
         self.tabs.deinit(self.gpa);
         self.closed_tabs.deinit(self.gpa);
+        self.marks_filter_buf.deinit();
+        self.omni_buf.deinit();
+        self.find_buf.deinit();
         self.gpa.destroy(self);
     }
 

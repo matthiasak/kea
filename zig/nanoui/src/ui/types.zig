@@ -111,6 +111,9 @@ pub const Shadow = struct {
     color: Color = .{ .a = 0.18 },
     blur: f32 = 12,
     y: f32 = 4,
+    /// Drawn outside the box only (`Kind.shadow_out`): a box that shows
+    /// what is under it (a page through a stage hole) keeps its shadow.
+    knockout: bool = false,
 };
 
 /// The style of a box, in the manner of CSS flexbox.
@@ -171,9 +174,22 @@ pub const Style = struct {
     /// Its texts (and its children's) can be selected with the pointer and
     /// copied, as a terminal's or a page's (`selection.zig`).
     selectable: bool = false,
+    /// A single press on it moves the window, as a title bar's does (a
+    /// tab strip's empty space); a double click still comes to the box.
+    window_drag: bool = false,
     /// A control (a button, a toggle): its texts do not select, even in a
     /// selectable box, so the pointer is a hand all over it.
     control: bool = false,
+    /// The box and everything in it drawn scaled by this around
+    /// `scale_anchor` (fractions of its rect), after layout: an item
+    /// entering or leaving.
+    scale: f32 = 1,
+    scale_anchor: Point = .{ .x = 0.5, .y = 0.5 },
+    /// Children are laid out at their own widths, clipped to the box, and
+    /// scroll horizontally (the wheel's x, or `Context.setScroll`).
+    scroll_x: bool = false,
+    /// A scrolling box shows its scroll indicator.
+    scroll_bar: bool = true,
 };
 
 /// Bytes [start, end) of a text drawn their own way: a color (ANSI
@@ -206,6 +222,17 @@ pub const TextStyle = struct {
     italic: bool = false,
     /// Line height as a multiple of the font's (1.5 for airy prose).
     leading: f32 = 1,
+    /// One line cut to fit its box, ending in "…".
+    truncate: bool = false,
+    /// Glyphs fade out toward the box's right edge.
+    fade: ?Fade = null,
+};
+
+/// Glyphs within `clear` points of the box's right edge are transparent;
+/// they reach full opacity `ramp` points further left.
+pub const Fade = struct {
+    clear: f32,
+    ramp: f32,
 };
 
 test "rect" {
