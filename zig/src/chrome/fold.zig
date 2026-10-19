@@ -60,6 +60,9 @@ pub const State = struct {
     seen: ?struct { sidebar: bool, right: bool, hides: bool, width: f32 } = null,
     /// The lights as last set: hidden, which way, how far.
     lights: ?struct { off: bool, sidebar: bool, right: bool, width: f32, full: bool } = null,
+    /// An address was being typed into a tab last frame: done with, and
+    /// the pointer elsewhere, the column goes the way it would have.
+    editing: bool = false,
 };
 
 /// ⌘S: the column, or the strip, out of the way or back.
@@ -113,9 +116,12 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette) void {
     if (st.leaving) |at| {
         if (now >= at) {
             st.leaving = null;
-            if (!holding(b)) b.peeking = false;
+            if (!holding(b) and b.editing_tab == null) b.peeking = false;
         } else c.frameIn(@floatCast(at - now));
     }
+    const editing = b.editing_tab != null;
+    if (st.editing and !editing and !st.inside and b.peeking) peek(b, false);
+    st.editing = editing;
     watch(b);
     hideLights(b, c.reduce_motion);
 

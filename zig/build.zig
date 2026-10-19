@@ -12,6 +12,8 @@ const frameworks = [_][]const u8{
     "ImageIO",
     "UniformTypeIdentifiers",
     "Security",
+    "SecurityInterface",
+    "UserNotifications",
 };
 
 fn linkMacFrameworks(mod: *std.Build.Module, b: *std.Build, target: std.Build.ResolvedTarget) void {
@@ -81,6 +83,8 @@ pub fn build(b: *std.Build) void {
 
     // WebKit end to end, in process, windows hidden
     const e2e = b.addExecutable(.{ .name = "keazig-e2e", .root_module = harness(b, "src/tests/e2e/main.zig", target, .Debug) });
+    // The app's scripting dictionary, which the bundle ships (scripting case).
+    e2e.root_module.addAnonymousImport("kea_sdef", .{ .root_source_file = b.path("../Kea.sdef") });
     const run_e2e = b.addRunArtifact(e2e);
     run_e2e.addArg("--nanoui-hidden");
     run_e2e.has_side_effects = true;

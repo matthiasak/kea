@@ -30,7 +30,8 @@ pub const Place = struct {
     margin: f32 = 8,
 };
 
-const key = "kea.overlay";
+/// The open overlay box's key, in the root (`c.peekId(key)` there is its id).
+pub const key = "kea.overlay";
 
 /// Opens the box of the open overlay over everything, from the root view
 /// after all else; true when there is one, then the caller builds its

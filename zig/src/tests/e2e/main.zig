@@ -14,7 +14,7 @@ pub const Case = struct {
     run: *const fn (*Harness) anyerror!void,
 };
 
-const cases = @import("smoke.zig").cases ++ @import("windows.zig").cases ++ @import("favicons.zig").cases ++ @import("web.zig").cases;
+const cases = @import("smoke.zig").cases ++ @import("windows.zig").cases ++ @import("favicons.zig").cases ++ @import("web.zig").cases ++ @import("links.zig").cases ++ @import("downloads.zig").cases ++ @import("page_features.zig").cases ++ @import("page_b.zig").cases;
 
 pub const Harness = struct {
     gpa: std.mem.Allocator,
@@ -125,7 +125,10 @@ pub fn main(init: std.process.Init) !void {
     const http = try std.fmt.bufPrint(&http_buf, "http://127.0.0.1:{d}", .{port});
 
     var failed: usize = 0;
+    // `KEAZIG_E2E=<text>`: only the cases whose names contain it.
+    const only = init.environ_map.get("KEAZIG_E2E");
     for (cases) |case| {
+        if (only) |o| if (std.mem.indexOf(u8, case.name, o) == null) continue;
         const pool = objc.Pool.push();
         defer pool.pop();
         var h: Harness = .{ .gpa = gpa, .temp = try app.Temp.init(gpa), .handler = handler, .http = http };

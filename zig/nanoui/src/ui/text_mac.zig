@@ -54,10 +54,10 @@ pub const Layout = struct { width: f32, glyphs: []const Glyph };
 /// A line of wrapped text: a byte range and its width.
 pub const Line = struct { start: usize, end: usize, width: f32 };
 
-const FontKey = struct { size_bits: u32, weight: types.Weight, mono: bool, italic: bool };
+const FontKey = struct { size_bits: u32, weight: types.Weight, mono: bool, italic: bool, tabular: bool };
 
 fn fontKey(style: types.TextStyle) FontKey {
-    return .{ .size_bits = @bitCast(style.size), .weight = style.weight, .mono = style.mono, .italic = style.italic };
+    return .{ .size_bits = @bitCast(style.size), .weight = style.weight, .mono = style.mono, .italic = style.italic, .tabular = style.tabular };
 }
 
 pub const TextSystem = struct {
@@ -179,7 +179,8 @@ pub const TextSystem = struct {
     pub fn font(self: *TextSystem, style: types.TextStyle) Font {
         const fk = fontKey(style);
         if (self.fonts.get(fk)) |f| return f;
-        const ref = fonts.create(if (style.mono) self.mono_family else self.family, style.size * self.zoom, style.weight, style.italic, style.mono);
+        const base = fonts.create(if (style.mono) self.mono_family else self.family, style.size * self.zoom, style.weight, style.italic, style.mono);
+        const ref = if (style.tabular) fonts.tabular(base) else base;
         const f: Font = .{
             .ref = ref,
             .ascent = @floatCast(CTFontGetAscent(ref)),
@@ -194,7 +195,7 @@ pub const TextSystem = struct {
         var h = std.hash.Wyhash.init(extra);
         h.update(s);
         h.update(std.mem.asBytes(&style.size));
-        h.update(&.{ @intFromEnum(style.weight), @intFromBool(style.mono), @intFromBool(style.italic) });
+        h.update(&.{ @intFromEnum(style.weight), @intFromBool(style.mono), @intFromBool(style.italic), @intFromBool(style.tabular) });
         return h.final();
     }
 
@@ -241,7 +242,8 @@ pub const TextSystem = struct {
     }
 
     fn shape(self: *TextSystem, s: []const u8, style: types.TextStyle) !Layout {
-        if (s.len <= 256) if (try self.shapeFast(s, style)) |l| return l;
+        // The fast path's tables are the font's own glyphs, not its features (tabular digits).
+        if (s.len <= 256 and !style.tabular) if (try self.shapeFast(s, style)) |l| return l;
         const ln = self.line(s, style);
         defer cf.CFRelease(ln);
         return self.glyphsOf(ln, s);

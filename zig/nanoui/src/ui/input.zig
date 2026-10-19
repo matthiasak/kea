@@ -176,6 +176,8 @@ pub const Input = struct {
     drag_over: ?types.Point = null,
     /// What was dropped in this event (`Context.dropAt`).
     drop: ?Drop = null,
+    /// VoiceOver's AXIncrement (+1) / AXDecrement (−1) on box `id`.
+    a11y_step: ?struct { id: u64, dir: i8 } = null,
     key: ?Key = null,
     /// Text typed or pasted in this event.
     chars: []const u8 = "",
@@ -202,6 +204,7 @@ pub const Input = struct {
         i.scroll_phase = .none;
         i.mods_changed = false;
         i.drop = null;
+        i.a11y_step = null;
         i.key = null;
         i.chars = "";
         i.ops = &.{};

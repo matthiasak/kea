@@ -2,10 +2,11 @@
 //! a file per MARK section — `browser_tabs.zig` ("tabs"), `browser_closed.zig`
 //! (closing and ⇧⌘T), `browser_rows.zig` ("this window's rows" and the
 //! session), `browser_windows.zig` ("a tab to another window"), `pins.zig`,
-//! `groups.zig` and `spaces.zig` — whose functions are this struct's methods
+//! `groups.zig`, `spaces.zig` and `omni.zig` (guessing, the address field and
+//! the address in the tab) — whose functions are this struct's methods
 //! through the decls below. Also, for now: interim Split View
 //! (`split_right_id`, `split_fraction`, `focused_pane`, replaced in P7), the
-//! Bookmarks side panel, the Omnibox, Find on Page and `StageHost` sync.
+//! Bookmarks side panel, Find on Page and `StageHost` sync.
 const std = @import("std");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;
@@ -35,6 +36,9 @@ const groups_ops = @import("groups.zig");
 const spaces_ops = @import("spaces.zig");
 const web_ops = @import("../web/delegates_nav.zig");
 const sleep_ops = @import("../web/sleep.zig");
+const downloads_ops = @import("../web/downloads_keep.zig");
+const handoff_ops = @import("../app/handoff.zig");
+const omni_ops = @import("omni.zig");
 
 pub const PaneFocus = enum { left, right };
 pub const TabGroup = groups_ops.TabGroup;
@@ -108,25 +112,42 @@ pub const Browser = struct {
     marks_expanded: bool = false,
     marks_filter_buf: ui.TextBuffer = .{},
 
-    // Omnibox state
-    omni_open: bool = false,
-    omni_buf: ui.TextBuffer = .{},
-    omni_chip: ?SearchSite = null,
-    omni_selected: usize = 0,
-    omni_offer: [256]u8 = undefined,
-    omni_offer_len: usize = 0,
-    omni_typed: [256]u8 = undefined,
-    omni_typed_len: usize = 0,
+    // The address field (model/omni.zig): raised over a page (`editing`),
+    // what it thinks you mean, the site in it, ⌘K's switcher, and what was
+    // asked of the view (`refusals` shakes it, `focus_request` focuses it).
+    editing: bool = false,
+    omni: omni_ops.Omni,
+    site_chip: ?SearchSite = null,
+    refusals: u32 = 0,
+    focus_request: u32 = 0,
+    summoning: bool = false,
+    cycling: bool = false,
+    /// The address (or, renaming, the name) typed into the tab itself.
+    editing_tab: ?u64 = null,
+    tab_draft: ui.TextBuffer = .{},
+    renaming_tab: bool = false,
+    /// That field's box, last frame (what the site card hangs from).
+    tab_field_rect: ui.Rect = .{},
+    /// The fields' own state across frames (chrome/omnibox.zig, tab_address.zig).
+    omnibox: @import("../chrome/omnibox.zig").State = .{},
+    tab_field: @import("../chrome/tab_address.zig").State = .{},
 
-    // Find in page state
-    find_open: bool = false,
+    // Find on page (web/page_find.zig); the interim bar's field until P8.
+    finder: @import("../web/page_find.zig").Find = .{},
     find_buf: ui.TextBuffer = .{},
-    find_matches: usize = 0,
+
+    // Taking things off pages (web/curtain_js.zig): pointing, and what a
+    // private tab hid on its page only.
+    veiling: bool = false,
+    passing_veils: @import("../web/curtain_js.zig").Passing = .empty,
 
     // Toast
     toast_buf: [256]u8 = undefined,
     toast_len: usize = 0,
     toast_until: f64 = 0,
+    /// The file a "Saved …" line is about (`announcedFile`): clicked, the
+    /// line shows it in the Finder (P8 bars, `downloads_keep.reveal`).
+    announced_file: ?[]u8 = null,
 
     // Page holes from the last frame (the split divider drags against them).
     active_page_frame: ui.Rect = .{},
@@ -153,6 +174,12 @@ pub const Browser = struct {
     column: @import("../chrome/side_bar.zig").State = .{},
     fold: @import("../chrome/fold.zig").State = .{},
     spaces_ui: @import("../chrome/spaces_view.zig").State = .{},
+    /// The site card under the tab's address (SiteCard.swift).
+    site_card: @import("../chrome/site_card.zig").State = .{},
+    /// Where the link under the pointer goes (StatusLine.swift `LinkStatus`).
+    link_status: @import("../chrome/link_bubble.zig").Status = .{},
+    /// The page in front, offered to other devices (Sharing.swift `handoffActivity`).
+    handoff_activity: ?objc.Object = null,
 
     // MARK: tabs (browser_tabs.zig)
     pub const displayedTabs = tabs_ops.displayedTabs;
@@ -272,6 +299,45 @@ pub const Browser = struct {
     pub const sleep = sleep_ops.sleep;
     pub const sleepIdle = sleep_ops.sleepIdle;
 
+    // MARK: downloads (web/downloads_keep.zig)
+    pub const keep = downloads_ops.keep;
+    pub const pauseDownload = downloads_ops.pauseDownload;
+    pub const resumeDownload = downloads_ops.resumeDownload;
+    pub const retryDownload = downloads_ops.retryDownload;
+    pub const cancelDownload = downloads_ops.cancelDownload;
+    pub const downloadsFolder = downloads_ops.downloadsFolder;
+
+    // MARK: elsewhere (app/handoff.zig)
+    pub const handOff = handoff_ops.handOff;
+    pub const share = handoff_ops.share;
+    pub const printPage = handoff_ops.printPage;
+
+    // MARK: the address field (omni.zig)
+    pub const setTyped = omni_ops.setTyped;
+    pub const setEditing = omni_ops.setEditing;
+    pub const setChip = omni_ops.setChip;
+    pub const fieldShowing = omni_ops.fieldShowing;
+    pub const askFocus = omni_ops.askFocus;
+    pub const searchURL = omni_ops.searchURL;
+    pub const destination = omni_ops.destination;
+    pub const guess = omni_ops.guess;
+    pub const stepSummon = omni_ops.stepSummon;
+    pub const landSummon = omni_ops.landSummon;
+    pub const summon = omni_ops.summon;
+    pub const takeOffer = omni_ops.takeOffer;
+    pub const stopCompleting = omni_ops.stopCompleting;
+    pub const lockSiteOffer = omni_ops.lockSiteOffer;
+    pub const walk = omni_ops.walk;
+    pub const edit = omni_ops.edit;
+    pub const dismiss = omni_ops.dismiss;
+    pub const submit = omni_ops.submit;
+    pub const freshField = omni_ops.freshField;
+    pub const beginTabEdit = omni_ops.beginTabEdit;
+    pub const beginTabRename = omni_ops.beginTabRename;
+    pub const commitTabEdit = omni_ops.commitTabEdit;
+    pub const cancelTabEdit = omni_ops.cancelTabEdit;
+    pub const finishTabEdit = omni_ops.finishTabEdit;
+
     /// `record` null: the oldest window, its tabs from the session files.
     /// Otherwise another window's, from `windows.json`, ⇧⌘T or new (empty).
     pub fn create(kea: *Kea, record: ?*const WindowRecord) !*Browser {
@@ -287,6 +353,7 @@ pub const Browser = struct {
             .uses_files = record == null,
             // Asked to stay out of the way: it starts that way (see Fold.swift).
             .folded = kea.prefs.sidebar and kea.prefs.side_hides,
+            .omni = omni_ops.Omni.init(kea.gpa),
         };
         if (record) |r| {
             var it = r.rows.map.iterator();
@@ -316,6 +383,8 @@ pub const Browser = struct {
     pub fn destroy(self: *Browser) void {
         if (self.remembering) |t| t.browser = null;
         sleep_ops.unwatch(self);
+        self.kea.fetches.unbind(self);
+        if (self.announced_file) |f| self.gpa.free(f);
         if (self.stage_host) |sh| sh.destroy();
         if (self.lights) |l| l.drop();
         for (self.tabs.items) |t| t.destroy();
@@ -333,12 +402,18 @@ pub const Browser = struct {
         }
         self.record_rows.deinit(self.gpa);
         self.marks_filter_buf.deinit();
-        self.omni_buf.deinit();
+        self.omni.deinit(self.gpa);
+        self.tab_draft.deinit();
+        self.omnibox.deinit(self.gpa);
         self.find_buf.deinit();
+        self.finder.deinit(self.gpa);
+        @import("../web/curtain_js.zig").deinit(self);
         self.strip.deinit(self.gpa);
         @import("../chrome/fold.zig").stop(self);
         self.column.deinit(self.gpa);
         self.spaces_ui.deinit();
+        self.link_status.deinit(self.gpa);
+        handoff_ops.forget(self);
         self.gpa.destroy(self);
     }
 
@@ -390,9 +465,16 @@ pub const Browser = struct {
         const sh = self.stage_host orelse return;
         const primary = self.tabById(self.active_id);
         const secondary = if (self.prefs.split_view and self.split_right_id != null) self.tabById(self.split_right_id.?) else null;
-        // The page's corners are the card's (`Page(corner: cards ? cardRadius : 0)`).
+        // The page's corners are the card's (`Page(corner: cards ? cardRadius : 0)`);
+        // a page out in the floating window is that window's (`PaneStage.page`).
         const framed = self.prefs.sidebar;
-        sh.setPanes(if (primary) |p| p.web else null, if (secondary) |s| s.web else null, framed);
+        const page = struct {
+            fn of(t: ?*Tab) ?objc.Object {
+                const tab = t orelse return null;
+                return if (tab.floating) null else tab.web;
+            }
+        }.of;
+        sh.setPanes(page(primary), page(secondary), framed);
     }
 
     /// The page with the keys: the focused pane's.
@@ -444,88 +526,19 @@ pub const Browser = struct {
         self.redraw();
     }
 
-    pub fn navigateInput(self: *Browser, raw_in: []const u8) void {
-        const trimmed = std.mem.trim(u8, raw_in, " \t\r\n");
-        if (trimmed.len == 0) return;
-
-        // If a SiteSearch chip is active, format its template with %s
-        if (self.omni_chip) |chip| {
-            self.omni_chip = null;
-            var url_out: [2048]u8 = undefined;
-            if (std.mem.indexOf(u8, chip.template, "%s")) |pos| {
-                const full = std.fmt.bufPrint(&url_out, "{s}{s}{s}", .{
-                    chip.template[0..pos],
-                    trimmed,
-                    chip.template[pos + 2 ..],
-                }) catch trimmed;
-                self.goUrl(full);
-                return;
-            }
-        }
-
-        // If an inline offer matches, take the offered host/URL
-        const target = if (self.omni_offer_len > 0 and std.ascii.startsWithIgnoreCase(self.omni_offer[0..self.omni_offer_len], trimmed))
-            self.omni_offer[0..self.omni_offer_len]
-        else
-            trimmed;
-
-        var buf: [2048]u8 = undefined;
-        const resolved = resolveAddress(&buf, target);
-        self.goUrl(resolved);
-    }
-
-    pub fn goUrl(self: *Browser, target_url: []const u8) void {
-        self.omni_open = false;
-        self.omni_offer_len = 0;
-        const t = self.activeTab() orelse self.open(target_url, .{ .foreground = true });
-        t.go(target_url);
-        self.omni_buf.set(target_url);
-        // The visit is recorded when the page finishes (`didFinish`).
-        self.rememberSession();
-        self.redraw();
-    }
-
-    pub fn updateOmniTyped(self: *Browser, text: []const u8) void {
-        self.omni_typed_len = @min(text.len, self.omni_typed.len);
-        @memcpy(self.omni_typed[0..self.omni_typed_len], text[0..self.omni_typed_len]);
-
-        // Check if user typed `<site> ` or `<site>\t` to activate a SiteSearch chip
-        if (self.prefs.searches_sites and self.omni_chip == null and text.len >= 3 and (text[text.len - 1] == ' ' or text[text.len - 1] == '\t')) {
-            const word = std.mem.trim(u8, text, " \t");
-            if (self.kea.site_search.match(word)) |site| {
-                self.omni_chip = site;
-                self.omni_buf.clear();
-                self.omni_typed_len = 0;
-                self.omni_offer_len = 0;
-                return;
-            }
-        }
-
-        // History's completion: what was typed, then the rest of the best match.
-        self.omni_offer_len = 0;
-        const sugs = self.history.suggestions(self.gpa, text, 5) catch return;
-        defer self.gpa.free(sugs);
-        const rest = (self.history.completion(text, sugs) catch null) orelse return;
-        if (text.len + rest.len > self.omni_offer.len) return;
-        @memcpy(self.omni_offer[0..text.len], text);
-        @memcpy(self.omni_offer[text.len..][0..rest.len], rest);
-        self.omni_offer_len = text.len + rest.len;
-    }
-
     pub fn announce(self: *Browser, msg: []const u8) void {
+        self.announceFile(msg, null);
+    }
+
+    /// `announce(_:file:)`: a line about a file stays long enough to be clicked.
+    pub fn announceFile(self: *Browser, msg: []const u8, file: ?[]const u8) void {
         self.toast_len = @min(msg.len, self.toast_buf.len);
         @memcpy(self.toast_buf[0..self.toast_len], msg[0..self.toast_len]);
-        self.toast_until = ui.clock.now() + 2.5;
+        const copy = if (file) |f| self.gpa.dupe(u8, f) catch null else null;
+        if (self.announced_file) |old| self.gpa.free(old);
+        self.announced_file = copy;
+        self.toast_until = ui.clock.now() + @as(f64, if (file == null) 1.7 else 4);
         if (self.window) |w| nanoui.a11y.announce(w.nswindow, msg);
         self.redraw();
     }
 };
-
-fn resolveAddress(buf: *[2048]u8, input: []const u8) []const u8 {
-    if (std.mem.indexOf(u8, input, "://") != null or std.mem.startsWith(u8, input, "about:")) return input;
-    if (std.mem.indexOfScalar(u8, input, ' ') == null and (std.mem.indexOfScalar(u8, input, '.') != null or std.mem.startsWith(u8, input, "localhost"))) {
-        const scheme = if (std.mem.startsWith(u8, input, "localhost") or std.mem.startsWith(u8, input, "127.0.0.1")) "http://" else "https://";
-        return std.fmt.bufPrint(buf, "{s}{s}", .{ scheme, input }) catch input;
-    }
-    return std.fmt.bufPrint(buf, "https://duckduckgo.com/?q={s}", .{input}) catch input;
-}

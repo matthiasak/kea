@@ -272,7 +272,8 @@ pub fn reopenGhost(self: *Browser, at: usize) void {
     self.tabs.insert(self.gpa, @min(ghost.index, self.tabs.items.len), t) catch @panic("OOM");
     self.arrangeGroupedTabs(null);
     self.setActive(t.id);
-    self.omni_open = false;
+    self.setEditing(false);
+    self.setTyped("");
     if (ghost.partner) |pid| if (self.tabById(pid)) |partner| if (self.prefs.split_view and self.split_right_id == null and partner.shy == t.shy) {
         if (ghost.on_left) {
             self.pairSplit(partner.id);

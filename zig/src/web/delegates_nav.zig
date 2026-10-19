@@ -32,6 +32,7 @@ fn class() objc.Class {
             .{ .name = "webView:navigationAction:didBecomeDownload:", .imp = &becameDownload, .types = "v@:@@@" },
             .{ .name = "webView:navigationResponse:didBecomeDownload:", .imp = &becameDownload, .types = "v@:@@@" },
             .{ .name = "_webView:contextMenuDidCreateDownload:", .imp = &menuDownload, .types = "v@:@@" },
+            .{ .name = "_webView:saveDataToFile:suggestedFilename:mimeType:originatingURL:", .imp = &@import("downloads_keep.zig").saveDataToFile, .types = "v@:@@@@@" },
             .{ .name = "webView:didCommitNavigation:", .imp = &didCommit, .types = "v@:@@" },
             .{ .name = "_webView:renderingProgressDidChange:", .imp = &renderingProgress, .types = "v@:@Q" },
             .{ .name = "webView:didFinishNavigation:", .imp = &didFinish, .types = "v@:@@" },
@@ -65,6 +66,8 @@ pub fn tabChanged(b: *Browser, t: *Tab, what: Change) void {
         .state => {},
     }
     b.redraw();
+    // A small window's page draws in that window (Little.swift).
+    @import("little.zig").changed(t);
 }
 
 /// `throttle(for: 2, latest: true)` on the title, with the address it was
@@ -142,6 +145,8 @@ fn decideAction(self: objc.Object, _: objc.SEL, wv: objc.Object, action: objc.Ob
         const shy = t.shy or !objc.msg(objc.BOOL, objc.msg(objc.Object, objc.msg(objc.Object, wv, "configuration", .{}), "websiteDataStore", .{}), "isPersistent", .{});
         const host = objc.fromNSString(objc.msg(?objc.Object, u, "host", .{}));
         config.applyAutoplay(&t.kea.store, prefs, host, shy);
+        // The next document's hidden things, and the blocker for where it goes.
+        @import("curtain_js.zig").navigating(t, wv, objc.fromNSString(objc.msg(?objc.Object, u, "absoluteString", .{})));
     };
     dialogs.call(handler, .{ policy, prefs });
 }
@@ -240,7 +245,8 @@ fn didCommit(self: objc.Object, _: objc.SEL, wv: objc.Object, _: ?objc.Object) c
     defer pool.pop();
     // `didCommit()`: the page on screen is the new one.
     if (tab_mod.currentUrl(wv)) |u| if (u.len > 0 and !std.mem.eql(u8, u, "about:blank")) t.own(&t.committed, u);
-    t.own(&t.hovered, null);
+    if (t.browser) |b| if (t.id == b.active_id) @import("../chrome/link_bubble.zig").dismiss(b);
+    if (t.browser) |b| if (t.id == b.active_id) @import("page_find.zig").invalidatePage(b, false);
     t.setFailure(null);
     t.typing = false;
     state.applyRememberedZoom(t);
@@ -260,9 +266,12 @@ fn didFinish(self: objc.Object, _: objc.SEL, wv: objc.Object, _: ?objc.Object) c
     state.uncover(t, 0);
     // Asked whether or not the tab shows one: it may be turned on later.
     if (t.favicons) |f| f.fetch(t, false);
+    // The find bar still open over a page that has just come in.
+    @import("page_find.zig").arrived(t);
     const b = t.browser orelse return;
     if (t.shy or b.restoring) return;
     b.history.record(page, t.page_title);
+    b.handOff();
     // A site's home page that says where its search is (OpenSearch).
     if (!b.prefs.searches_sites) return;
     const p = Parts.parse(page) orelse return;

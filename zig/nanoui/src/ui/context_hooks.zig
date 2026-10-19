@@ -1,9 +1,10 @@
 //! What a view asks of the window beyond drawing, on `Context`: the
-//! focus given by the app, tooltips, drops from other apps, and boxes
-//! that move the window.
+//! focus given by the app, tooltips, drops from other apps, boxes
+//! that move the window, and what VoiceOver sees of them.
 const types = @import("types.zig");
 const input = @import("input.zig");
-const Context = @import("context.zig").Context;
+const ctx_mod = @import("context.zig");
+const Context = ctx_mod.Context;
 
 /// Focuses the next box (a `textField` or `textArea` called right after),
 /// as a click on it would; `select_all` selects its text.
@@ -51,4 +52,31 @@ pub fn startsWindowDrag(c: *const Context) bool {
     if (c.input.click_count != 1 or c.hot_index >= c.nodes.items.len) return false;
     const n = c.nodes.items[c.hot_index];
     return n.id == c.hot and n.style.window_drag;
+}
+
+/// Box `index` as VoiceOver sees it (a button, a field…).
+pub fn addA11y(c: *Context, index: u32, role: ctx_mod.A11yRole, label: []const u8, value: []const u8, selected: bool, enabled: bool) void {
+    c.a11y_items.append(c.gpa, .{
+        .id = c.nodes.items[index].id,
+        .node_index = index,
+        .role = role,
+        .label = if (label.len > 0) (c.alloc().dupe(u8, label) catch label) else "",
+        .value = if (value.len > 0) (c.alloc().dupe(u8, value) catch value) else "",
+        .selected = selected,
+        .enabled = enabled,
+    }) catch {};
+}
+
+/// Box `index` as an element VoiceOver increments and decrements (a
+/// splitter, a slider): its `interact` then reports `a11y_step`.
+pub fn adjustable(c: *Context, index: u32, opts: struct { role: ctx_mod.A11yRole = .slider, label: []const u8, value: []const u8 = "", enabled: bool = true }) void {
+    const n = c.a11y_items.items.len;
+    c.addA11y(index, opts.role, opts.label, opts.value, false, opts.enabled);
+    if (c.a11y_items.items.len > n) c.a11y_items.items[n].adjustable = true;
+}
+
+/// VoiceOver incremented (`dir` +1) or decremented (−1) box `id`: the
+/// next frame's `interact` of it reports the step.
+pub fn a11yStep(c: *Context, id: u64, dir: i8) void {
+    c.input.a11y_step = .{ .id = id, .dir = dir };
 }

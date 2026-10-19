@@ -15,6 +15,7 @@ const ring = @import("ring.zig");
 const mark = @import("mark.zig");
 const tab_width = @import("tab_width.zig");
 const pin_grid = @import("pin_grid.zig");
+const tab_address = @import("tab_address.zig");
 
 const px = struct {
     fn v(n: f32) ui.Length {
@@ -22,19 +23,32 @@ const px = struct {
     }
 }.v;
 
+/// Its address (or name) being typed into it (`editing`).
+pub fn editing(b: *const Browser, tab: *const Tab) bool {
+    return b.editing_tab == tab.id;
+}
+
 /// Pinned and not being edited (`pinned`).
-pub fn pinned(tab: *const Tab) bool {
-    return tab.pin != null;
+pub fn pinned(b: *const Browser, tab: *const Tab) bool {
+    return tab.pin != null and !editing(b, tab);
 }
 
 /// Too narrow for a title: the mark alone, the title in the tooltip.
-pub fn compact(tab: *const Tab, each: f32) bool {
-    return !pinned(tab) and !tab_width.titled(each);
+pub fn compact(b: *const Browser, tab: *const Tab, each: f32) bool {
+    return !editing(b, tab) and !pinned(b, tab) and !tab_width.titled(each);
 }
 
-/// `span`: a square for a pin, its share for anything else.
-pub fn span(tab: *const Tab, each: f32) f32 {
-    return if (pinned(tab)) metrics.pin_width else each;
+/// `span`: an edited tab is a field as wide as the strip allows, up to
+/// 340; a pin a square; anything else its share.
+pub fn span(b: *const Browser, tab: *const Tab, each: f32) f32 {
+    if (editing(b, tab)) return @min(340, b.strip.room);
+    return if (pinned(b, tab)) metrics.pin_width else each;
+}
+
+/// What the edited tab adds to the run (`total += min(340, room) − oldWidth`).
+pub fn growth(b: *Browser, each: f32) f32 {
+    const t = b.tabById(b.editing_tab orelse return 0) orelse return 0;
+    return @min(340, b.strip.room) - (if (t.pin != null) metrics.pin_width else each);
 }
 
 /// Where the strip puts the pill this frame.
@@ -75,9 +89,10 @@ fn icon(b: *Browser, tab: *const Tab) ?mark.Icon {
 }
 
 pub fn pill(b: *Browser, c: *ui.Context, p: *const Palette, tab: *Tab, o: Options) Drawn {
-    const is_pin = pinned(tab);
-    const small = compact(tab, o.each);
-    const w = o.width orelse span(tab, o.each);
+    const is_pin = pinned(b, tab);
+    const small = compact(b, tab, o.each);
+    const edit = o.interactive and editing(b, tab);
+    const w = o.width orelse span(b, tab, o.each);
     var style: ui.Style = .{
         .direction = .row,
         .width = px(w),
@@ -100,7 +115,7 @@ pub fn pill(b: *Browser, c: *ui.Context, p: *const Palette, tab: *Tab, o: Option
         style.padding = .{ .top = 6, .bottom = 6 };
         style.justify = .center;
     } else {
-        style.padding = .{ .left = 11, .right = 7, .top = 6, .bottom = 6 };
+        style.padding = .{ .left = 11, .right = if (edit) 11 else 7, .top = 6, .bottom = 6 };
         style.gap = 6;
     }
     const i = c.open(style, null);
@@ -118,7 +133,10 @@ pub fn pill(b: *Browser, c: *ui.Context, p: *const Palette, tab: *Tab, o: Option
     }
     const colour = if (o.live) p.ink else p.muted.mix(p.ink.alpha(0.7), h);
     var d: Drawn = .{ .it = it, .index = i };
-    if (is_pin) {
+    if (edit) {
+        tab_address.field(b, c, p, tab);
+        c.node(i).style.offset.x += tab_address.shake(b, c);
+    } else if (is_pin) {
         squareContent(b, c, p, tab, colour);
     } else if (small) {
         d.close = compactContent(b, c, p, tab, o.live, it.hovered and o.interactive);

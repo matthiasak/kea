@@ -44,6 +44,8 @@ pub fn measure(c: *Context, index: u32, avail_w: f32) types.Size {
             if (t.style.wrap) {
                 flexible = true;
                 t.lines = c.text.wrapAttributed(t.str, t.style, t.spans, inner_w);
+                // At most `max_lines`; `arrange` ends the last in "…" (`truncate.zig`).
+                if (t.style.max_lines > 0 and t.lines.len > t.style.max_lines) t.lines = t.lines[0..t.style.max_lines];
                 for (t.lines) |l| content.w = @max(content.w, l.width);
                 content.h = lh * @as(f32, @floatFromInt(t.lines.len));
             } else {
@@ -116,6 +118,7 @@ pub fn arrange(c: *Context, index: u32, rect_in: types.Rect) void {
     rect.y += st.offset.y;
     n.rect = rect;
     if (n.content == .text and n.content.text.style.truncate) truncate.fit(c, index, rect.w);
+    if (n.content == .text and n.content.text.style.max_lines > 0) truncate.fitLines(c, index, rect.w);
     if (n.first_child == none) return;
 
     const dir = st.direction;

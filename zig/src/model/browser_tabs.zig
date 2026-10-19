@@ -122,13 +122,18 @@ pub fn setActive(self: *Browser, id: u64) void {
     if (id == self.active_id) return;
     if (self.tabById(self.active_id)) |left| left.touch();
     self.active_id = id;
+    // What was found belongs to the page just left; the words go on.
+    @import("../web/page_find.zig").invalidatePage(self, true);
+    @import("../chrome/link_bubble.zig").dismiss(self);
     if (self.tabById(id)) |front| @import("../web/dialogs.zig").presentHeld(front);
+    self.handOff();
 }
 
 /// A tab's page off the stage, then the tab gone (`tab.close()`).
 pub fn letGo(self: *Browser, t: *Tab) void {
     if (self.stage_host) |sh| if (t.web) |wv| sh.forget(wv);
     if (self.editing_pin == t.id) self.editing_pin = null;
+    if (self.editing_tab == t.id) self.cancelTabEdit();
     t.destroy();
 }
 
@@ -160,7 +165,8 @@ pub fn open(self: *Browser, url: []const u8, o: OpenOptions) *Tab {
     self.arrangeGroupedTabs(null);
     if (o.foreground) {
         self.setActive(t.id);
-        self.omni_open = false;
+        self.setEditing(false);
+        self.setTyped("");
     }
     self.rememberSession();
     self.redraw();
@@ -178,14 +184,14 @@ pub fn newTab(self: *Browser) void {
         if (!blank.isBlank() or blank.shy or self.inSplit(blank)) continue;
         if (i != self.tabs.items.len - 1) self.move(blank, self.tabs.items.len - 1);
         self.setActive(blank.id);
-        self.omni_open = false;
+        self.freshField(blank);
         self.rememberSession();
         return self.redraw();
     }
     const t = self.make("", false);
     self.adopt(t);
     self.setActive(t.id);
-    self.omni_open = false;
+    self.freshField(t);
     self.rememberSession();
     self.redraw();
 }
@@ -199,13 +205,13 @@ pub fn newShyTab(self: *Browser) void {
         if (!blank.isBlank() or !blank.shy) continue;
         if (i != self.tabs.items.len - 1) self.move(blank, self.tabs.items.len - 1);
         self.setActive(blank.id);
-        self.omni_open = false;
+        self.freshField(blank);
         return self.redraw();
     }
     const t = self.make("", true);
     self.adopt(t);
     self.setActive(t.id);
-    self.omni_open = false;
+    self.freshField(t);
     self.announce("A tab that keeps nothing");
 }
 
@@ -221,9 +227,9 @@ pub fn duplicate(self: *Browser) void {
 
 /// A link from another app: a blank tab takes it, otherwise a tab of its own.
 pub fn arrive(self: *Browser, url: []const u8) void {
-    if (self.tabById(self.active_id)) |a| if (a.isBlank() and self.omni_buf.text().len == 0) {
+    if (self.tabById(self.active_id)) |a| if (a.isBlank() and self.omni.typed.items.len == 0) {
         a.go(url);
-        self.omni_open = false;
+        self.setEditing(false);
         return self.redraw();
     };
     _ = self.open(url, .{ .foreground = true });
@@ -235,7 +241,8 @@ pub fn visit(self: *Browser, url: []const u8, apart: bool) void {
     const a = self.tabById(self.active_id);
     if (a != null and !apart) {
         a.?.go(url);
-        self.omni_open = false;
+        self.setEditing(false);
+        self.setTyped("");
         return self.redraw();
     }
     _ = self.open(url, .{ .foreground = true, .from = a });
@@ -280,7 +287,15 @@ pub fn select(self: *Browser, tab: *Tab) void {
         g.collapsed = false;
         self.writeSession(true);
     };
+    // Its words were a draft for the blank tab it was typed on, unless ⌘K's.
+    if (tab.id != self.active_id and !self.summoning) if (self.tabById(self.active_id)) |here| if (here.isBlank()) {
+        here.own(&here.draft, self.omni.typed.items);
+    };
+    self.cancelTabEdit();
+    self.summoning = false;
     if (tab.id == self.active_id) return self.redraw();
+    // The tab whose video is out comes home first; the one left may float.
+    @import("../web/float.zig").selecting(self, tab);
     self.setActive(tab.id);
     tab.touch();
     // A tab brought back from last time opens the moment you look at it.
@@ -289,8 +304,8 @@ pub fn select(self: *Browser, tab: *Tab) void {
         if (!other.isBlank() and !other.wake()) other.revive();
     };
     self.rememberSession();
-    self.omni_open = false;
-    self.omni_buf.set(tab.url());
+    self.setEditing(false);
+    self.setTyped(if (tab.isBlank()) tab.draft orelse "" else "");
     self.redraw();
 }
 

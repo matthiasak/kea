@@ -24,6 +24,8 @@ pub const Palette = struct {
     unsafe: ui.Color,
     sunset: ui.Color,
     feather: ui.Color,
+    /// SwiftUI's `Color.red` (the system red): a refused address, a find miss.
+    red: ui.Color,
 };
 
 /// `[light, dark]`, made on first use (main thread).
@@ -58,6 +60,7 @@ fn make(dark: bool) Palette {
         .unsafe = if (d) rgb(0.98, 0.75, 0.14) else rgb(0.71, 0.33, 0.04),
         .sunset = if (d) rgb(1.0, 0.604, 0.522) else rgb(0.788, 0.271, 0.184),
         .feather = if (d) rgb(0.522, 0.725, 0.318) else rgb(0.369, 0.604, 0.227),
+        .red = if (d) rgb(1.0, 0.271, 0.227) else rgb(1.0, 0.231, 0.188),
     };
 }
 

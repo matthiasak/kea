@@ -16,6 +16,10 @@ const Space = spaces.Space;
 const Uuid = @import("../data/json.zig").Uuid;
 const kea_import = @import("../data/kea_import.zig");
 const Favicons = @import("../web/favicons.zig").Favicons;
+const Curtain = @import("../data/curtain.zig").Curtain;
+const Shield = @import("../web/shield.zig").Shield;
+const Loot = @import("../data/loot.zig").Loot;
+const Fetches = @import("../web/downloads.zig").Fetches;
 
 /// The app's name wherever Swift's strings name Kea the app.
 pub const app_name = "KeaZig";
@@ -55,6 +59,16 @@ pub const Kea = struct {
     favicons: *Favicons = undefined,
     /// Two fingers between spaces, every window's (`SpaceSwipe.shared`).
     swipe: @import("../chrome/space_swipe.zig").SpaceSwipe = .{},
+    /// Links from other apps, waiting for a window (`Links`, app/links.zig).
+    links: @import("links.zig").State = .{},
+    /// Things taken off pages, by site (`Shared.curtain`).
+    curtain: Curtain = undefined,
+    /// The ad blocker's rule list (`Shield.shared`).
+    shield: Shield = undefined,
+    /// What you have kept: `downloads.json` (`Shared.loot`).
+    loot: Loot = undefined,
+    /// Downloads while they happen, every window's (`Shared.fetches`).
+    fetches: Fetches = undefined,
 
     pub fn create(gpa: std.mem.Allocator, ui_app: ?*nanoui.App, opts: Options) !*Kea {
         const self = try gpa.create(Kea);
@@ -85,22 +99,39 @@ pub const Kea = struct {
         // What a deleted space left behind, if WebKit wouldn't let it go then.
         @import("../model/spaces.zig").sweep(self);
         self.favicons = try Favicons.create(self);
+        self.curtain = Curtain.init(gpa, &self.store);
+        self.shield.init(gpa, &self.store, opts.root, self.prefs.shielded);
+        // Compiled once, before the first page asks for it.
+        if (!opts.headless) self.shield.compile();
+        self.loot = Loot.init(gpa, &self.store);
+        self.fetches = .{ .kea = self, .gpa = gpa };
         // Hidden runs get no Dock icon and never take focus.
         if (opts.hidden) if (ui_app) |a| {
             _ = objc.msg(objc.BOOL, a.nsapp, "setActivationPolicy:", .{@as(objc.NSInteger, 2)});
         };
+        // AppleScript reads this app's windows (app/scripting.zig).
+        if (ui_app != null) @import("scripting.zig").install(self);
         return self;
     }
 
     pub fn destroy(self: *Kea) void {
         self.flush();
         self.swipe.stop();
+        @import("scripting.zig").uninstall(self);
+        self.links.deinit(self.gpa);
+        // The small windows' pages are tabs of no window's: they go first.
+        @import("../web/little.zig").closeAll(self);
         browsers.closeAll(self);
+        @import("../web/notifications.zig").forgetKea(self);
         self.browsers.deinit(self.gpa);
         self.browsers = .empty;
         for (self.stores.values()) |s| objc.release(s);
         self.stores.deinit(self.gpa);
         self.favicons.deinit();
+        self.shield.deinit();
+        self.fetches.deinit();
+        self.loot.deinit();
+        self.curtain.deinit();
         self.spaces.deinit();
         self.pins.deinit();
         self.site_search.deinit();

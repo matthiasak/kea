@@ -172,7 +172,7 @@ pub const TextSystem = struct {
         var h = std.hash.Wyhash.init(extra);
         h.update(s);
         h.update(std.mem.asBytes(&style.size));
-        h.update(&.{ @intFromEnum(style.weight), @intFromBool(style.mono), @intFromBool(style.italic) });
+        h.update(&.{ @intFromEnum(style.weight), @intFromBool(style.mono), @intFromBool(style.italic), @intFromBool(style.tabular) });
         return h.final();
     }
 
@@ -213,7 +213,7 @@ pub const TextSystem = struct {
         var x = x0;
         if (f.id == 0xffff) return x + @as(f32, @floatFromInt(s.len)) * size * 0.5;
         const primary = self.run_fonts.items[f.id];
-        var prev: ?struct { id: u16, g: u16 } = null;
+        var prev: ?struct { id: u16, g: u16, digit: bool } = null;
         var i: usize = 0;
         while (i < s.len) {
             const n = @min(utf8.seqLen(s[i]), s.len - i);
@@ -232,12 +232,19 @@ pub const TextSystem = struct {
                 }
             }
             const k = size / rf.font.units_per_em;
-            if (prev) |p| if (p.id == id) {
+            // Tabular digits: each in a cell as wide as the widest, unkerned.
+            const digit = style.tabular and cp >= '0' and cp <= '9';
+            if (prev) |p| if (p.id == id and !digit and !p.digit) {
                 x += rf.font.kerning(p.g, g) * k;
             };
-            if (cp >= 0x20 or cp == '\t') try out.append(self.gpa, .{ .font = id, .glyph = g, .x = x, .y = 0, .index = @intCast(offset + i) });
-            x += (rf.font.advance(g) * k + rf.embolden * size) * @as(f32, if (cp == '\t') 4 else 1);
-            prev = .{ .id = id, .g = g };
+            const adv = rf.font.advance(g) * k;
+            var cell = adv;
+            if (digit) for ("0123456789") |d| {
+                cell = @max(cell, rf.font.advance(rf.font.glyphIndex(d)) * k);
+            };
+            if (cp >= 0x20 or cp == '\t') try out.append(self.gpa, .{ .font = id, .glyph = g, .x = x + (cell - adv) / 2, .y = 0, .index = @intCast(offset + i) });
+            x += (cell + rf.embolden * size) * @as(f32, if (cp == '\t') 4 else 1);
+            prev = .{ .id = id, .g = g, .digit = digit };
             i += n;
         }
         return x;

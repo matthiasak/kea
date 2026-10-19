@@ -67,7 +67,7 @@ const OsVersion = extern struct { major: objc.NSInteger, minor: objc.NSInteger, 
 var shared_pool: ?objc.Object = null;
 
 /// `Web.pool`: one process pool for every tab, so the next process is warm.
-fn processPool() objc.Object {
+pub fn processPool() objc.Object {
     if (shared_pool) |p| return p;
     shared_pool = objc.new("WKProcessPool");
     return shared_pool.?;
@@ -94,6 +94,8 @@ pub fn configuration(kea: *Kea, shy: bool, data_store: ?objc.Object) objc.Object
         data_store orelse objc.msg(objc.Object, cls, "defaultDataStore", .{});
     if (!shy and kea.opts.root == null) followSignIns(store, kea.prefs.keeps_sign_ins);
     objc.msg(void, config, "setWebsiteDataStore:", .{store});
+    // Its sites' notifications (Notifications.swift); a private tab's none.
+    if (!shy) @import("notifications.zig").attach(kea, store);
     objc.msg(void, config, "setProcessPool:", .{processPool()});
     if (kea.opts.scheme_handler) |h| objc.msg(void, config, "setURLSchemeHandler:forURLScheme:", .{ h, objc.nsString("kea-test") });
     objc.msg(void, config, "setApplicationNameForUserAgent:", .{objc.nsString(userAgentName())});

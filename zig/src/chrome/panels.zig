@@ -1,7 +1,6 @@
 //! The column's and the panels' `EdgeHandle` (SidePanels.swift:16-184),
-//! the Bookmarks side panel, the address field over the page and the find
-//! pill: what the window shows until P6 and P8 port Omnibox, Find and
-//! SidePanels in full. Colours and sizes from `design/`.
+//! the Bookmarks side panel and the find pill: what the window shows until
+//! P8 ports Find and SidePanels in full. Colours and sizes from `design/`.
 const std = @import("std");
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
@@ -104,7 +103,7 @@ fn markRows(b: *Browser, c: *ui.Context, p: *const Palette, nodes: []const Bookm
 fn markRow(b: *Browser, c: *ui.Context, p: *const Palette, bm: *const Bookmark, idx: usize) void {
     ui.key(c, c.print("bm-side-{d}", .{idx}));
     if (listRow(c, p, if (bm.children != null) "folder" else "bookmark", bm.title, 28).clicked) {
-        if (bm.url) |u| b.goUrl(u);
+        if (bm.url) |u| b.visit(u, c.input.cmd);
     }
 }
 
@@ -120,50 +119,11 @@ fn listRow(c: *ui.Context, p: *const Palette, icon: []const u8, title: []const u
     return it;
 }
 
-/// The address field over `area` (the page's part of the window), its
-/// suggestions under it.
-pub fn omnibox(b: *Browser, c: *ui.Context, p: *const Palette, area: ui.Rect) void {
-    const w = @min(metrics.field_width, area.w - 28);
-    const i = c.open(.{
-        .absolute = true,
-        .offset = .{ .x = area.x + (area.w - w) / 2, .y = area.y + area.h / 2 - 60 - 25 },
-        .width = px(w),
-        .padding = .xy(22, 14),
-        .radius = 14,
-        .background = p.ground,
-        .border = p.hairline,
-        .shadow = knockout(card.swiftShadow(0.06, 24, 8)),
-        .gap = 8,
-    }, "omnibox");
-    defer c.end();
-    _ = c.interact(i, .{});
-
-    ui.row(c, .{ .width = .fill, .height = px(22), .align_items = .center, .gap = 6 });
-    if (b.omni_chip) |chip| {
-        _ = controls.pill(c, p, chip.name, .{});
-    }
-    ui.column(c, .{ .grow = 1 });
-    if (b.omni_buf.text().len == 0)
-        _ = c.leaf(.{ .absolute = true }, .{ .text = .{ .str = "Enter a web address", .style = .{ .size = 15.5 }, .color = p.ink.alpha(0.3) } }, null);
-    const res = ui.textField(c, &b.omni_buf, .{ .bare = true, .size = 15.5, .width = .fill, .selection_color = p.ink.alpha(0.12), .caret_color = p.ink });
-    ui.end(c);
-    if (res.changed) b.updateOmniTyped(b.omni_buf.text());
-    if (res.submitted) b.navigateInput(b.omni_buf.text());
-    ui.end(c);
-
-    if (b.omni_offer_len > 0) {
-        const off = b.omni_offer[0..b.omni_offer_len];
-        if (listRow(c, p, "globe", off, 32).clicked) b.navigateInput(off);
-    }
-    const sugs = b.history.suggestions(c.alloc(), b.omni_buf.text(), 5) catch &.{};
-    for (sugs, 0..) |sg, idx| {
-        ui.key(c, c.print("omni-sug-{d}", .{idx}));
-        if (listRow(c, p, "clock", if (sg.title.len > 0) sg.title else sg.url, 32).clicked) b.goUrl(sg.url);
-    }
-}
-
-/// The find pill, at the page's top trailing corner.
+/// The find pill, at the page's top trailing corner (interim until P8's
+/// `find_bar.zig`), driving `web/page_find.zig`.
 pub fn findBar(b: *Browser, c: *ui.Context, p: *const Palette) void {
+    const find = @import("../web/page_find.zig");
+    const f = &b.finder;
     ui.row(c, .{ .absolute = true, .width = .fill, .justify = .end, .padding = .{ .top = 12, .right = 14 } });
     defer ui.end(c);
     const i = c.open(.{
@@ -179,11 +139,23 @@ pub fn findBar(b: *Browser, c: *ui.Context, p: *const Palette) void {
     defer c.end();
     _ = c.interact(i, .{});
     ui.column(c, .{ .width = px(150) });
+    // ⌘F: the keys to the field, what was looked for selected.
+    const take_keys = f.focus != f.shown_focus;
+    if (take_keys) {
+        f.shown_focus = f.focus;
+        b.find_buf.set(f.needle);
+    }
     if (b.find_buf.text().len == 0)
         _ = c.leaf(.{ .absolute = true }, .{ .text = .{ .str = "Find on page", .style = .{ .size = 13 }, .color = p.muted } }, null);
-    _ = ui.textField(c, &b.find_buf, .{ .bare = true, .size = 13, .width = .fill, .selection_color = p.ink.alpha(0.12), .caret_color = p.ink });
+    if (take_keys) ui.focusNext(c, true);
+    const r = ui.textField(c, &b.find_buf, .{ .bare = true, .size = 13, .width = .fill, .selection_color = p.ink.alpha(0.12), .caret_color = p.ink });
     ui.end(c);
-    if (controls.door(c, p, "xmark", .{ .help = "Done   esc" }).clicked) b.find_open = false;
+    if (r.changed) find.setNeedle(b, b.find_buf.text());
+    if (r.submitted) find.look(b, !c.input.shift);
+    var buf: [48]u8 = undefined;
+    if (find.status(b, &buf)) |said|
+        _ = c.leaf(.{}, .{ .text = .{ .str = c.print("{s}", .{said}), .style = .{ .size = 12 }, .color = p.muted } }, null);
+    if (controls.door(c, p, "xmark", .{ .help = "Done   esc" }).clicked) find.closeFind(b);
 }
 
 fn knockout(s: ui.Shadow) ui.Shadow {

@@ -26,6 +26,7 @@ pub const methods = [_]objc.Method{
     .{ .name = "webView:runOpenPanelWithParameters:initiatedByFrame:completionHandler:", .imp = &runOpenPanel, .types = "v@:@@@@?" },
     .{ .name = "webView:didReceiveAuthenticationChallenge:completionHandler:", .imp = &challenged, .types = "v@:@@@?" },
     .{ .name = "webView:requestMediaCapturePermissionForOrigin:initiatedByFrame:type:decisionHandler:", .imp = &askedForCapture, .types = "v@:@@@q@?" },
+    .{ .name = "_webView:requestNotificationPermissionForSecurityOrigin:decisionHandler:", .imp = &@import("notifications.zig").asked, .types = "v@:@@@?" },
     .{ .name = "webViewDidClose:", .imp = &didClose, .types = "v@:@" },
     .{ .name = "webViewWebContentProcessDidTerminate:", .imp = &didTerminate, .types = "v@:@" },
 };
@@ -62,7 +63,7 @@ fn createWebView(self: objc.Object, _: objc.SEL, wv: objc.Object, configuration:
     } else {
         b.adopt(t);
         b.setActive(t.id);
-        b.omni_open = false;
+        b.setEditing(false);
     }
     if (objc.msg(?objc.Object, objc.msg(objc.Object, action, "request", .{}), "URL", .{})) |u|
         t.setAddressOptimistically(objc.fromNSString(objc.msg(?objc.Object, u, "absoluteString", .{})));

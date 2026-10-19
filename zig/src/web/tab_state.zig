@@ -27,6 +27,7 @@ pub fn wake(t: *Tab) bool {
     defer t.gpa.free(target);
     t.setFailure(null);
     t.reading = 0;
+    t.reader = false;
     t.typing = false;
     const memory = t.memory;
     t.memory = null;
@@ -227,21 +228,25 @@ pub fn applyRememberedZoom(t: *Tab) void {
     t.zoom = kept;
 }
 
-/// `magnify(to:)`: between two fifths and three times.
+/// `magnify(to:)`: between two fifths and three times. A tab with no page
+/// built yet (or headless) keeps it for the site, as one built would.
 pub fn magnify(t: *Tab, value: f64) void {
-    const wv = t.web orelse return;
     const wanted = @min(3, @max(0.4, value));
-    if (@abs(wanted - objc.msg(f64, wv, "pageZoom", .{})) <= 0.004) return;
-    objc.msg(void, wv, "setPageZoom:", .{wanted});
+    if (@abs(wanted - pageZoom(t)) <= 0.004) return;
+    if (t.web) |wv| objc.msg(void, wv, "setPageZoom:", .{wanted});
     t.zoom = wanted;
     rememberZoom(t);
     if (t.browser) |b| b.zoomed(wanted);
 }
 
+fn pageZoom(t: *const Tab) f64 {
+    const wv = t.web orelse return t.zoom;
+    return objc.msg(f64, wv, "pageZoom", .{});
+}
+
 /// ⌘+ and ⌘- (`magnify(by:)`).
 pub fn magnifyBy(t: *Tab, factor: f64) void {
-    const wv = t.web orelse return;
-    magnify(t, objc.msg(f64, wv, "pageZoom", .{}) * factor);
+    magnify(t, pageZoom(t) * factor);
 }
 
 /// ⌘0: both kinds of zoom back to where every site starts.

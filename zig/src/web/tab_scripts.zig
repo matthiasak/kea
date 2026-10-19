@@ -1,8 +1,9 @@
 //! Kea's page scripts and the relays that carry what they say back to the
 //! tab (Tab.swift 632-652 and `arm` 733-819; `ScrollRelay`, `MiddleRelay`,
 //! `HoveredLink`, `ImageRelay`, `VeilRelay`, `IconRelay`), all in
-//! `Web.world`. Curtain's picker, forms, passkeys, the store, AutoScroll
-//! and LiveRate scripts arrive with their own phases.
+//! `Web.world`, with Curtain's picker (`curtain_js.zig`) and AutoScroll.
+//! LiveRate's runs in the page's own world. Forms, passkeys and the store
+//! arrive with their own phases.
 const std = @import("std");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;
@@ -13,12 +14,19 @@ const favicons = @import("favicons.zig");
 const page_view = @import("page_view.zig");
 const state = @import("tab_state.zig");
 const image_menu = @import("image_menu.zig");
+const curtain_js = @import("curtain_js.zig");
 
 const scroll_script = @embedFile("js/scroll_relay.js");
 const middle_script = @embedFile("js/middle_relay.js");
 const swipe_script = @embedFile("js/swipe_watch.js");
 const image_script = @embedFile("js/image_watch.js");
 const link_script = @embedFile("js/hovered_link.js");
+/// `LiveRate.script` (LiveRate.swift): a live player's speed nudges never
+/// cross exactly 1, so the sound isn't torn down every few seconds.
+const live_rate_script = @embedFile("js/live_rate.js");
+/// AutoScroll.swift's `script`, and `off` for a page already up.
+pub const auto_scroll_script = @embedFile("js/auto_scroll.js");
+pub const auto_scroll_off = "window.__keaAutoScrollOff = true;";
 
 /// The handlers this tab's delegate answers, in Kea's world.
 const handled = [_][]const u8{ "keaScroll", "keaVeil", "keaImages", "keaMiddle", config.link_relay };
@@ -36,7 +44,10 @@ pub fn install(t: *Tab) void {
     config.release(ucc);
     for (handled) |name| objc.msg(void, ucc, "addScriptMessageHandler:contentWorld:name:", .{ delegate, config.world(), objc.nsString(name) });
     favicons.install(ucc, delegate);
-    arm(t, "", false);
+    t.kea.shield.protect(ucc);
+    // A new view: armed whatever was armed before.
+    t.armed_key = 0;
+    arm(t, t.veils);
 }
 
 /// `discard`'s half: every handler and script off the controller.
@@ -56,30 +67,54 @@ fn add(ucc: objc.Object, source: []const u8, start: bool, main_only: bool, world
 }
 
 /// `arm(hiding:)`: what goes into the next document, the hidden-things
-/// stylesheet (`css`) in before it has a body. `again`: scripts already
-/// there are taken off first (`favicons.install` put the icon's in).
-pub fn arm(t: *Tab, css: []const u8, again: bool) void {
+/// stylesheet (`css`, kept as `Tab.veils` for a view built later) in
+/// before it has a body. Done again only when something in it changed.
+pub fn arm(t: *Tab, css: []const u8) void {
+    if (!std.mem.eql(u8, t.veils, css)) {
+        const copy = t.gpa.dupe(u8, css) catch return;
+        t.gpa.free(t.veils);
+        t.veils = copy;
+    }
     const wv = t.web orelse return;
+    const prefs = &t.kea.prefs;
+    var h = std.hash.Wyhash.init(0);
+    h.update(t.veils);
+    h.update(&.{ @intFromBool(prefs.auto_scroll), @intFromBool(prefs.shows_links) });
+    const key = h.final() | 1;
+    if (t.armed_key == key) return;
+    t.armed_key = key;
     const pool = objc.Pool.push();
     defer pool.pop();
     const ucc = controller(wv);
     const w = config.world();
-    if (again) {
-        objc.msg(void, ucc, "removeAllUserScripts", .{});
-        add(ucc, favicons.relay_script, false, true, w);
-    }
+    objc.msg(void, ucc, "removeAllUserScripts", .{});
     add(ucc, scroll_script, false, true, w);
+    add(ucc, curtain_js.picker_script, true, true, w);
+    add(ucc, favicons.relay_script, false, true, w);
+    if (prefs.auto_scroll) add(ucc, auto_scroll_script, false, true, w);
     // Every frame: a swipe over an embedded map is the map's.
     add(ucc, swipe_script, true, false, w);
     add(ucc, image_script, true, false, w);
-    if (t.kea.prefs.shows_links) add(ucc, link_script, true, false, w);
+    if (prefs.shows_links) add(ucc, link_script, true, false, w);
     // The main frame only: a middle-click inside an ad's frame is its own.
     add(ucc, middle_script, true, true, w);
-    if (css.len > 0) {
-        const style = veilStyle(t.gpa, css) catch return;
+    // Every frame, in the page's own world and ahead of its scripts.
+    add(ucc, live_rate_script, true, false, config.pageWorld());
+    if (t.veils.len > 0) {
+        const style = veilStyle(t.gpa, t.veils) catch return;
         defer t.gpa.free(style);
         add(ucc, style, true, true, w);
     }
+}
+
+/// `prefs.$autoScroll`: every tab's next page, and the page each shows now.
+pub fn autoScrollChanged(b: *Browser) void {
+    const parked = b.parkedTabs(b.gpa) catch return;
+    defer b.gpa.free(parked);
+    for ([_][]const *Tab{ b.tabs.items, parked }) |list| for (list) |t| {
+        curtain_js.armFor(t, t.url());
+        t.evaluate(if (t.kea.prefs.auto_scroll) auto_scroll_script else auto_scroll_off, .kea, null, 0);
+    };
 }
 
 /// `Veiling.style`: a stylesheet put in before the document has a body.
@@ -87,14 +122,19 @@ pub fn veilStyle(gpa: std.mem.Allocator, css: []const u8) ![]u8 {
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(gpa);
     try out.appendSlice(gpa, "(function () {\n  var sheet = document.getElementById('kea-veil');\n  if (!sheet) {\n    sheet = document.createElement('style');\n    sheet.id = 'kea-veil';\n    (document.head || document.documentElement).appendChild(sheet);\n  }\n  sheet.textContent = `");
-    for (css) |ch| switch (ch) {
+    try escapeInto(&out, gpa, css);
+    try out.appendSlice(gpa, "`;\n})();");
+    return out.toOwnedSlice(gpa);
+}
+
+/// Text put between backticks in a script: `\`, `` ` `` and `$` escaped.
+pub fn escapeInto(out: *std.ArrayList(u8), gpa: std.mem.Allocator, text: []const u8) !void {
+    for (text) |ch| switch (ch) {
         '\\' => try out.appendSlice(gpa, "\\\\"),
         '`' => try out.appendSlice(gpa, "\\`"),
         '$' => try out.appendSlice(gpa, "\\$"),
         else => try out.append(gpa, ch),
     };
-    try out.appendSlice(gpa, "`;\n})();");
-    return out.toOwnedSlice(gpa);
 }
 
 // MARK: what the page says
@@ -128,9 +168,7 @@ pub fn received(t: *Tab, message: objc.Object) void {
     if (std.mem.eql(u8, name, config.link_relay)) {
         // `HoveredLink`: only from this tab's own page.
         if (objc.msg(?objc.Object, message, "webView", .{}) != t.web or !isKind(body, "NSString")) return;
-        const address = objc.fromNSString(body);
-        t.own(&t.hovered, if (address.len == 0) null else address);
-        if (t.browser) |b| if (b.prefs.shows_links) t.changed(.state);
+        @import("../chrome/link_bubble.zig").relayed(t, objc.fromNSString(body));
         return;
     }
     if (!isKind(body, "NSDictionary")) return;
@@ -156,15 +194,11 @@ pub fn received(t: *Tab, message: objc.Object) void {
         return;
     }
     if (std.mem.eql(u8, name, "keaVeil")) {
-        // `VeilRelay`: Curtain's picker (its model arrives with Curtain).
+        // `VeilRelay`: Curtain's picker.
         const b = t.browser orelse return;
-        if (string(body, "trouble")) |trouble| {
-            var buf: [300]u8 = undefined;
-            b.announce(std.fmt.bufPrint(&buf, "Couldn't hide that — {s}", .{trouble}) catch return);
-        } else if (@hasDecl(Browser, "veilPicked")) {
-            if (field(body, "off")) |off| if (objc.msg(objc.BOOL, off, "boolValue", .{})) return b.veilEnded();
-            const selector = string(body, "selector") orelse return;
-            b.veilPicked(t, selector, string(body, "label") orelse selector, string(body, "note") orelse "");
-        }
+        if (string(body, "trouble")) |trouble| return curtain_js.trouble(b, trouble);
+        if (field(body, "off")) |off| if (objc.msg(objc.BOOL, off, "boolValue", .{})) return curtain_js.ended(b);
+        const selector = string(body, "selector") orelse return;
+        curtain_js.picked(b, t, selector, string(body, "label") orelse selector, string(body, "note") orelse "");
     }
 }

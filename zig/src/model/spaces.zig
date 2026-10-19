@@ -61,6 +61,7 @@ fn enter(self: *Browser, id: Uuid) void {
     if (id.eql(self.space_id)) return;
     const to = self.kea.spaceIndex(id) orelse return;
     if (!self.making_space) self.space_step = if (to > (self.kea.spaceIndex(self.space_id) orelse 0)) 1 else -1;
+    self.cancelTabEdit();
     self.writeSession(true);
     const visible = self.visibleTabIDs();
     for (visible) |vid| if (self.tabById(vid)) |t| t.touch();
@@ -94,7 +95,9 @@ fn enter(self: *Browser, id: Uuid) void {
         self.showRow(.empty, 0, null);
         self.restoreSession();
     }
-    self.omni_open = if (self.tabById(self.active_id)) |t| t.isBlank() else true;
+    self.setEditing(if (self.tabById(self.active_id)) |t| t.isBlank() else true);
+    self.setTyped("");
+    self.askFocus();
     self.redraw();
 }
 
@@ -252,6 +255,9 @@ pub fn erase(kea: *Kea, id: Uuid) void {
     const pool = objc.Pool.push();
     defer pool.pop();
     if (kea.dataStore(id)) |store| {
+        // The space's downloads would have kept its store, and asked with
+        // its cookies again: they go with it (`forgetDownloads(of:)`).
+        kea.fetches.forgetStore(store);
         const cls = objc.class("WKWebsiteDataStore");
         const every = objc.msg(objc.Object, cls, "allWebsiteDataTypes", .{});
         const since = objc.msg(objc.Object, objc.class("NSDate"), "distantPast", .{});

@@ -77,6 +77,8 @@ pub const PillOptions = struct {
     filled: bool = false,
     /// The title's colour when outlined (ink when null).
     tint: ?ui.Color = null,
+    /// `.help(…)`: its tooltip.
+    help: ?[]const u8 = null,
 };
 
 /// `Pill`: a small capsule that does one thing.
@@ -85,6 +87,7 @@ pub fn pill(c: *ui.Context, p: *const Palette, title: []const u8, opts: PillOpti
     defer c.end();
     const it = c.interact(i, .{});
     c.addA11y(i, .button, title, "", false, true);
+    if (opts.help) |text| c.help(i, text);
     const h = hover(c, it, 0);
     const s = &c.node(i).style;
     s.background = if (opts.filled) p.sunset else p.ground.mix(p.hover, h);

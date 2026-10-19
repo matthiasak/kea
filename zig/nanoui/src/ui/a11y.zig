@@ -16,12 +16,14 @@ pub const ElementPayload = struct {
     value: []u8 = &.{},
     selected: bool = false,
     enabled: bool = true,
+    adjustable: bool = false,
 
     /// Takes the item's state, its label and value copied.
     pub fn update(p: *ElementPayload, gpa: std.mem.Allocator, it: ctx_mod.A11yItem) void {
         p.role = it.role;
         p.selected = it.selected;
         p.enabled = it.enabled;
+        p.adjustable = it.adjustable;
         if (!std.mem.eql(u8, p.label, it.label)) p.label = swap(gpa, p.label, it.label);
         if (!std.mem.eql(u8, p.value, it.value)) p.value = swap(gpa, p.value, it.value);
     }
@@ -67,6 +69,9 @@ fn elementClass() objc.Class {
             .{ .name = "accessibilityValue", .imp = &elemValue, .types = "@@:" },
             .{ .name = "accessibilityFrame", .imp = &elemFrame, .types = "{CGRect={CGPoint=dd}{CGSize=dd}}@:" },
             .{ .name = "accessibilityPerformPress", .imp = &elemPress, .types = "c@:" },
+            .{ .name = "accessibilityPerformIncrement", .imp = &elemIncrement, .types = "c@:" },
+            .{ .name = "accessibilityPerformDecrement", .imp = &elemDecrement, .types = "c@:" },
+            .{ .name = "isAccessibilitySelectorAllowed:", .imp = &elemAllowed, .types = "c@::" },
         },
     });
 }
@@ -202,6 +207,32 @@ fn elemPress(obj: objc.Object, _: objc.SEL) callconv(.c) objc.BOOL {
     s.ctx.pointerUp();
     s.frame();
     return objc.YES;
+}
+
+fn elemIncrement(obj: objc.Object, _: objc.SEL) callconv(.c) objc.BOOL {
+    return step(obj, 1);
+}
+
+fn elemDecrement(obj: objc.Object, _: objc.SEL) callconv(.c) objc.BOOL {
+    return step(obj, -1);
+}
+
+/// An adjustable box's step comes to its `interact` in the next frame.
+fn step(obj: objc.Object, dir: i8) objc.BOOL {
+    const p = payloadOf(obj) orelse return objc.NO;
+    if (!p.adjustable) return objc.NO;
+    p.surface.ctx.a11yStep(p.id, dir);
+    p.surface.frame();
+    return objc.YES;
+}
+
+/// Only adjustable elements offer AXIncrement / AXDecrement.
+fn elemAllowed(obj: objc.Object, _: objc.SEL, s: objc.SEL) callconv(.c) objc.BOOL {
+    if (s == objc.sel("accessibilityPerformIncrement") or s == objc.sel("accessibilityPerformDecrement")) {
+        const p = payloadOf(obj) orelse return objc.NO;
+        return if (p.adjustable) objc.YES else objc.NO;
+    }
+    return objc.msgSuper(objc.BOOL, obj, objc.class("NSAccessibilityElement"), "isAccessibilitySelectorAllowed:", .{s});
 }
 
 /// Posts a high-priority VoiceOver announcement (`NSAccessibilityAnnouncementRequestedNotification`).

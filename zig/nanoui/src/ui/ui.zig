@@ -129,6 +129,9 @@ test {
     _ = @import("tests_motion.zig");
     _ = @import("tests_effects.zig");
     _ = @import("tests_scroll_x.zig");
+    _ = @import("tests_a11y_adjust.zig");
+    _ = @import("tests_shadow_x.zig");
+    _ = @import("tests_text_style.zig");
     _ = types;
     _ = @import("layout.zig");
     _ = textfield;

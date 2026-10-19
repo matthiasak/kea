@@ -26,7 +26,7 @@ fn finished(t: *app.Tab) bool {
     return !t.loading and t.progress >= 1;
 }
 
-fn open(h: *Harness, b: *app.Browser, url: []const u8) !*app.Tab {
+pub fn open(h: *Harness, b: *app.Browser, url: []const u8) !*app.Tab {
     const t = b.open(url, .{ .foreground = true });
     h.waitFor(t, finished, 10, url) catch
         return h.fail("{s}: url '{s}', loading {}, failure '{s}'", .{ url, t.url(), t.loading, t.failure orelse "" });
@@ -50,7 +50,7 @@ fn answered(_: *const u8) bool {
 }
 
 /// What `js` comes to in the page, as text.
-fn eval(h: *Harness, t: *app.Tab, js: []const u8) ![]const u8 {
+pub fn eval(h: *Harness, t: *app.Tab, js: []const u8) ![]const u8 {
     said_len = null;
     t.evaluate(js, .page, heard, 0);
     const dummy: u8 = 0;
@@ -107,7 +107,7 @@ fn alertAnswered(h: *Harness) !void {
 }
 
 /// Asks until `js` comes to `want`: the page goes on a moment after its answer.
-fn evalUntil(h: *Harness, t: *app.Tab, js: []const u8, want: []const u8) !void {
+pub fn evalUntil(h: *Harness, t: *app.Tab, js: []const u8, want: []const u8) !void {
     const deadline = nanoui.ui.clock.now() + 3;
     while (nanoui.ui.clock.now() < deadline) {
         if (std.mem.eql(u8, try eval(h, t, js), want)) return;

@@ -91,7 +91,7 @@ fn expectPageClear(opts: Options) !void {
     defer f.deinit();
     _ = f.browser.open("kea-test://site/page", .{ .foreground = true });
     f.tester.settle(1);
-    try std.testing.expect(!f.browser.omni_open);
+    try std.testing.expect(!f.browser.fieldShowing());
     const hole = f.holes()[0];
     const inner: ui.Rect = .{ .x = hole.x + 1, .y = hole.y + 1, .w = hole.w - 2, .h = hole.h - 2 };
     for (f.tester.instances.items) |in| {

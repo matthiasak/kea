@@ -27,6 +27,8 @@ const overlays = @import("overlays.zig");
 const controls = @import("controls.zig");
 const browsers = @import("../app/browsers.zig");
 const page_layers = @import("page_layers.zig");
+const site_card = @import("site_card.zig");
+const omnibox = @import("omnibox.zig");
 
 const px = struct {
     fn v(n: f32) ui.Length {
@@ -40,7 +42,11 @@ pub fn view(b: *Browser, c: *ui.Context) void {
     const p = palette.get(c.theme.dark);
     // The strip and the column say where the window is dragged from.
     c.title_bar_height = 0;
+    // ⌘ let go of ends a ⌘K walk, wherever it stopped.
+    if (c.input.mods_changed and !c.input.cmd) b.landSummon();
     handleShortcuts(b, c);
+    // The address typed into a tab, done with: the next takes the keys again.
+    if (b.editing_tab == null) b.tab_field.claimed = null;
     space_swipe.frame(b, c);
     groups_view.beginFrame(b);
 
@@ -69,11 +75,12 @@ pub fn view(b: *Browser, c: *ui.Context) void {
 
     // Over everything, in App.swift's order. Fold, bars, Peek, panels and
     // sheets, the tab switcher and the import's card come with their phases.
-    if (b.omni_open) {
-        const lead: f32 = if (r.sidebar() and !right) b.prefs.side_width else 0;
-        const trail: f32 = if (r.sidebar() and right) b.prefs.side_width else 0;
-        panels.omnibox(b, c, p, .{ .x = lead, .y = 0, .w = c.size.w - lead - trail, .h = c.size.h });
-    }
+    // The field is centred on the page, not on the window: the column of
+    // tabs is not what it stands over.
+    const lead: f32 = if (r.sidebar() and !right) b.prefs.side_width else 0;
+    const trail: f32 = if (r.sidebar() and right) b.prefs.side_width else 0;
+    omnibox.view(b, c, p, .{ .x = lead, .y = 0, .w = c.size.w - lead - trail, .h = c.size.h }, .{});
+    site_card.follow(b);
     drawOverlay(b, c, p);
 }
 
@@ -185,8 +192,11 @@ fn drawPane(b: *Browser, c: *ui.Context, p: *const Palette, tab_opt: ?*Tab, key_
     const idx = c.open(.{ .grow = @max(0.1, weight), .height = .fill, .align_items = .center, .justify = .center }, key_name);
     defer c.end();
     c.addStageHoleNode(idx);
-    if (tab_opt) |t| page_layers.draw(c, p, t);
-    if (focused and b.find_open) panels.findBar(b, c, p);
+    if (tab_opt) |t| {
+        page_layers.draw(c, p, t);
+        @import("link_bubble.zig").draw(b, c, p, t, idx);
+    }
+    if (focused and b.finder.finding) panels.findBar(b, c, p);
     return idx;
 }
 
@@ -226,7 +236,7 @@ fn drawBookmarksBar(b: *Browser, c: *ui.Context, p: *const Palette, r: Room) voi
         if (folder) ui.icon(c, "chevron.down", .{ .size = 7.5, .weight = .semibold, .color = p.faint });
         c.end();
         if (bm.url) |u| {
-            if (it.clicked) b.goUrl(u);
+            if (it.clicked) b.visit(u, c.input.cmd);
             if (it.middle_clicked) _ = b.open(u, .{ .foreground = false, .from = b.activeTab(), .may_wait = true });
         }
     }
@@ -236,25 +246,13 @@ fn drawBookmarksBar(b: *Browser, c: *ui.Context, p: *const Palette, r: Room) voi
 /// over it (`chrome/overlays.zig`). What each shows comes with the phase
 /// that opens it.
 fn drawOverlay(b: *Browser, c: *ui.Context, p: *const Palette) void {
+    if (b.overlay) |o| if (o == .site_card) return site_card.overlay(b, c, p);
     if (!overlays.begin(c, &b.overlay, b.overlay_anchor, .{ .background = p.ground, .radius = 14, .border = p.hairline, .clip = true }, .{})) return;
     switch (b.overlay.?) {
         .space_icons => spaces_view.iconsPopover(b, c, p),
         else => {},
     }
     ui.end(c);
-}
-
-/// A new tab in front, the field up over it (`Browser.newTab`).
-pub fn newTab(b: *Browser) void {
-    b.newTab();
-    b.omni_open = true;
-    b.omni_buf.clear();
-}
-
-/// The field up over the page, holding its address (⌘L).
-pub fn editAddress(b: *Browser) void {
-    b.omni_open = true;
-    if (b.activeTab()) |t| b.omni_buf.set(t.url());
 }
 
 fn handleShortcuts(b: *Browser, c: *ui.Context) void {
@@ -264,17 +262,32 @@ fn handleShortcuts(b: *Browser, c: *ui.Context) void {
     } else if (c.shortcut(.{ .key = 't', .cmd = true, .shift = true })) {
         b.reopen();
     } else if (c.shortcut(.{ .key = 't', .cmd = true })) {
-        newTab(b);
+        b.newTab();
     } else if (c.shortcut(.{ .key = 'w', .cmd = true })) {
         b.closeFront();
     } else if (c.shortcut(.{ .key = 'l', .cmd = true })) {
-        editAddress(b);
+        b.edit();
+    } else if (c.shortcut(.{ .key = 'k', .cmd = true })) {
+        // ⌘K again, with ⌘ still down: one step further down the list.
+        if (b.editing and b.omni.offers.len > 0) b.stepSummon() else b.summon();
+    } else if (c.shortcut(.{ .key = 'r', .cmd = true, .shift = true })) {
+        // ponytail: here until P8's command registry takes `view.reader`, `view.hide` and find.
+        @import("../web/reader.zig").toggleReader(b);
+    } else if (c.shortcut(.{ .key = 'h', .cmd = true, .shift = true })) {
+        @import("../web/curtain_js.zig").toggleHiding(b);
+    } else if (b.veiling and c.shortcut(.{ .key = 'z', .cmd = true })) {
+        // Only while pointing: everywhere else undo is the page's.
+        @import("../web/curtain_js.zig").undoHiding(b);
+    } else if (c.shortcut(.{ .key = 'g', .cmd = true, .shift = true })) {
+        @import("../web/page_find.zig").look(b, false);
+    } else if (c.shortcut(.{ .key = 'g', .cmd = true })) {
+        @import("../web/page_find.zig").look(b, true);
     } else if (c.shortcut(.{ .key = 'r', .cmd = true })) {
         if (b.activeTab()) |t| t.reload();
     } else if (c.shortcut(.{ .key = '.', .cmd = true })) {
         if (b.activeTab()) |t| t.stopLoading();
     } else if (c.shortcut(.{ .key = 'f', .cmd = true })) {
-        b.find_open = !b.find_open;
+        @import("../web/page_find.zig").openFind(b);
     } else if (c.shortcut(.{ .key = 's', .cmd = true, .ctrl = true })) {
         b.prefs.set("sidebar", !b.prefs.sidebar);
         b.syncStageHost();
@@ -303,6 +316,15 @@ fn handleShortcuts(b: *Browser, c: *ui.Context) void {
         if (b.activeTab()) |t| t.magnifyBy(1.0 / 1.1);
     } else if (c.shortcut(.{ .key = '0', .cmd = true })) {
         if (b.activeTab()) |t| t.resetZoom();
+    } else if (c.shortcut(.{ .key = 'i', .cmd = true, .alt = true })) {
+        // ponytail: here until P8's command registry takes `view.inspector` and its kin.
+        @import("../web/inspector.zig").toggleInspector(b);
+    } else if (c.shortcut(.{ .key = 'j', .cmd = true, .alt = true })) {
+        @import("../web/inspector.zig").showConsole(b);
+    } else if (c.shortcut(.{ .key = 'c', .cmd = true, .alt = true })) {
+        @import("../web/inspector.zig").inspectElement(b);
+    } else if (c.shortcut(.{ .key = 'p', .cmd = true, .shift = true })) {
+        @import("../web/float.zig").toggle(b);
     } else if (c.shortcut(.{ .key = '[', .cmd = true })) {
         if (b.activeTab()) |t| t.goBack();
     } else if (c.shortcut(.{ .key = ']', .cmd = true })) {
@@ -312,15 +334,36 @@ fn handleShortcuts(b: *Browser, c: *ui.Context) void {
     } else if (c.shortcut(.{ .key = '\t', .ctrl = true })) {
         b.step(1);
     } else if (b.overlay == null and c.shortcut(.{ .key = 0x1b })) {
-        if (b.omni_open) {
-            b.omni_open = false;
-            b.omni_chip = null;
-        } else if (b.find_open) {
-            b.find_open = false;
-        } else if (b.activeTab()) |t| {
-            if (t.loading) t.stopLoading();
-        }
+        escape(b);
     }
+}
+
+/// Esc puts things back one at a time, in Swift's order (`ContentView.take`);
+/// what later phases bring (Peek, panels, Ubi Chat…) joins it with them.
+fn escape(b: *Browser) void {
+    if (b.editing_tab != null) return b.cancelTabEdit();
+    if (b.veiling) return @import("../web/curtain_js.zig").toggleHiding(b);
+    if (b.finder.finding) return @import("../web/page_find.zig").closeFind(b);
+    // The list first, then the field.
+    if (b.omni.picked != null) {
+        b.omni.picked = null;
+        return b.redraw();
+    }
+    const front = b.tabById(b.active_id);
+    // A new tab never sent anywhere is itself what is open: Esc takes it
+    // away, back to the tab touched last. Anything typed keeps it.
+    if (front) |blank| if (blank.isBlank() and b.omni.typed.items.len == 0) {
+        var back: ?*Tab = null;
+        for (b.tabs.items) |t| if (t != blank and (back == null or t.touched > back.?.touched)) {
+            back = t;
+        };
+        if (back) |t| {
+            b.select(t);
+            return b.close(blank);
+        }
+    };
+    if (b.editing and front != null and !front.?.isBlank()) return b.dismiss();
+    if (b.activeTab()) |t| if (t.loading) t.stopLoading();
 }
 
 fn spaceDigit(c: *ui.Context) ?usize {

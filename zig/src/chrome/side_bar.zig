@@ -334,7 +334,7 @@ fn newTabRow(b: *Browser, c: *ui.Context, p: *const Palette, interactive: bool) 
     _ = c.open(.{ .width = .fill, .padding = .{ .top = side_rows.gap } }, "new-tab");
     const it = controls.quiet(c, p, "plus", "New tab", side_rows.row_height);
     c.end();
-    if (interactive and it.clicked) window_view.newTab(b);
+    if (interactive and it.clicked) b.newTab();
 }
 
 /// `SideFoot`: the space's door, bookmarks; never wider than the column.

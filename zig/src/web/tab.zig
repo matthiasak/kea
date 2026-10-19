@@ -60,8 +60,8 @@ pub const Tab = struct {
     page_title: []u8 = &.{},
     /// The page never arrived (`failure`), shown in its place.
     failure: ?[]u8 = null,
-    /// The link under the pointer (`onLink`), for the status line.
-    hovered: ?[]u8 = null,
+    /// Its page is out in the floating window (`floating`, Float.swift).
+    floating: bool = false,
 
     loading: bool = false,
     can_go_back: bool = false,
@@ -89,6 +89,12 @@ pub const Tab = struct {
     /// The tab whose page opened this one (`opener`).
     opener: ?u64 = null,
     shy: bool = false,
+    /// Reading mode is on (`reader`, Reader.swift).
+    reader: bool = false,
+    /// The hidden-things stylesheet its next page is armed with (`veils`),
+    /// and what was armed last (`armedKey`; 0: nothing yet).
+    veils: []u8 = &.{},
+    armed_key: u64 = 0,
 
     /// A slept tab's history and scroll (`memory`, retained), its picture
     /// (`picture`, JPEG) and that picture shown while it wakes (`cover`).
@@ -115,6 +121,9 @@ pub const Tab = struct {
     listed: bool = false,
     group_id: ?Uuid = null,
     name: ?[]u8 = null,
+    /// What was typed into this blank tab's field and not sent, kept while
+    /// another tab is in front; gone once it goes somewhere (`draft`).
+    draft: ?[]u8 = null,
     /// When you last looked at it: a step of `touches`, and the time.
     touched: u64 = 0,
     touched_at: f64 = 0,
@@ -177,8 +186,9 @@ pub const Tab = struct {
         dialogs.dropAll(self);
         self.discard();
         _ = live.remove(self.serial);
-        for ([_]?[]u8{ self.pin, self.home, self.name, self.pending, self.address, self.committed, self.failure, self.hovered, self.picture, self.cover }) |s| if (s) |owned| self.gpa.free(owned);
+        for ([_]?[]u8{ self.pin, self.home, self.name, self.pending, self.address, self.committed, self.failure, self.picture, self.cover, self.draft }) |s| if (s) |owned| self.gpa.free(owned);
         self.gpa.free(self.page_title);
+        self.gpa.free(self.veils);
         self.crashes.deinit(self.gpa);
         self.questions.deinit(self.gpa);
         self.held.deinit(self.gpa);
@@ -195,6 +205,7 @@ pub const Tab = struct {
         const pool = objc.Pool.push();
         defer pool.pop();
         if (self.configuration == null) self.configuration = config.configuration(self.kea, self.shy, self.data_store);
+        @import("frame_rate.zig").apply(self.kea, objc.msg(objc.Object, self.configuration.?, "preferences", .{}));
         const view = page_view.make(self.configuration.?, self);
         objc.msg(void, view, "setAllowsMagnification:", .{objc.YES});
         objc.msg(void, view, "setAllowsBackForwardNavigationGestures:", .{objc.NO});
@@ -209,6 +220,7 @@ pub const Tab = struct {
         self.delegate = delegate;
         page_view.holdForFirstFrame(self);
         scripts.install(self);
+        if (!self.shy) @import("notifications.zig").provide(self.kea, view);
         // A tab muted before it went to sleep wakes muted.
         if (self.muted) config.setMuted(true, view);
         self.observer = kvo.watch(self, view);
@@ -221,6 +233,8 @@ pub const Tab = struct {
         if (self.observer) |o| kvo.stop(o, self.web);
         self.observer = null;
         if (self.web) |wv| {
+            // Its page out in the floating window: that window goes first.
+            if (self.floating) @import("float.zig").dropped(self);
             const pool = objc.Pool.push();
             defer pool.pop();
             scripts.uninstall(self, wv);
@@ -336,7 +350,9 @@ pub const Tab = struct {
         self.setTitle("");
         self.setFailure(null);
         self.reading = 0;
+        self.reader = false;
         self.typing = false;
+        self.own(&self.draft, null);
         self.own(&self.pending, null);
         state.forgetSleep(self);
         self.build();
@@ -386,6 +402,7 @@ pub const Tab = struct {
     pub fn reload(self: *Tab) void {
         if (self.wake()) return;
         self.setFailure(null);
+        self.reader = false;
         self.build();
         const wv = self.web orelse return;
         if (self.address) |a| if (self.hollow() or std.mem.startsWith(u8, a, "file:")) return open(wv, a);

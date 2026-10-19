@@ -30,3 +30,23 @@ pub fn cut(c: *Context, s: []const u8, style: types.TextStyle, room: f32) []cons
     @memcpy(out[i..], ellipsis);
     return out;
 }
+
+/// Wrapped text box `index` cut to `TextStyle.max_lines` (its lines are
+/// already, by `measure`): if text was dropped, its last line ends in "…",
+/// cut to fit `w` points (its padding included).
+pub fn fitLines(c: *Context, index: u32, w: f32) void {
+    const n = c.node(index);
+    const t = &n.content.text;
+    if (!t.style.wrap or t.lines.len == 0) return;
+    const last = t.lines[t.lines.len - 1];
+    if (std.mem.trim(u8, t.str[last.end..], " \t\r\n").len == 0) return;
+    const tail = cut(c, t.str[last.start..last.end], t.style, w - n.style.padding.horizontal());
+    const a = c.alloc();
+    const str = a.alloc(u8, last.start + tail.len) catch return;
+    const lines = a.dupe(@TypeOf(last), t.lines) catch return;
+    @memcpy(str[0..last.start], t.str[0..last.start]);
+    @memcpy(str[last.start..], tail);
+    lines[lines.len - 1] = .{ .start = last.start, .end = str.len, .width = c.text.width(tail, t.style) };
+    t.str = str;
+    t.lines = lines;
+}

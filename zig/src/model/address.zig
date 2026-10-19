@@ -154,6 +154,8 @@ test "address url(from:) table" {
         .{ "about:blank", "about:blank" },
         .{ "data:text/plain,hi", "data:text/plain,hi" },
         .{ "mailto://x", null },
+        .{ "javascript:alert(1)", null },
+        .{ "javascript://x", null },
         .{ "me@example.com", null },
         .{ "3.14", null },
         .{ "a b", null },

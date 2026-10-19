@@ -90,6 +90,9 @@ pub const Interaction = struct {
     right_clicked: bool = false,
     middle_clicked: bool = false,
     focused: bool,
+    /// VoiceOver incremented (+1) or decremented (−1) it in this event
+    /// (`Context.adjustable`): a splitter, a slider.
+    a11y_step: i8 = 0,
 };
 
 const Hit = struct { id: u64, index: u32, rect: types.Rect, scroll: bool };
@@ -104,6 +107,8 @@ pub const A11yItem = struct {
     value: []const u8 = "",
     selected: bool = false,
     enabled: bool = true,
+    /// Takes AXIncrement / AXDecrement (`Context.adjustable`).
+    adjustable: bool = false,
 };
 
 /// What the last frame cost, for profiling and the hill-climb benchmarks.
@@ -399,6 +404,7 @@ pub const Context = struct {
             .right_clicked = released and c.input.button == .right,
             .middle_clicked = released and c.input.button == .middle,
             .focused = c.focus == id,
+            .a11y_step = if (c.input.a11y_step) |s| (if (s.id == id) s.dir else 0) else 0,
         };
     }
 
@@ -411,6 +417,9 @@ pub const Context = struct {
     pub const acceptsDropAt = hooks.acceptsDropAt;
     pub const dropAt = hooks.dropAt;
     pub const startsWindowDrag = hooks.startsWindowDrag;
+    pub const addA11y = hooks.addA11y;
+    pub const adjustable = hooks.adjustable;
+    pub const a11yStep = hooks.a11yStep;
 
     /// Whether this event is the key combination `want`, which the view then
     /// takes: `if (c.shortcut(.{ .key = 'k', .cmd = true })) clear();`
@@ -581,17 +590,5 @@ pub const Context = struct {
         return false;
     }
 
-    pub fn addA11y(c: *Context, index: u32, role: A11yRole, label: []const u8, value: []const u8, selected: bool, enabled: bool) void {
-        const id = c.nodes.items[index].id;
-        c.a11y_items.append(c.gpa, .{
-            .id = id,
-            .node_index = index,
-            .role = role,
-            .label = if (label.len > 0) (c.alloc().dupe(u8, label) catch label) else "",
-            .value = if (value.len > 0) (c.alloc().dupe(u8, value) catch value) else "",
-            .selected = selected,
-            .enabled = enabled,
-        }) catch {};
-    }
     pub const setScroll = @import("scroll_x.zig").setScroll;
 };

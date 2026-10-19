@@ -38,10 +38,10 @@ fn paintNode(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, clip:
 
     if (visible.w > 0 and visible.h > 0) {
         if (st.shadow) |sh| push(c, out, .{
-            .rect = .{ r.x, r.y + sh.y, r.w, r.h },
+            .rect = .{ r.x + sh.x, r.y + sh.y, r.w, r.h },
             .color = metal.color4(sh.color.alpha(opacity)),
             // A knocked out shadow is cut by the box, where it is from the shadow.
-            .uv = if (sh.knockout) .{ 0, -sh.y, 0, 0 } else .{ 0, 0, 0, 0 },
+            .uv = if (sh.knockout) .{ -sh.x, -sh.y, 0, 0 } else .{ 0, 0, 0, 0 },
             .radius = st.radius,
             // CSS's blur radius is twice the Gaussian's standard deviation.
             .border_width = sh.blur / 2,

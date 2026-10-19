@@ -37,7 +37,7 @@ pub fn dragStrip(b: *Browser, c: *ui.Context, style: ui.Style, on_double: enum {
     if (c.hot == it.id) c.cursor_hand = false;
     if (!it.double_clicked) return;
     switch (on_double) {
-        .new_tab => @import("window_view.zig").newTab(b),
+        .new_tab => b.newTab(),
         .zoom => if (b.window) |w| w.zoom(),
     }
 }

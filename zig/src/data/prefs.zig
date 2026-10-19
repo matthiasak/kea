@@ -199,6 +199,7 @@ pub const Prefs = struct {
         p.autocorrect = store.bool("autocorrect") orelse spellingCorrection();
         // Before the first web view exists: WebKit reads it once.
         p.tellWebKit(p.autocorrect);
+        @import("../web/substitutions.zig").register(&p);
         p.chat_zoom = std.math.clamp(p.chat_zoom, 0.5, 2);
         inline for (.{ "mind.model", "mind.effort", "mind.acting", "mind.width", "mind.open" }) |k| store.remove(k);
         return p;

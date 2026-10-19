@@ -13,7 +13,7 @@ pub const cases = [_]Case{
     .{ .name = "split halves the hole width", .run = splitHalves },
     .{ .name = "bookmarks panel shrinks the hole by its width", .run = marksPanel },
     .{ .name = "omnibox offers a visited host", .run = omniOffer },
-    .{ .name = "typing 'github ' shows the GitHub site chip", .run = siteChip },
+    .{ .name = "'github' then Tab puts the GitHub site chip in the field", .run = siteChip },
     .{ .name = "cmd-. stops a slow load", .run = stopSlow },
     .{ .name = "quit flushes history", .run = quitFlushes },
     .{ .name = "closing a split's active tab frees no slot's webview", .run = closeSplitTab },
@@ -107,21 +107,21 @@ fn omniOffer(h: *Harness) !void {
     const b = try h.start();
     var buf: [128]u8 = undefined;
     _ = try openLoaded(h, b, try std.fmt.bufPrint(&buf, "{s}/zig-guide", .{h.http}));
-    b.omni_open = true;
-    b.omni_buf.set("127.0");
-    b.updateOmniTyped("127.0");
-    const offer = b.omni_offer[0..b.omni_offer_len];
-    try h.expect(std.mem.startsWith(u8, offer, "127.0.0.1"), "offer was '{s}'", .{offer});
+    b.edit();
+    b.setTyped("127.0");
+    const ending = b.omni.ending orelse return h.fail("no ending offered after '127.0'", .{});
+    try h.expect(std.mem.startsWith(u8, ending, ".0.1"), "ending was '{s}'", .{ending});
 }
 
 fn siteChip(h: *Harness) !void {
     const b = try h.start();
     b.prefs.set("searches_sites", true); // off unless asked for, as in Swift
-    b.omni_open = true;
-    b.omni_buf.set("github ");
-    b.updateOmniTyped("github ");
-    const chip = b.omni_chip orelse return h.fail("no chip", .{});
+    b.edit();
+    b.setTyped("github");
+    try h.expect(b.lockSiteOffer(), "Tab took no site", .{});
+    const chip = b.site_chip orelse return h.fail("no chip", .{});
     try h.expect(std.mem.eql(u8, chip.name, "GitHub"), "chip was '{s}'", .{chip.name});
+    try h.expect(b.omni.typed.items.len == 0, "the name typed stayed", .{});
 }
 
 /// WebKit holds `/slow`'s first bytes until the rest arrives 8 s later:

@@ -49,6 +49,8 @@ pub const Strip = struct {
     gen: u32 = 0,
     /// The doors at the far end, as measured last frame (0 until then).
     doors: f32 = 0,
+    /// The run's room this frame: what an edited tab may grow to.
+    room: f32 = 0,
     /// Boxes last drawn, for what reads their rects (tests, the reveal).
     run_node: u64 = 0,
     doors_node: u64 = 0,
@@ -158,10 +160,11 @@ pub fn tabBar(b: *Browser, c: *ui.Context, p: *const Palette) void {
     const dot: f32 = if (prefs.uses_spaces) spaces_view.dot_width + metrics.tab_gap else 0;
     const strip_w = c.size.w;
     const room = tab_width.room(strip_w, lights_w, dot, leading, tab_width.far(st.doors, prefs.navigation_left));
+    st.room = room;
     const list = items(b, c.alloc()) catch return;
     const row = rowOf(c, list);
     const each = row.each(room);
-    const content = row.content(each);
+    const content = row.content(each) + tab_pill.growth(b, each);
     const run = @min(content, room);
     const overflowing = content > room + 0.5;
     const making = prefs.uses_spaces and b.making_space;
@@ -273,7 +276,7 @@ fn drawRun(b: *Browser, c: *ui.Context, p: *const Palette, list: []const Item, e
             .tab => |ti| {
                 const t = ti.tab;
                 const pid = pillId(t.id);
-                const w = tab_pill.span(t, each);
+                const w = tab_pill.span(b, t, each);
                 const shown_w = motion.settleTo(c, pid, 1, w);
                 const x = motion.settleTo(c, pid, 0, target_x);
                 const known = for (last.items) |s| {
@@ -349,7 +352,7 @@ fn liveGround(b: *Browser, c: *ui.Context, p: *const Palette, box: u32, fill: u3
     const carried = if (b.carry.landing) |l| l.tab == tab.id else false;
     const x = if (carried) at.x else gx;
     const w = if (carried) at.w else gw;
-    const pinned = tab.pin != null;
+    const pinned = tab_pill.pinned(b, tab);
     const s = &c.node(box).style;
     s.opacity = 1;
     s.offset = .{ .x = x, .y = (metrics.strip - at.h) / 2 };
@@ -357,7 +360,7 @@ fn liveGround(b: *Browser, c: *ui.Context, p: *const Palette, box: u32, fill: u3
     s.height = px(at.h);
     s.background = if (pinned) p.pin_live else p.wash;
     // The grey fills from the left as you read down the page.
-    if (pinned or tab_pill.compact(tab, each) or !b.prefs.shows_reading) return;
+    if (pinned or tab_pill.compact(b, tab, each) or !b.prefs.shows_reading) return;
     const read = ui.tween(c, live_id, 2, std.math.clamp(tab.reading, 0, 1), 0.15, .ease_out);
     const f = &c.node(fill).style;
     f.width = px(w * read);
@@ -410,7 +413,7 @@ fn click(b: *Browser, c: *ui.Context, t: *Tab, d: tab_pill.Drawn, r: tab_drag.Re
         return;
     }
     if (r.swallowsClick() or !d.it.clicked) return;
-    if (live and t.pin != null) {
+    if (live and tab_pill.pinned(b, t)) {
         if (d.it.double_clicked) st.act = .{ .home = t.id };
     } else if (live) {
         st.act = .{ .edit = t.id };
@@ -425,8 +428,7 @@ fn act(b: *Browser) void {
         .select => |id| if (b.tabById(id)) |t| b.select(t),
         .close => |id| if (b.tabById(id)) |t| b.close(t),
         .home => |id| if (b.tabById(id)) |t| b.goHome(t),
-        // The address in the tab itself arrives with P6.
-        .edit => |id| if (comptime @hasDecl(Browser, "beginTabEdit")) if (b.tabById(id)) |t| b.beginTabEdit(t),
+        .edit => |id| if (b.tabById(id)) |t| b.beginTabEdit(t),
         .move => |m| if (b.tabById(m.tab)) |t| {
             if (m.within) b.moveWithin(t, m.group, m.target) else b.moveDisplayedTab(t, m.target);
         },
@@ -523,7 +525,7 @@ fn plus(b: *Browser, c: *ui.Context, p: *const Palette, nearby: bool) void {
         c.help(i, "New Tab   ⌘T");
         c.addA11y(i, .button, "New Tab", "", false, true);
         if (it.hovered) c.node(i).style.background = p.hover;
-        if (it.clicked) window_view.newTab(b);
+        if (it.clicked) b.newTab();
     }
     ui.icon(c, "plus", .{ .size = 10, .weight = .medium, .frame = 15, .color = p.muted });
 }

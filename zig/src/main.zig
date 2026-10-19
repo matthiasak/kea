@@ -4,6 +4,7 @@ const std = @import("std");
 const nanoui = @import("nanoui");
 const kea = @import("app/kea.zig");
 const browsers = @import("app/browsers.zig");
+const links = @import("app/links.zig");
 
 pub fn main(init: std.process.Init) !void {
     // Closing the last window keeps the app, as Safari and Chrome do (#327).
@@ -11,13 +12,18 @@ pub fn main(init: std.process.Init) !void {
     defer app.destroy();
     const k = try kea.Kea.create(app.gpa, app, .{});
     defer k.destroy();
+    links.watchForTrouble(k);
     app.options.ctx = k;
     app.options.on_terminate = onTerminate;
     app.options.on_reopen = onReopen;
     app.options.on_active = onActive;
+    app.options.on_open_urls = links.onOpenURLs;
+    app.options.on_continue_activity = links.onContinueActivity;
     app.options.dock_menu = browsers.dockMenu(k);
     _ = try k.newBrowser();
     browsers.restore(k);
+    // Addresses from other apps have somewhere to go from here on.
+    links.hand(k);
     try app.run();
 }
 
@@ -27,7 +33,7 @@ fn onTerminate(ctx: ?*anyopaque) void {
 }
 
 fn onReopen(ctx: ?*anyopaque) void {
-    browsers.ensureWindow(@ptrCast(@alignCast(ctx.?)));
+    _ = browsers.ensureWindow(@ptrCast(@alignCast(ctx.?)));
 }
 
 fn onActive(ctx: ?*anyopaque, active: bool) void {
@@ -58,6 +64,9 @@ test {
     _ = @import("web/tab.zig");
     _ = @import("web/dialogs.zig");
     _ = @import("web/favicons.zig");
+    _ = @import("web/shield.zig");
+    _ = @import("web/downloads.zig");
+    _ = @import("web/downloads_fetches.zig");
     _ = @import("web/stage_host.zig");
     _ = @import("model/browser.zig");
     _ = @import("chrome/window_view.zig");
@@ -70,4 +79,14 @@ test {
     _ = @import("chrome/tab_width.zig");
     _ = @import("chrome/pin_grid.zig");
     _ = @import("app/browsers.zig");
+    _ = @import("app/links.zig");
+    _ = @import("web/local_network.zig");
+    _ = @import("web/float.zig");
+    _ = @import("web/float_moves.zig");
+    _ = @import("web/notifications.zig");
+    _ = @import("web/inspector.zig");
+    _ = @import("web/substitutions.zig");
+    _ = @import("web/frame_rate.zig");
+    _ = @import("web/little.zig");
+    _ = @import("chrome/link_bubble.zig");
 }

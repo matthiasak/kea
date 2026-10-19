@@ -21,9 +21,20 @@ fn px(v: f32) ui.Length {
 /// Inside the hole box; every layer is absolute over the page.
 pub fn draw(c: *ui.Context, p: *const Palette, t: *Tab) void {
     if (t.cover) |picture| cover(c, t, picture);
+    flew(c, p, t.floating);
     if (t.failure) |message| trouble(c, p, t, message);
     if (t.pull) |pull| if (pull.stops.len > 0) list(c, p, pull) else disc(c, p, pull);
     if (t.question()) |_| question(c, p, t);
+}
+
+/// A page out in the floating window: its tab says where it went rather
+/// than showing a white rectangle; in and out with `Motion.quick`.
+fn flew(c: *ui.Context, p: *const Palette, floating: bool) void {
+    const shown = @import("../design/motion.zig").quickTo(c, c.peekId("kea.flew"), 0, if (floating) 1 else 0);
+    if (shown <= 0) return;
+    ui.column(c, .{ .absolute = true, .width = .fill, .height = .fill, .background = p.ground, .align_items = .center, .justify = .center, .opacity = shown });
+    defer ui.end(c);
+    ui.text(c, "This page flew off into the floating window.", .{ .size = 13, .color = p.muted });
 }
 
 /// The page as it was left, anchored where the page starts, never in the

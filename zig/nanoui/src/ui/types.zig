@@ -110,6 +110,7 @@ pub const Weight = enum { regular, medium, semibold, bold };
 pub const Shadow = struct {
     color: Color = .{ .a = 0.18 },
     blur: f32 = 12,
+    x: f32 = 0,
     y: f32 = 4,
     /// Drawn outside the box only (`Kind.shadow_out`): a box that shows
     /// what is under it (a page through a stage hole) keeps its shadow.
@@ -226,6 +227,11 @@ pub const TextStyle = struct {
     truncate: bool = false,
     /// Glyphs fade out toward the box's right edge.
     fade: ?Fade = null,
+    /// Wrapped text keeps at most this many lines (0: all of them), the
+    /// last ending in "…" when text was dropped.
+    max_lines: u8 = 0,
+    /// Digits all as wide (monospaced numbers): counters, clocks, sizes.
+    tabular: bool = false,
 };
 
 /// Glyphs within `clear` points of the box's right edge are transparent;

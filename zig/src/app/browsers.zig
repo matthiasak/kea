@@ -137,12 +137,18 @@ pub fn show(b: *Browser) void {
     comeForward(b.kea);
 }
 
-/// The Dock icon clicked with no window showing (`ensureWindow`).
-pub fn ensureWindow(kea: *Kea) void {
-    // A test run started hidden stays so.
-    if (kea.opts.root != null or kea.opts.hidden) return;
-    for (kea.browsers.items) |b| if (b.shut) return show(b);
-    if (front(kea, null)) |f| show(f) else _ = open(kea, null, null) catch {};
+/// The window in front's browser, or a window brought back or made for it
+/// (`ensureWindow`): the Dock icon clicked with no window showing, a link.
+pub fn ensureWindow(kea: *Kea) ?*Browser {
+    for (kea.browsers.items) |b| if (b.shut) {
+        show(b);
+        return b;
+    };
+    if (front(kea, null)) |f| {
+        show(f);
+        return f;
+    }
+    return open(kea, null, null) catch null;
 }
 
 fn comeForward(kea: *Kea) void {
@@ -307,9 +313,15 @@ pub fn flush(kea: *Kea) void {
     save(kea, true);
 }
 
-/// The app came forward or stepped away: every window's resting lights.
+/// The app came forward or stepped away: every window's resting lights,
+/// and the site card goes with the app (`SiteCardPanel`'s resign observer).
 pub fn appActive(kea: *Kea, active: bool) void {
-    for (kea.browsers.items) |b| if (b.lights) |l| l.appActive(active);
+    for (kea.browsers.items) |b| {
+        if (b.lights) |l| l.appActive(active);
+        if (!active) @import("../chrome/site_card.zig").resign(b);
+    }
+    // A video comes along when another app is in front (`appLeft`/`appBack`).
+    @import("../web/float.zig").appActive(kea, active);
 }
 
 /// Quitting (`Kea.destroy`): every window closed and every browser let go,
@@ -339,6 +351,7 @@ fn onKey(ctx: *anyopaque, w: *nanoui.Window) void {
     // `Browsers.becameKey`.
     b.shut = false;
     b.kea.windows.front = b;
+    b.handOff();
 }
 
 // MARK: watching frames (`Browsers.watchFrames`)
@@ -386,7 +399,7 @@ fn unwatch(kea: *Kea) void {
     kea.windows.monitor = null;
 }
 
-fn browserFor(kea: *Kea, window: ?objc.Object) ?*Browser {
+pub fn browserFor(kea: *Kea, window: ?objc.Object) ?*Browser {
     const ns = window orelse return null;
     for (kea.browsers.items) |b| if (b.window) |w| if (w.nswindow == ns) return b;
     return null;

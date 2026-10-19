@@ -17,6 +17,7 @@ const ring = @import("ring.zig");
 const tab_menu = @import("tab_menu.zig");
 const tab_drag = @import("tab_drag.zig");
 const groups_view = @import("groups_view.zig");
+const tab_address = @import("tab_address.zig");
 
 const px = struct {
     fn v(n: f32) ui.Length {
@@ -93,13 +94,13 @@ fn dropOnGroup(b: *Browser, t: *Tab, at: ui.Point) void {
     for (b.column.heading_rects.items) |h| if (h.rect.contains(at)) return b.moveToGroup(t, h.id);
 }
 
-/// A click selects, or on the live row starts editing its address (P6
-/// brings the field); the wheel and the cross close; a right click opens
-/// the tab's menu.
+/// A click selects, or on the live row starts editing its address; the
+/// wheel and the cross close; a right click opens the tab's menu.
 fn act(b: *Browser, c: *ui.Context, t: *Tab, live: bool, it: ui.Interaction, close: ui.Interaction) void {
     if (close.clicked or it.middle_clicked) return b.close(t);
     if (it.right_clicked) return tab_menu.popup(b, c, t);
-    if (it.clicked and !live) b.select(t);
+    if (!it.clicked) return;
+    if (live) b.beginTabEdit(t) else b.select(t);
 }
 
 pub const Row = struct { index: u32, it: ui.Interaction, close: ui.Interaction };
@@ -109,7 +110,9 @@ pub const Row = struct { index: u32, it: ui.Interaction, close: ui.Interaction }
 /// loads or plays; the cross under the pointer, over the title's faded end.
 pub fn sideRow(b: *Browser, c: *ui.Context, p: *const Palette, t: *Tab, live: bool, interactive: bool) Row {
     const speaker = !t.loading and (t.noisy or t.muted);
-    const status = t.loading or speaker;
+    // Its address typed into it: a field where the title was, nothing at its end.
+    const editing = interactive and b.editing_tab == t.id;
+    const status = !editing and (t.loading or speaker);
     const i = c.open(.{
         .direction = .row,
         .gap = 8,
@@ -144,18 +147,23 @@ pub fn sideRow(b: *Browser, c: *ui.Context, p: *const Palette, t: *Tab, live: bo
     }
 
     const colour = if (live) p.ink else p.muted.mix(p.ink.alpha(0.7), h);
-    if (b.prefs.glyph == .icons and !t.isBlank()) {
-        var buf: [4]u8 = undefined;
-        mark.mark(c, p, iconOf(b, t), t.monogram(&buf), 15, false);
+    if (editing) {
+        tab_address.field(b, c, p, t);
+        c.node(i).style.offset.x += tab_address.shake(b, c);
+    } else {
+        if (b.prefs.glyph == .icons and !t.isBlank()) {
+            var buf: [4]u8 = undefined;
+            mark.mark(c, p, iconOf(b, t), t.monogram(&buf), 15, false);
+        }
+        if (t.shy) ui.icon(c, "eye.slash", .{ .size = 9, .color = colour.alpha(colour.a * 0.7) });
+        if (t.recording) {
+            ui.icon(c, "record.circle", .{ .size = 10, .color = colour.alpha(colour.a * 0.8) });
+        }
+        // The title keeps its length under the pointer and fades out beneath
+        // the cross, rather than being cut shorter.
+        const fades = hovering and !status;
+        ui.text(c, label, .{ .size = 12.5, .color = colour, .truncate = true, .fade = if (fades) .{ .clear = 26, .ramp = 16 } else null });
     }
-    if (t.shy) ui.icon(c, "eye.slash", .{ .size = 9, .color = colour.alpha(colour.a * 0.7) });
-    if (t.recording) {
-        ui.icon(c, "record.circle", .{ .size = 10, .color = colour.alpha(colour.a * 0.8) });
-    }
-    // The title keeps its length under the pointer and fades out beneath
-    // the cross, rather than being cut shorter.
-    const fades = hovering and !status;
-    ui.text(c, label, .{ .size = 12.5, .color = colour, .truncate = true, .fade = if (fades) .{ .clear = 26, .ramp = 16 } else null });
 
     var close: ui.Interaction = .{ .id = 0, .rect = null, .hovered = false, .pressed = false, .clicked = false, .focused = false };
     if (status) {
@@ -174,7 +182,7 @@ pub fn sideRow(b: *Browser, c: *ui.Context, p: *const Palette, t: *Tab, live: bo
         c.end();
         _ = slot;
     }
-    if (interactive) {
+    if (interactive and !editing) {
         // A pinned row is put down, not closed, and says so.
         _ = c.open(.{ .absolute = true, .width = .fill, .height = .fill, .direction = .row, .justify = .end, .align_items = .center, .padding = .{ .right = 7 } }, null);
         close = controls.closeDiscIcon(c, p, hovering, controls.close_zone, if (t.pin != null) "minus" else "xmark");

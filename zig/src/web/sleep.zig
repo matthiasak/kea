@@ -1,8 +1,8 @@
 //! Tabs you aren't using, put to sleep (Sleep.swift): a tab left alone for
 //! ten minutes (`sleep.after` seconds, for tests) gives its page back and
 //! keeps its history and a picture (`tab_state.sleep`). Memory pressure
-//! shrinks the wait to five minutes, or to nothing when critical. Floating
-//! video and downloads keep a tab awake once those arrive (P5.5, P5.6).
+//! (a `DISPATCH_SOURCE_TYPE_MEMORYPRESSURE` source, `sys/dispatch.zig`)
+//! shrinks the wait to five minutes, or to nothing when critical.
 const std = @import("std");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;
@@ -10,6 +10,7 @@ const Browser = @import("../model/browser.zig").Browser;
 const Tab = @import("tab.zig").Tab;
 const state = @import("tab_state.zig");
 const json = @import("../data/json.zig");
+const dispatch = @import("../sys/dispatch.zig");
 
 /// What each window keeps: its timer, its memory-pressure source, until
 /// when a critical warning lasts, and the sweep under way.
@@ -30,18 +31,8 @@ pub fn sleepAfter(b: *const Browser) f64 {
     return if (set > 0) set else 10 * 60;
 }
 
-const dispatch = struct {
-    extern "c" const _dispatch_source_type_memorypressure: anyopaque;
-    extern "c" fn dispatch_source_create(kind: *const anyopaque, handle: usize, mask: usize, queue: objc.dispatch_queue_t) ?*anyopaque;
-    extern "c" fn dispatch_set_context(object: *anyopaque, ctx: ?*anyopaque) void;
-    extern "c" fn dispatch_source_set_event_handler_f(source: *anyopaque, handler: *const fn (?*anyopaque) callconv(.c) void) void;
-    extern "c" fn dispatch_source_get_data(source: *anyopaque) usize;
-    extern "c" fn dispatch_source_cancel(source: *anyopaque) void;
-    extern "c" fn dispatch_resume(object: *anyopaque) void;
-    extern "c" fn dispatch_release(object: *anyopaque) void;
-};
-const pressure_warning: usize = 2;
-const pressure_critical: usize = 4;
+const pressure_warning = dispatch.pressure_warning;
+const pressure_critical = dispatch.pressure_critical;
 
 fn timerClass() objc.Class {
     return objc.defineClass(.{
@@ -172,7 +163,9 @@ pub fn awake(b: *Browser, t: *Tab) ?[]const u8 {
     if (t.web == null) return "no page";
     if (t.loading) return "still loading";
     if (t.noisy) return "playing sound";
+    if (t.floating) return "its video is out";
     if (t.recording) return "on a call";
+    if (@import("downloads.zig").busy(b.kea, t.web.?)) return "downloading";
     if (t.held.items.len > 0 or t.questions.items.len > 0) return "a question waiting";
     // A sign-in window hands its answer back to the page that opened it.
     if (b.activeTab()) |front| if (front.opener == t.id) return "the page on screen came from it";
