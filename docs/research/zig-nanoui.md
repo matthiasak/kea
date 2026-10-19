@@ -17,8 +17,9 @@ Inspection of `justrach/nanoui` (`main`) surfaced six concrete constraints that 
 - **Required change for a browser:** A browser window must show `nanoui`-drawn chrome (sidebar, top strip, omnibox dropdown, find bar, modal plates, toasts, Ubi Chat) **and** 1–2 live `WKWebView` panes (plus an optional `Peek` webview) simultaneously.
   - Place `PageStageView` (`NSView` hosting active `WKWebView` slots) at the back of `NSWindow.contentView`, and `NanoUIView` (`Surface.nsview`) in front of it.
   - Set `CAMetalLayer.setOpaque(objc.NO)` and `ClearColor{ .r = 0, .g = 0, .b = 0, .a = 0 }` when a transparent viewport hole is active, and leave the root `Node`'s background unset over the stage rect(s).
-  - Because `NanoUIView` already declares `isFlipped = YES` (`src/ui/surface.zig:255`), the flexbox layout rect `c.rects.get(pane_id)` maps 1:1 in top-left window points to `WKWebView.setFrame:` inside the same run-loop turn.
-  - Override `hitTest:` on `NanoUIView` so unobstructed stage rects (`c.hot == 0` or hit node is a stage placeholder) return `nil`, letting AppKit route mouse clicks, hover, trackpad momentum scrolling, pinch-zoom, and context menus directly to the underlying `WKWebView`.
+  - **Liquid Glass limitation over `WKWebView`:** In `src/ui/metal.zig` (`:2-3`) and `src/ui/metal_glass.zig`, each `.glass(.{})` pane reads and blurs what `nanoui` drew into its own Metal texture *before* that pane—not the WindowServer-composited `WKWebView` layer underneath. Therefore, `.glass(.{})` works over `nanoui`-drawn chrome, but a floating overlay over the transparent `WKWebView` hole would sample transparent clear rather than the web page. Overlays above the page must use opaque fills (`Palette.ground`) with analytical Gaussian shadows (which blend via alpha), or an AppKit `NSVisualEffectView` / `NSGlassEffectView` behind the overlay.
+  - Because `NanoUIView` declares `isFlipped = YES` (`src/ui/surface.zig:255`), the flexbox layout rect `c.rects.get(pane_id)` maps in top-left window points to `WKWebView.setFrame:` inside the same run-loop turn (to be validated in Phase 0).
+  - Override `hitTest:` on `NanoUIView` so unobstructed stage rects (`c.hot == 0` or hit node is a stage placeholder) return `nil`, letting AppKit route mouse clicks, hover, trackpad momentum scrolling, pinch-zoom, and context menus to the underlying `WKWebView`.
 
 ### 2.2 No Accessibility in `nanoui`
 - `nanoui`'s `README.md` (`:419-421`) explicitly notes: *"there's no accessibility, bundling, notifications, channels or plugins yet."*
@@ -62,11 +63,11 @@ Inspection of `justrach/nanoui` (`main`) surfaced six concrete constraints that 
    - Implement `HostContentView` containing `PageStageView` (1–2 `WKWebView` slots + `Peek` slot) underneath `NanoUIView` (`Surface`).
    - Implement `NanoUIView.hitTest:` passthrough over unobstructed stage rects and synchronous `WKWebView.setFrame:` updates at the end of `Surface.frame()`.
 3. **Build the Chrome Spike (`zig/src/chrome_spike.zig`):**
-   - Render a 40-tab sidebar (`SideBar`), top toolbar, draggable Ubi Chat panel (`EdgeHandle`), and a floating Omnibox overlay over two split `WKWebView` panes.
-4. **Measured Go/No-Go Gate:**
-   - **Frame time:** 80-step panel edge drag with 40 visible tabs must keep median `Surface.frame()` CPU (`build_ms + layout_ms + paint_ms`) **< 0.30 ms** and GPU encode + render **< 0.50 ms** (measured via `Renderer.drawTimed` and `FrameStats`), with zero frame drops at 120 Hz.
-   - **Input passthrough:** Trackpad scroll, text selection, IME input, and `WKWebView` context menus inside both split panes must work identically to native `PaneStage`, while an open Omnibox dropdown over the webview captures clicks and draws its Gaussian shadow over the live page.
-   - **Decision point:** If `CAMetalLayer` (`opaque = NO`) over `WKWebView` exhibits WindowServer promotion/compositing artifacts with video or WebGL pages, switch the stage host to the split-surface layout (docked chrome `Surface`s around `PageStageView`, plus a transient `OverlaySurface` attached only while an overlay is open).
+   - Render a 40-tab sidebar (`SideBar`), top toolbar, draggable Ubi Chat panel (`EdgeHandle`), and a floating opaque Omnibox overlay (with Gaussian shadow, not `.glass`) over two split `WKWebView` panes.
+4. **Measured Go/No-Go Gate (Hypotheses to Prove):**
+   - **Hypothesis 1 (Frame CPU/GPU vs. SwiftUI):** Measure an 80-step panel edge drag with 40 visible tabs using `os_signpost` / Instruments and `Renderer.drawTimed` + `FrameStats` (never `Bench.swift`'s `split mouse`, which has a fixed 420 ms reply delay). Gate: median `Surface.frame()` CPU (`build_ms + layout_ms + paint_ms`) **< 0.30 ms** and GPU encode + render **< 0.50 ms**, beating the current SwiftUI `Widths` baseline at 120 Hz.
+   - **Hypothesis 2 (Input & Responder Passthrough):** Verify trackpad scroll, text selection, IME composition, cursor rects, and `WKWebView` context menus inside both split panes work without lag, while an open Omnibox dropdown over the webview captures clicks and draws its Gaussian shadow over the live page.
+   - **Decision point:** If `CAMetalLayer` (`opaque = NO`) over `WKWebView` exhibits WindowServer promotion/compositing overhead with 60/120 fps video or WebGL pages, switch the stage host to the split-surface layout (docked chrome `Surface`s around `PageStageView`, plus a transient `OverlaySurface` attached only while an overlay is open).
 
 ### Phase 1 — C-ABI Bridge into Swift Kea (Hybrid Cutover)
 1. Export a C header (`include/kea_nanoui.h`) from Zig with:
