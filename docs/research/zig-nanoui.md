@@ -65,21 +65,20 @@ Inspection of `justrach/nanoui` (`main`) surfaced six concrete constraints that 
 3. **Build the Chrome Spike (`zig/src/chrome_spike.zig`):**
    - Render a 40-tab sidebar (`SideBar`), top toolbar, draggable Ubi Chat panel (`EdgeHandle`), and a floating opaque Omnibox overlay (with Gaussian shadow, not `.glass`) over two split `WKWebView` panes.
 4. **Measured Go/No-Go Gate (Hypotheses to Prove):**
-   - **Hypothesis 1 (Frame CPU/GPU vs. SwiftUI):** Measure an 80-step panel edge drag with 40 visible tabs using `os_signpost` / Instruments and `Renderer.drawTimed` + `FrameStats` (never `Bench.swift`'s `split mouse`, which has a fixed 420 ms reply delay). Gate: median `Surface.frame()` CPU (`build_ms + layout_ms + paint_ms`) **< 0.30 ms** and GPU encode + render **< 0.50 ms**, beating the current SwiftUI `Widths` baseline at 120 Hz.
+   - **Hypothesis 1 (Relative Frame CPU/GPU vs. SwiftUI Baseline):** First record the current SwiftUI `Widths` baseline on an 80-step panel edge drag with 40 visible tabs using `os_signpost` / `CACurrentMediaTime()` around `EdgeStripView.mouseDragged` through `CATransaction` commit (never `Bench.swift`'s `split mouse`, which has a fixed 420 ms reply delay). Then measure the same 80-step, 40-tab drag in the `nanoui` spike via `Renderer.drawTimed` + `FrameStats`. **Gate:** `nanoui` must achieve **≥ 3× lower main-thread time per drag event** than the SwiftUI baseline, with median `Surface.frame()` CPU (`build_ms + layout_ms + paint_ms`) **< 0.30 ms** and GPU encode + render **< 0.50 ms** at 120 Hz.
    - **Hypothesis 2 (Input & Responder Passthrough):** Verify trackpad scroll, text selection, IME composition, cursor rects, and `WKWebView` context menus inside both split panes work without lag, while an open Omnibox dropdown over the webview captures clicks and draws its Gaussian shadow over the live page.
    - **Decision point:** If `CAMetalLayer` (`opaque = NO`) over `WKWebView` exhibits WindowServer promotion/compositing overhead with 60/120 fps video or WebGL pages, switch the stage host to the split-surface layout (docked chrome `Surface`s around `PageStageView`, plus a transient `OverlaySurface` attached only while an overlay is open).
 
-### Phase 1 — C-ABI Bridge into Swift Kea (Hybrid Cutover)
+### Phase 1 — Accessibility & `objc.Block` Parity in `nanoui` (Prerequisite to Cutover)
+1. Extend `src/objc.zig` `objc.Block` to support 0–4 arguments and non-void return values.
+2. Add an `NSAccessibility` bridge to `NanoUIView` (`src/ui/a11y.zig`, `<= 600` lines) mapping interactive `Node`s (buttons, tab rows, text fields, splitters, switches, segmented pickers) to `NSAccessibilityElement` children and supporting `NSAccessibility.post(..., notification: .announcementRequested)` so swapping `ContentView` never regresses VoiceOver.
+
+### Phase 2 — C-ABI Bridge into Swift Kea (Hybrid Cutover, Gated on Phase 1)
 1. Export a C header (`include/kea_nanoui.h`) from Zig with:
    - `kea_chrome_create(NSWindow*, const KeaChromeCallbacks*)`
    - `kea_chrome_set_state(KeaChrome*, const KeaChromeSnapshot*)` (flat C structs for tabs, pins, groups, active IDs, omnibox offers, panel widths, and stage rects)
    - `kea_chrome_request_frame(KeaChrome*)`
-2. Replace SwiftUI's `ContentView` (`SideBar`, `TabBar`, `Omnibox`, `Find`, `SidePanels`) with `kea_chrome_*` while keeping `Browser`, `Tab`, `History`, `Bookmarks`, `Sync`, `AIAssist`, `Extensions`, `Passkeys`, and `Bench` in Swift.
-3. Verify all 11 UI test suites (`Tests/panels.py`, `split_view.py`, `ubi_chat.py`, `ubi_render.py`, `sync.py`, `fresh_window.py`, `bookmarks_manager.py`, `site_search.py`, `close_panel.py`, `tab_switcher.py`) pass without modification.
-
-### Phase 2 — Accessibility & `objc.Block` Parity in `nanoui`
-1. Extend `src/objc.zig` `objc.Block` to support 0–4 arguments and non-void return values.
-2. Add an `NSAccessibility` bridge to `NanoUIView` (`src/ui/a11y.zig`, `<= 600` lines) mapping interactive `Node`s (buttons, text fields, splitters, switches, segmented pickers) to `NSAccessibilityElement` children so VoiceOver and automated accessibility queries work.
+2. Replace SwiftUI's `ContentView` (`SideBar`, `TabBar`, `Omnibox`, `Find`, `SidePanels`) behind a build/runtime flag until VoiceOver parity (`a11y.zig`) and all 11 UI test suites (`Tests/panels.py`, `split_view.py`, `ubi_chat.py`, `ubi_render.py`, `sync.py`, `fresh_window.py`, `bookmarks_manager.py`, `site_search.py`, `close_panel.py`, `tab_switcher.py`) pass without modification.
 
 ### Phase 3 — Core Data & Storage in Zig (If pursuing standalone Zig binary)
 1. Port `Store` + `Disk` (`src/store.zig`), `Preferences` (`src/prefs.zig`), `History` (`src/history.zig`), `Bookmarks` (`src/bookmarks.zig`), `Session` / `Spaces` / `Pins` (`src/session.zig`), and `SiteSearch` (`src/site_search.zig`), preserving 100% on-disk JSON compatibility with `~/Library/Application Support/Kea/`.
