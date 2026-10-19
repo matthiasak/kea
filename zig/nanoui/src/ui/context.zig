@@ -91,7 +91,7 @@ pub const Interaction = struct {
 const Hit = struct { id: u64, index: u32, rect: types.Rect, scroll: bool };
 
 pub const Cursor = enum { arrow, hand, text, resize_left_right, resize_up_down };
-pub const A11yRole = enum { button, tab, text_field, splitter, checkbox, switch_toggle, radio_button, group, static_text };
+pub const A11yRole = enum { button, tab, text_field, splitter, slider, checkbox, switch_toggle, radio_button, group, static_text };
 pub const A11yItem = struct {
     id: u64,
     node_index: u32,
@@ -523,8 +523,18 @@ pub const Context = struct {
         }
     }
 
-    pub fn inStageHole(c: *const Context, p: types.Point) bool {
-        if (c.hot != 0 or c.active != 0) return false;
+    pub fn hitAt(c: *const Context, p: types.Point) bool {
+        var i = c.hits.items.len;
+        while (i > 0) {
+            i -= 1;
+            const h = c.hits.items[i];
+            if (!h.scroll and h.rect.contains(p)) return true;
+        }
+        return false;
+    }
+
+    pub fn inStageHoleAt(c: *const Context, p: types.Point) bool {
+        if (c.active != 0 or c.hitAt(p)) return false;
         for (c.stage_rects[0..c.stage_count]) |r| {
             if (r.contains(p)) return true;
         }

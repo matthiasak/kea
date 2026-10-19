@@ -58,19 +58,39 @@ fn viewChildren(obj: objc.Object, _: objc.SEL) callconv(.c) objc.Object {
     const arr = objc.msg(objc.Object, objc.class("NSMutableArray"), "arrayWithCapacity:", .{@as(objc.NSUInteger, s.ctx.a11y_items.items.len)});
     const cls = elementClass();
     for (s.ctx.a11y_items.items) |it| {
-        const p = s.gpa.create(ElementPayload) catch continue;
-        p.* = .{ .surface = s, .id = it.id, .role = it.role, .selected = it.selected, .enabled = it.enabled };
-        p.label_len = @min(it.label.len, p.label.len);
-        @memcpy(p.label[0..p.label_len], it.label[0..p.label_len]);
-        p.value_len = @min(it.value.len, p.value.len);
-        @memcpy(p.value[0..p.value_len], it.value[0..p.value_len]);
-
-        const el = objc.msg(objc.Object, cls, "new", .{});
-        objc.setZig(el, p);
+        const gop = s.a11y_cache.getOrPut(s.gpa, it.id) catch continue;
+        if (!gop.found_existing) {
+            const p = s.gpa.create(ElementPayload) catch continue;
+            p.* = .{ .surface = s, .id = it.id, .role = it.role };
+            const el = objc.msg(objc.Object, cls, "new", .{});
+            objc.setZig(el, p);
+            gop.value_ptr.* = el;
+        }
+        const el = gop.value_ptr.*;
+        if (payloadOf(el)) |p| {
+            p.role = it.role;
+            p.selected = it.selected;
+            p.enabled = it.enabled;
+            p.label_len = @min(it.label.len, p.label.len);
+            @memcpy(p.label[0..p.label_len], it.label[0..p.label_len]);
+            p.value_len = @min(it.value.len, p.value.len);
+            @memcpy(p.value[0..p.value_len], it.value[0..p.value_len]);
+        }
         objc.msg(void, arr, "addObject:", .{el});
-        objc.release(el);
     }
     return arr;
+}
+
+pub fn clearCache(s: *Surface) void {
+    var it = s.a11y_cache.valueIterator();
+    while (it.next()) |el_ptr| {
+        if (payloadOf(el_ptr.*)) |p| {
+            objc.setZig(el_ptr.*, null);
+            s.gpa.destroy(p);
+        }
+        objc.release(el_ptr.*);
+    }
+    s.a11y_cache.deinit(s.gpa);
 }
 
 fn payloadOf(obj: objc.Object) ?*ElementPayload {
@@ -111,6 +131,7 @@ fn elemRole(obj: objc.Object, _: objc.SEL) callconv(.c) objc.Object {
         .tab, .radio_button => "AXRadioButton",
         .text_field => "AXTextField",
         .splitter => "AXSplitter",
+        .slider => "AXSlider",
         .checkbox, .switch_toggle => "AXCheckBox",
         .group => "AXGroup",
         .static_text => "AXStaticText",
@@ -170,8 +191,8 @@ pub fn announce(target: objc.Object, message: []const u8) void {
     const pool = objc.Pool.push();
     defer pool.pop();
     const keys = [_]objc.Object{
-        objc.nsString("NSAccessibilityAnnouncementKey"),
-        objc.nsString("NSAccessibilityPriorityKey"),
+        objc.nsString("AXAnnouncementKey"),
+        objc.nsString("AXPriorityKey"),
     };
     const prio = objc.msg(objc.Object, objc.class("NSNumber"), "numberWithInteger:", .{@as(objc.NSInteger, 90)});
     const values = [_]objc.Object{
@@ -181,5 +202,5 @@ pub fn announce(target: objc.Object, message: []const u8) void {
     const info = objc.msg(objc.Object, objc.class("NSDictionary"), "dictionaryWithObjects:forKeys:count:", .{
         &values, &keys, @as(objc.NSUInteger, 2),
     });
-    objc.NSAccessibilityPostNotificationWithUserInfo(target, objc.nsString("NSAccessibilityAnnouncementRequestedNotification"), info);
+    objc.NSAccessibilityPostNotificationWithUserInfo(target, objc.nsString("AXAnnouncementRequested"), info);
 }

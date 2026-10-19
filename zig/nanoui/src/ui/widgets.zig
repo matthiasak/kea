@@ -278,7 +278,7 @@ pub fn slider(c: *Context, value: *f32, opts: SliderOptions) bool {
     const i = c.open(.{ .direction = .row, .width = opts.width, .height = .{ .px = 22 }, .align_items = .center, .control = true }, null);
     defer c.end();
     const it = c.interact(i, .{});
-    c.addA11y(i, .splitter, "Slider", c.print("{d:.2}", .{value.*}), false, true);
+    c.addA11y(i, .slider, "Slider", c.print("{d:.2}", .{value.*}), false, true);
     var changed = false;
     if (it.pressed) if (it.rect) |r| {
         const t = std.math.clamp((c.input.mouse.x - r.x - knob / 2) / @max(1, r.w - knob), 0, 1);

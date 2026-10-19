@@ -49,6 +49,7 @@ pub const Surface = struct {
     transparent: bool = false,
     after_frame_ctx: ?*anyopaque = null,
     after_frame: ?*const fn (ctx: ?*anyopaque, s: *Surface) void = null,
+    a11y_cache: std.AutoHashMapUnmanaged(u64, objc.Object) = .empty,
 
     pub fn create(window: *Window, view: ui.View, theme_override: ?Theme) !*Surface {
         const gpa = window.app.gpa;
@@ -110,6 +111,7 @@ pub const Surface = struct {
             objc.release(link);
         }
         if (self.tracking) |t| objc.release(t);
+        a11y.clearCache(self);
         objc.release(self.nsview);
         self.instances.deinit(self.gpa);
         self.pasted.deinit(self.gpa);
@@ -260,6 +262,7 @@ pub const Surface = struct {
     }
 
     fn updateCursor(self: *Surface) void {
+        if (self.transparent and self.ctx.inStageHoleAt(self.ctx.input.mouse)) return;
         const want: ctx_mod.Cursor = self.ctx.cursor orelse if (self.ctx.cursor_text) .text else if (self.ctx.cursor_hand) .hand else .arrow;
         if (want == self.cursor) return;
         self.cursor = want;
@@ -313,6 +316,7 @@ const view_methods = [_]objc.Method{
                 .{ .name = "mouseExited:", .imp = &mouseExited, .types = "v@:@" },
                 .{ .name = "scrollWheel:", .imp = &scrollWheel, .types = "v@:@" },
                 .{ .name = "keyDown:", .imp = &keyDown, .types = "v@:@" },
+                .{ .name = "performKeyEquivalent:", .imp = &performKeyEquivalent, .types = "c@:@" },
                 .{ .name = "paste:", .imp = &paste, .types = "v@:@" },
                 .{ .name = "setFrameSize:", .imp = &setFrameSize, .types = "v@:{CGSize=dd}" },
                 .{ .name = "viewDidChangeBackingProperties", .imp = &backingChanged, .types = "v@:" },
@@ -341,12 +345,17 @@ fn hitTest(obj: objc.Object, _: objc.SEL, point: objc.CGPoint) callconv(.c) ?obj
     const local = objc.msg(objc.CGPoint, obj, "convertPoint:fromView:", .{ point, super });
     const p: types.Point = .{ .x = @floatCast(local.x), .y = @floatCast(local.y) };
     if (p.x < 0 or p.y < 0 or p.x >= s.size.w or p.y >= s.size.h) return null;
-    if (s.transparent) {
-        s.ctx.input.mouse = p;
-        s.ctx.updateHot();
-        if (s.ctx.inStageHole(p)) return null;
-    }
+    if (s.transparent and s.ctx.inStageHoleAt(p)) return null;
     return obj;
+}
+
+fn performKeyEquivalent(obj: objc.Object, sel_in: objc.SEL, event: objc.Object) callconv(.c) objc.BOOL {
+    const s = surfaceOf(obj) orelse return objc.NO;
+    const flags = objc.msg(objc.NSUInteger, event, "modifierFlags", .{});
+    if (flags & ((1 << 20) | (1 << 18)) == 0) return objc.NO;
+    s.ctx.shortcut_taken = false;
+    keyDown(obj, sel_in, event);
+    return if (s.ctx.shortcut_taken) objc.YES else objc.NO;
 }
 
 fn mouseDown(obj: objc.Object, _: objc.SEL, event: objc.Object) callconv(.c) void {
