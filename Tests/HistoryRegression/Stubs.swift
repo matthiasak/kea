@@ -56,3 +56,12 @@ enum Disk {
         try? data.write(to: file, options: .atomic)
     }
 }
+
+@MainActor
+enum Sync {
+    struct Shared {
+        func historyCleared() {}
+        func historyForgot(_ key: String) {}
+    }
+    static let shared = Shared()
+}

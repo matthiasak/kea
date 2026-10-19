@@ -155,32 +155,51 @@ enum Store {
 /// on the way out.
 enum Disk {
     private static let queue = DispatchQueue(label: "kea.disk", qos: .utility)
+    /// Guards `newest` and `count`, held for a moment and never across a write.
     private static let lock = NSLock()
-    /// The newest write asked for, by file.
+    /// Held across a write or a removal, so the newest-wins check and the change
+    /// to the file are one step, without making whoever asks next wait for the disk.
+    private static let io = NSLock()
     nonisolated(unsafe) private static var newest: [URL: Int] = [:]
     nonisolated(unsafe) private static var count = 0
 
     /// `encode` runs where the write does. `now` writes on the calling
     /// thread: quitting doesn't wait for a queue.
     static func write(_ file: URL, now: Bool = false, _ encode: @escaping @Sendable () -> Data?) {
-        lock.lock()
-        count += 1
-        let turn = count
-        newest[file] = turn
-        lock.unlock()
+        let turn = ask(file)
         let put: @Sendable () -> Void = {
-            lock.lock()
-            let current = newest[file] == turn
-            lock.unlock()
-            guard current, let data = encode() else { return }
-            lock.lock()
-            defer { lock.unlock() }
+            guard isNewest(file, turn), let data = encode() else { return }
+            io.lock()
+            defer { io.unlock() }
             // Overtaken: something newer of this file was asked for since.
-            guard newest[file] == turn else { return }
+            guard isNewest(file, turn) else { return }
             try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
             try? data.write(to: file, options: .atomic)
         }
         if now { put() } else { queue.async(execute: put) }
+    }
+
+    /// A file gone, in its turn among the writes; a newer write of it wins.
+    static func remove(_ file: URL) {
+        let turn = ask(file)
+        queue.async {
+            io.lock()
+            defer { io.unlock() }
+            guard isNewest(file, turn) else { return }
+            try? FileManager.default.removeItem(at: file)
+        }
+    }
+
+    private static func ask(_ file: URL) -> Int {
+        lock.lock(); defer { lock.unlock() }
+        count += 1
+        newest[file] = count
+        return count
+    }
+
+    private static func isNewest(_ file: URL, _ turn: Int) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return newest[file] == turn
     }
 
     /// Everything asked for so far, written — for the way out.

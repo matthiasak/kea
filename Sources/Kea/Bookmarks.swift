@@ -108,14 +108,16 @@ final class Bookmarks: ObservableObject {
     func matches(_ text: String) -> [(node: Bookmark, path: [String])] {
         let words = text.lowercased().split(separator: " ").map(String.init)
         guard !words.isEmpty else { return [] }
-        func walk(_ nodes: [Bookmark], _ path: [String]) -> [(node: Bookmark, path: [String])] {
-            nodes.flatMap { node -> [(node: Bookmark, path: [String])] in
-                let hay = (node.title + " " + (node.url ?? "")).lowercased()
-                let hit = words.allSatisfy { hay.contains($0) } ? [(node: node, path: path)] : []
-                return hit + walk(node.children ?? [], path + [node.title])
+        var found: [(node: Bookmark, path: [String])] = []
+        func walk(_ nodes: [Bookmark], _ path: [String]) {
+            for node in nodes {
+                let title = node.title.lowercased(), address = node.url?.lowercased() ?? ""
+                if words.allSatisfy({ title.contains($0) || address.contains($0) }) { found.append((node: node, path: path)) }
+                if let children = node.children, !children.isEmpty { walk(children, path + [node.title]) }
             }
         }
-        return walk(roots, [])
+        walk(roots, [])
+        return found
     }
 
     /// The folders `id` sits in, outermost first; empty at the top level,
@@ -882,7 +884,7 @@ struct BookmarkOutline: View {
                     // in, shown as the folder's own lower edge shows it.
                     Text("Empty")
                         .font(.system(size: 12))
-                        .foregroundStyle(Palette.faint)
+                        .foregroundStyle(Palette.muted)
                         .padding(.leading, indent(depth + 1) + 26)
                         .padding(.vertical, 5)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1189,7 +1191,7 @@ struct BookmarkOutline: View {
                 if node.isFolder, let kids = node.children, !kids.isEmpty {
                     Text("\(Bookmarks.count(kids))")
                         .font(.system(size: 11))
-                        .foregroundStyle(Palette.faint)
+                        .foregroundStyle(Palette.muted)
                 }
             }
             .padding(.leading, CGFloat(depth) * 18 + 10)
@@ -1778,16 +1780,18 @@ struct BookmarksPanel: View {
         } else {
             ScrollView(showsIndicators: false) {
                 Card {
-                    ForEach(Array(hits.enumerated()), id: \.element.node.id) { index, hit in
-                        if index > 0 { Rule(inset: 40) }
-                        Found(
-                            node: hit.node,
-                            path: hit.path,
-                            selected: picks.ids.contains(hit.node.id),
-                            open: hit.node.url.flatMap(URL.init(string:)).map { url in { browser.pickBookmark(url) } },
-                            show: { show(hit.node) },
-                            pick: { picks.click(hit.node.id, flags: NSApp.currentEvent?.modifierFlags ?? [], order: hits.map(\.node.id)) }
-                        )
+                    LazyVStack(spacing: 0) {
+                        ForEach(Array(hits.enumerated()), id: \.element.node.id) { index, hit in
+                            if index > 0 { Rule(inset: 40) }
+                            Found(
+                                node: hit.node,
+                                path: hit.path,
+                                selected: picks.ids.contains(hit.node.id),
+                                open: hit.node.url.flatMap(URL.init(string:)).map { url in { browser.pickBookmark(url) } },
+                                show: { show(hit.node) },
+                                pick: { picks.click(hit.node.id, flags: NSApp.currentEvent?.modifierFlags ?? [], order: hits.map(\.node.id)) }
+                            )
+                        }
                     }
                 }
                 .padding(.bottom, 2)

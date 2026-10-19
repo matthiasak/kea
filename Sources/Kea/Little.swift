@@ -34,7 +34,7 @@ final class LittleWindow: NSObject, NSWindowDelegate {
         // Never a test run's in front: a probe started hidden stays off every screen.
         guard front, !Store.testing else { return }
         little.window.makeKeyAndOrderFront(nil)
-        if #available(macOS 14, *) { NSApp.activate() } else { NSApp.activate(ignoringOtherApps: true) }
+        NSApp.activate()
     }
 
     /// The small windows open now, newest last — for the bench.

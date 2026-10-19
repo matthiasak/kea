@@ -352,10 +352,7 @@ struct Trouble: View {
             Text(message)
                 .font(.system(size: 14))
                 .foregroundStyle(Palette.ink)
-            Button("Try again", action: retry)
-                .buttonStyle(.plain)
-                .font(.system(size: 12))
-                .foregroundStyle(Palette.muted)
+            Pill("Try again", filled: true, action: retry)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Palette.ground)

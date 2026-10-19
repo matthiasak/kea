@@ -58,12 +58,14 @@ enum Pins {
     static func load() {
         guard !loaded else { return }
         loaded = true
-        if let data = try? Data(contentsOf: file),
-           let saved = try? JSONDecoder().decode([String: [PinDef]].self, from: data) {
-            for (key, defs) in saved {
-                if let space = UUID(uuidString: key) { bySpace[space] = defs }
+        if let data = try? Data(contentsOf: file) {
+            if let saved = try? JSONDecoder().decode([String: [PinDef]].self, from: data) {
+                for (key, defs) in saved {
+                    if let space = UUID(uuidString: key) { bySpace[space] = defs }
+                }
+                return
             }
-            return
+            Store.quarantine(file)
         }
         for space in Spaces.read() {
             let defs = Session.read(space: space.id).tabs.compactMap { entry -> PinDef? in
@@ -93,8 +95,7 @@ enum Pins {
     }
 
     private static func save() {
-        var out: [String: [PinDef]] = [:]
-        for (space, defs) in bySpace { out[space.uuidString] = defs }
+        let out = Dictionary(uniqueKeysWithValues: bySpace.map { ($0.key.uuidString, $0.value) })
         Disk.write(file) { try? JSONEncoder().encode(out) }
     }
 }

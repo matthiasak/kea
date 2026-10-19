@@ -197,7 +197,7 @@ struct ImportPanel: View {
                 ForEach(lines, id: \.self) { line in
                     Text(line)
                         .font(.system(size: 11.5))
-                        .foregroundStyle(Palette.faint)
+                        .foregroundStyle(Palette.muted)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }

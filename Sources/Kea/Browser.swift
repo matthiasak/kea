@@ -299,6 +299,7 @@ final class Browser: NSObject, ObservableObject {
         @Published fileprivate(set) var siteOffer: SearchSite?
         @Published fileprivate(set) var offers: [Suggestion] = []
         @Published fileprivate(set) var ending: String?
+        @Published fileprivate(set) var landing: Int?
         @Published var picked: Int?
         var completed: String {
             if let picked, offers.indices.contains(picked) { return offers[picked].key }
@@ -1403,6 +1404,8 @@ final class Browser: NSObject, ObservableObject {
     func announce(_ text: String, file: URL? = nil) {
         announcement = text
         announcedFile = file
+        NSAccessibility.post(element: NSApp as Any, notification: .announcementRequested,
+                             userInfo: [.announcement: text, .priority: NSAccessibilityPriorityLevel.high.rawValue])
         hush?.cancel()
         let work = DispatchWorkItem { [weak self] in
             self?.announcement = nil
@@ -1628,7 +1631,8 @@ final class Browser: NSObject, ObservableObject {
             Spaces.current = last
         }
         restoreSession()
-        if prefs.usesSpaces { preloadSpaces() }
+        // The other spaces' rows only feed the swipe's preview: after the window is up.
+        if prefs.usesSpaces { Links.onceShown { [weak self] in self?.preloadSpaces() } }
     }
 
     /// The floating video's buttons answer the window whose video it is:
@@ -3843,18 +3847,24 @@ final class Browser: NSObject, ObservableObject {
         // A page's title lands a beat after the page itself, and a history
         // entry that only ever holds an address is half a memory.
         // Anywhere a tab lands is worth remembering for next launch.
+        tab.bag.removeAll()
         tab.$address
             .dropFirst()
             .sink { [weak self] _ in self?.rememberSession() }
-            .store(in: &bag)
+            .store(in: &tab.bag)
 
         tab.$title
             .dropFirst()
-            .sink { [weak self, weak tab] title in
-                guard let tab, !tab.shy, let url = tab.address else { return }
+            .filter { !$0.isEmpty }
+            // With the address it was the title of, once it settles: a title that
+            // ticks (an unread count, a timer) is written once, not each time.
+            .map { [weak tab] title in (title, tab?.address) }
+            .throttle(for: .seconds(2), scheduler: DispatchQueue.main, latest: true)
+            .sink { [weak self, weak tab] title, url in
+                guard let tab, !tab.shy, let url else { return }
                 self?.history.retitle(url, title)
             }
-            .store(in: &bag)
+            .store(in: &tab.bag)
     }
 
     /// Put the cursor back in the field, from wherever asked.
@@ -3886,10 +3896,24 @@ final class Browser: NSObject, ObservableObject {
         focusRequest += 1
     }
 
+    /// The row Return goes to with none picked, as submit decides it: drawn
+    /// quietly in the list so Return is never a surprise.
+    private func landing() -> Int? {
+        let offers = omni.offers
+        if offers.first?.kind.isCommand == true { return 0 }
+        if let ending = omni.ending {
+            return offers.firstIndex { history.completion(for: omni.typed, among: [$0]) == ending }
+        }
+        guard let target = destination(for: omni.typed) else { return nil }
+        let aim = History.identity(for: target)
+        return offers.firstIndex { History.identity(for: $0.url) == aim }
+    }
+
     private func guess() {
         guard !summoning else {
             omni.offers = openPages(matching: omni.typed)
             omni.ending = nil
+            omni.landing = nil
             // The most recent page is already chosen, so ⌘K then Return is the
             // whole gesture.
             omni.picked = omni.offers.isEmpty ? nil : 0
@@ -3905,12 +3929,14 @@ final class Browser: NSObject, ObservableObject {
             omni.offers = words.isEmpty ? [] : site.url(for: words).map {
                 [Suggestion(key: words, title: site.name, url: $0, kind: .search)]
             } ?? []
+            omni.landing = landing()
             return
         }
 
         guard !omni.typed.trimmingCharacters(in: .whitespaces).isEmpty else {
             omni.offers = []
             omni.ending = nil
+            omni.landing = nil
             omni.picked = nil
             omni.siteOffer = nil
             return
@@ -3948,22 +3974,24 @@ final class Browser: NSObject, ObservableObject {
         // A row that was picked stops being the right row the moment the
         // question changes.
         omni.picked = nil
+        omni.landing = landing()
     }
 
     /// What is open, most recently looked at first, filtered by what has been
     /// typed. On an empty field this is the whole point of the summon: it is
     /// the tab strip, except you read it only when you ask for it.
     private func openPages(matching typed: String) -> [Suggestion] {
-        let needle = typed.trimmingCharacters(in: .whitespaces).lowercased()
+        let words = typed.lowercased().split(separator: " ")
         return tabs
             .filter { $0.id != activeID && !$0.isBlank }
             .filter { tab in
-                guard !needle.isEmpty else { return true }
-                let address = tab.address.map { Address.pretty($0) } ?? ""
-                return tab.label.lowercased().contains(needle) || address.contains(needle)
+                guard !words.isEmpty else { return true }
+                let label = tab.label.lowercased()
+                let address = tab.address.map { Address.pretty($0).lowercased() } ?? ""
+                return words.allSatisfy { label.contains($0) || address.contains($0) }
             }
             .sorted { $0.touched > $1.touched }
-            .prefix(needle.isEmpty ? 6 : 3)
+            .prefix(words.isEmpty ? 6 : 3)
             .compactMap { tab in
                 guard let url = tab.address else { return nil }
                 return Suggestion(
@@ -3997,7 +4025,7 @@ final class Browser: NSObject, ObservableObject {
     /// A backspace means the ending was not wanted. Recomputing it on the very
     /// next keystroke is right; putting it back on this one is what makes a
     /// field impossible to shorten.
-    func stopCompleting() { omni.ending = nil }
+    func stopCompleting() { omni.ending = nil; omni.landing = landing() }
 
     /// Tab with a site offered: the site goes into the field as a chip, and
     /// what was typed to name it is let go. True when it did.
@@ -4007,12 +4035,6 @@ final class Browser: NSObject, ObservableObject {
         omni.typed = ""
         siteChip = site
         return true
-    }
-
-    /// Tab, or the right arrow at the end of the line: take what is offered.
-    func acceptEnding() {
-        guard let ending = omni.ending, !ending.isEmpty else { return }
-        omni.typed += ending
     }
 
     /// The arrow keys walk the list, and walking off the top lets go of it.
@@ -4944,22 +4966,25 @@ extension Browser: WKDownloadDelegate {
         let asked = response.url.flatMap { namedDownloads.removeValue(forKey: $0) }
         let chosen = fetches.destination(for: download)
         let name = Browser.fileName(asked ?? suggestedFilename)
-        let file = chosen ?? whereToSave(name)
-        guard let file else {
-            if let ended = fetches.destinationCancelled(download) {
-                ended.owner.relinquish(download)
-            } else {
-                relinquish(download)
+        let decide: (URL?) -> Void = { [weak self] file in
+            guard let self else { return completionHandler(nil) }
+            guard let file else {
+                if let ended = fetches.destinationCancelled(download) {
+                    ended.owner.relinquish(download)
+                } else {
+                    relinquish(download)
+                }
+                completionHandler(nil)
+                return
             }
-            completionHandler(nil)
-            return
+            fetches.going(download, to: file, cancel: finderCancellation(for: download))
+            // A retry is numbered afresh from the name asked for, or the one you
+            // gave it: never from "report 2.pdf", whose own " 2" is not its name.
+            if chosen == nil { fetches.entry(for: download)?.retryName = prefs.asksWhereToSave ? file.lastPathComponent : name }
+            completionHandler(file)
+            announce("Downloading \(file.lastPathComponent)")
         }
-        fetches.going(download, to: file, cancel: finderCancellation(for: download))
-        // A retry is numbered afresh from the name asked for, or the one you
-        // gave it: never from "report 2.pdf", whose own " 2" is not its name.
-        if chosen == nil { fetches.entry(for: download)?.retryName = prefs.asksWhereToSave ? file.lastPathComponent : name }
-        completionHandler(file)
-        announce("Downloading \(file.lastPathComponent)")
+        if let chosen { decide(chosen) } else { whereToSave(name, then: decide) }
     }
 
     func downloadDidFinish(_ download: WKDownload) {
@@ -4997,12 +5022,15 @@ extension Browser: WKDownloadDelegate {
         mimeType: String?,
         originatingURL: URL?
     ) {
-        guard let data, let file = whereToSave(suggestedFilename ?? "") else { return }
-        do {
-            try data.write(to: file)
-            saved(file, from: originatingURL)
-        } catch {
-            announce("Download failed")
+        guard let data else { return }
+        whereToSave(suggestedFilename ?? "") { [weak self] file in
+            guard let self, let file else { return }
+            do {
+                try data.write(to: file)
+                saved(file, from: originatingURL)
+            } catch {
+                announce("Download failed")
+            }
         }
     }
 
@@ -5039,18 +5067,19 @@ extension Browser: WKDownloadDelegate {
     }
 
     /// Where a file goes: the downloads folder, or wherever you say when
-    /// Settings says to ask. Nil when the question was cancelled. The name
+    /// Settings says to ask — asked in a sheet on this window, not a dialog
+    /// that stops every window. Nil when the question was cancelled. The name
     /// comes from the page, so only its last part is taken: never a path
     /// out of the folder.
-    private func whereToSave(_ name: String) -> URL? {
+    private func whereToSave(_ name: String, then: @escaping (URL?) -> Void) {
         let name = Browser.fileName(name)
-        guard prefs.asksWhereToSave else { return Browser.free(name, in: downloadsFolder) }
+        guard prefs.asksWhereToSave else { return then(Browser.free(name, in: downloadsFolder)) }
         let panel = NSSavePanel()
         panel.nameFieldStringValue = name
         panel.directoryURL = downloadsFolder
         panel.canCreateDirectories = true
-        guard panel.runModal() == .OK else { return nil }
-        return panel.url
+        guard let window else { return then(panel.runModal() == .OK ? panel.url : nil) }
+        panel.beginSheetModal(for: window) { response in then(response == .OK ? panel.url : nil) }
     }
 
     private static func fileName(_ name: String) -> String {

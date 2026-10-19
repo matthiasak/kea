@@ -37,6 +37,22 @@ enum SidebarPosition: String, CaseIterable, Identifiable {
     }
 }
 
+/// The widths a hand drags, apart from the rest of the settings: a drag
+/// redraws what is that wide, not every window, row and menu (see Reading).
+@MainActor
+final class Widths: ObservableObject {
+    private let store = Store.settings
+    @Published var side: CGFloat { didSet { store.set(Double(side), forKey: "sidebar.width") } }
+    @Published var chat: CGFloat { didSet { store.set(Double(chat), forKey: "ai.width") } }
+    @Published var marks: CGFloat { didSet { store.set(Double(marks), forKey: "bookmarks.width") } }
+
+    init() {
+        side = min(Metrics.sideMax, max(Metrics.sideMin, CGFloat(store.object(forKey: "sidebar.width") as? Double ?? Double(Metrics.side))))
+        chat = min(Metrics.chatMax, max(Metrics.chatMin, CGFloat(store.object(forKey: "ai.width") as? Double ?? Double(Metrics.chat))))
+        marks = min(Metrics.sideMax, max(Metrics.sideMin, CGFloat(store.object(forKey: "bookmarks.width") as? Double ?? Double(Metrics.side))))
+    }
+}
+
 @MainActor
 final class Preferences: ObservableObject {
     private let store = Store.settings
@@ -79,10 +95,11 @@ final class Preferences: ObservableObject {
     @Published var sideHides: Bool {
         didSet { store.set(sideHides, forKey: "sidebar.hides") }
     }
+    let widths = Widths()
     /// How wide the column is. Pulled by its edge, and remembered.
-    @Published var sideWidth: CGFloat {
-        didSet { store.set(Double(sideWidth), forKey: "sidebar.width") }
-    }
+    var sideWidth: CGFloat { get { widths.side } set { widths.side = newValue } }
+    var chatWidth: CGFloat { get { widths.chat } set { widths.chat = newValue } }
+    var marksWidth: CGFloat { get { widths.marks } set { widths.marks = newValue } }
     @Published var glyph: Glyph {
         didSet { store.set(glyph.rawValue, forKey: "glyph") }
     }
@@ -245,12 +262,11 @@ final class Preferences: ObservableObject {
     @Published var bookmarksSidebar: Bool {
         didSet { store.set(bookmarksSidebar, forKey: "bookmarks.sidebar") }
     }
-    @Published var chatWidth: CGFloat {
-        didSet { store.set(Double(chatWidth), forKey: "ai.width") }
+    /// Ubi Chat's transcript, zoomed apart from the page (the panel's ⋯ menu). This Mac only: not in Sync.portable.
+    @Published var chatZoom: Double {
+        didSet { store.set(chatZoom, forKey: "ai.zoom") }
     }
-    @Published var marksWidth: CGFloat {
-        didSet { store.set(Double(marksWidth), forKey: "bookmarks.width") }
-    }
+    func setChatZoom(_ value: Double) { chatZoom = min(2, max(0.5, (value * 10).rounded() / 10)) }
     /// nil: away from the tab column, where it always was
     @Published var chatSide: SidebarPosition? {
         didSet { store.set(chatSide?.rawValue, forKey: "ai.side") }
@@ -402,8 +418,6 @@ final class Preferences: ObservableObject {
             ?? (store.string(forKey: "manner") == "side")
         sidePosition = store.string(forKey: "sidebar.position").flatMap(SidebarPosition.init) ?? .left
         sideHides = store.bool(forKey: "sidebar.hides")
-        let width = store.object(forKey: "sidebar.width") as? Double ?? Double(Metrics.side)
-        sideWidth = min(Metrics.sideMax, max(Metrics.sideMin, CGFloat(width)))
         glyph = store.string(forKey: "glyph").flatMap(Glyph.init) ?? .letters
         engine = store.string(forKey: "search.engine").flatMap(Engine.init) ?? .standard
         customEngine = store.string(forKey: "search.custom") ?? ""
@@ -477,8 +491,7 @@ final class Preferences: ObservableObject {
         littleLinks = store.bool(forKey: "links.little")
         bookmarksBar = store.bool(forKey: "bookmarks.bar")
         bookmarksSidebar = store.bool(forKey: "bookmarks.sidebar")
-        chatWidth = min(Metrics.chatMax, max(Metrics.chatMin, CGFloat(store.object(forKey: "ai.width") as? Double ?? Double(Metrics.chat))))
-        marksWidth = min(Metrics.sideMax, max(Metrics.sideMin, CGFloat(store.object(forKey: "bookmarks.width") as? Double ?? Double(Metrics.side))))
+        chatZoom = min(2, max(0.5, store.object(forKey: "ai.zoom") as? Double ?? 1))
         chatSide = store.string(forKey: "ai.side").flatMap(SidebarPosition.init)
         marksSide = store.string(forKey: "bookmarks.side").flatMap(SidebarPosition.init)
         chatPopped = store.bool(forKey: "ai.popped")

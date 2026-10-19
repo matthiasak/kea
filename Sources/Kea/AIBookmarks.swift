@@ -139,7 +139,8 @@ extension Browser {
         let most = AIBookmarks.most(for: provider)
         guard count <= most else { return announce("\(provider.name) takes up to \(most) bookmarks at once; you have \(count)") }
         Ask.name("Organize with AI", detail: AIBookmarks.notice(for: provider, count: count), placeholder: AIBookmarks.standing,
-                 confirm: "Organize", empty: true) { typed in
+                 confirm: "Organize", empty: true) { [weak self] typed in
+            guard let self else { return }
             let base = self.bookmarks.roots
             picks.proposal = nil
             picks.organizing = "Asking \(provider.name)…"
@@ -208,7 +209,7 @@ struct BookmarkProposalView: View {
                 }
             }
             HStack {
-                Text("AI — may be wrong · \(proposal.place)").font(.system(size: 11)).foregroundStyle(Palette.faint)
+                Text("AI — may be wrong · \(proposal.place)").font(.system(size: 11)).foregroundStyle(Palette.muted)
                 Spacer()
                 Pill("Discard", action: discard)
                 Pill("Apply", filled: true, action: apply)

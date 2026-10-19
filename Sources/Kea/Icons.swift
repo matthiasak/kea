@@ -169,15 +169,16 @@ final class Favicons {
         return .any
     }
 
+    private static let session: URLSession = {
+        let config = URLSessionConfiguration.ephemeral
+        config.timeoutIntervalForRequest = 8
+        return URLSession(configuration: config)
+    }()
+
     private func download(_ candidates: [URL], host: String, key: String, shy: Bool) async {
         defer { busy.remove(host) }
-        let session = URLSession(configuration: {
-            let config = URLSessionConfiguration.ephemeral
-            config.timeoutIntervalForRequest = 8
-            return config
-        }())
         for candidate in candidates {
-            guard let (data, response) = try? await session.data(from: candidate),
+            guard let (data, response) = try? await Favicons.session.data(from: candidate),
                   (response as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) ?? true,
                   data.count > 60, data.count < 2_000_000
             else { continue }
@@ -196,7 +197,7 @@ final class Favicons {
     /// The kinds of picture a site's icon may be. Anything else a site sends
     /// — a PDF, a TIFF, an icns, PostScript — isn't opened at all: every
     /// kind is one more decoder a site can reach in this process.
-    private static let kinds: Set<String> = [
+    nonisolated private static let kinds: Set<String> = [
         "public.png", "com.microsoft.ico", "public.jpeg", "com.compuserve.gif", "org.webmproject.webp", "com.microsoft.bmp",
     ]
 

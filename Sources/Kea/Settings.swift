@@ -61,13 +61,16 @@ struct SettingsPanel: View {
             content
         }
         .frame(width: SettingsPanel.width, height: SettingsPanel.height)
-        .background(Palette.ground, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .background {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Palette.ground)
+                .shadow(color: .black.opacity(0.16), radius: 34, y: 12)
+        }
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .strokeBorder(Palette.hairline, lineWidth: 1)
         )
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .shadow(color: .black.opacity(0.16), radius: 34, y: 12)
         .onChange(of: page) { _, page in Store.settings.set(page.rawValue, forKey: "settings.page") }
     }
 
@@ -747,6 +750,12 @@ struct Segmented<Option: Hashable>: View {
         .padding(2)
         .background(Palette.wash, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
         .animation(Motion.settle, value: selection)
+        .accessibilityRepresentation {
+            Picker("", selection: $selection) {
+                ForEach(options, id: \.0) { option, title in Text(title).tag(option) }
+            }
+            .pickerStyle(.segmented)
+        }
     }
 }
 
@@ -767,6 +776,7 @@ struct Switch: View {
             .contentShape(Capsule())
             .onTapGesture { withAnimation(Motion.settle) { on.toggle() } }
             .animation(Motion.settle, value: on)
+            .accessibilityRepresentation { Toggle("", isOn: $on) }
     }
 }
 

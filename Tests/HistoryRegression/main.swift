@@ -235,6 +235,10 @@ private func testSuggestionIdsAndSafeCaseInsensitiveCompletion() {
     knownHistory.record(url("https://github.com/"), title: "GitHub home")
     let github = knownHistory.suggestions(for: "github", limit: 50)
     Checks.expect(!github.contains { if case .known = $0.kind { return true }; return false }, "a visited known site should not also appear as a known-site suggestion")
+
+    let firstOpen = Suggestion(key: "Inbox", title: "", url: url("https://mail.example.test/"), kind: .open, tab: UUID())
+    let secondOpen = Suggestion(key: "Inbox", title: "", url: url("https://mail.example.test/"), kind: .open, tab: UUID())
+    Checks.expect(firstOpen.id != secondOpen.id, "two open-tab suggestions with the same title should have distinct ids")
 }
 
 /// Lets the coalesced save reach the disk, then reads what it wrote.
@@ -332,6 +336,46 @@ private func testCompletionFinishesWWWSitesWithoutTheirWWW() {
     Checks.expect(history.completion(for: "plain-t", among: plain) == nil, "dropping the www must not turn an http page into https")
 }
 
+@MainActor
+private func testRankingPrefersWhereTheMatchFalls() {
+    Store.use("ranking")
+    let history = History()
+    let now = Date()
+    history.take(url("https://github.com/"), title: "GitHub", count: 100, last: now)
+    history.take(url("https://coursera.org/"), title: "Coursera", count: 2, last: now)
+    history.take(url("https://mail.google.com/"), title: "Gmail", count: 1, last: now)
+    Checks.expect(history.suggestions(for: "co", limit: 3).first?.url.host() == "coursera.org", "a host prefix match should beat a frequent TLD match")
+    Checks.expect(!history.suggestions(for: "co", limit: 50).contains { $0.url.host() == "github.com" }, "a TLD label should not match a bare substring query")
+    Checks.expect(history.suggestions(for: "google", limit: 3).contains { $0.url.host() == "mail.google.com" }, "second-level domain should still match after a subdomain dot")
+}
+
+@MainActor
+private func testTitlesMatchBelowAddresses() {
+    Store.use("titles")
+    let history = History()
+    history.record(url("https://docs.example.test/a"), title: "Swift Concurrency Guide")
+    history.record(url("https://guide.example.test/"), title: "Home")
+    history.record(url("https://docs.example.test/b"), title: "Guide to Swift")
+    Checks.expect(history.suggestions(for: "swift conc").contains { $0.url.path() == "/a" }, "multi-word title match should offer the page")
+    Checks.expect(history.suggestions(for: "guide").first?.url.host() == "guide.example.test", "address match should rank above title match")
+    Checks.expect(!history.suggestions(for: "sw").contains { $0.url.host() == "docs.example.test" }, "title matching should require at least three characters")
+    let both = history.everything(matching: "swift guide")
+    Checks.expect(both.contains { $0.url.path() == "/a" } && both.contains { $0.url.path() == "/b" }, "everything(matching:) should match all words in any order")
+    Checks.expect(history.everything(matching: "swift", limit: 1).count == 1, "everything(matching:limit:) should respect its limit")
+    history.retitle(url("https://docs.example.test/a"), "Actors")
+    Checks.expect(history.suggestions(for: "actors").contains { $0.url.path() == "/a" }, "retitle should update the precomputed title text")
+}
+
+@MainActor
+private func testFlushWritesAtOnce() {
+    Store.use("flush")
+    let history = History()
+    history.record(url("https://flush.example.test/page"), title: "Flushed")
+    history.flush()
+    let contents = ((try? String(contentsOf: Store.file("history.json"), encoding: .utf8)) ?? "").replacingOccurrences(of: "\\/", with: "/")
+    Checks.expect(contents.contains("flush.example.test/page"), "flush() should write pending history synchronously without waiting for the coalescer")
+}
+
 @main
 private struct HistoryRegression {
     @MainActor
@@ -344,6 +388,9 @@ private struct HistoryRegression {
         testCredentialsNeverReachTheFile()
         testLegacyCreditsMoveToTheOriginTheirPagesUsed()
         testCompletionFinishesWWWSitesWithoutTheirWWW()
+        testRankingPrefersWhereTheMatchFalls()
+        testTitlesMatchBelowAddresses()
+        testFlushWritesAtOnce()
 
         guard Checks.failures.isEmpty else {
             fputs("\(Checks.failures.count) History regression assertion(s) failed.\n", stderr)

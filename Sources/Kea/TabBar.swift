@@ -96,8 +96,9 @@ struct TabBar: View {
                                                        group: nil, strip: geo.size.width, each: each)
                                             }
                                         } else {
-                                            ForEach(Array(browser.displayedTabs.enumerated()), id: \.element.id) { index, tab in
-                                                topTab(tab, index: index, count: browser.displayedTabs.count,
+                                            let shown = browser.displayedTabs
+                                            ForEach(Array(shown.enumerated()), id: \.element.id) { index, tab in
+                                                topTab(tab, index: index, count: shown.count,
                                                        group: nil, strip: geo.size.width, each: each)
                                             }
                                         }
@@ -143,6 +144,8 @@ struct TabBar: View {
                             )
                     }
                     .buttonStyle(.plain)
+                    .help("New Tab   ⌘T")
+                    .accessibilityLabel("New Tab")
                     .onHover { plussed = $0 }
                     .opacity(nearby ? 1 : 0)
                     .scaleEffect(nearby ? 1 : 0.7, anchor: .leading)
@@ -445,6 +448,7 @@ struct Helm: View {
             }
             .opacity(0.3)
             .allowsHitTesting(false)
+            .accessibilityHidden(true)
         }
     }
 
@@ -567,7 +571,7 @@ private struct TabPill: View {
         .overlay { MiddleClick(act: close) }
         .onHover { hovering = $0 }
         .contextMenu { TabMenu(browser: browser, tab: tab, close: close) }
-        .help(pinned || compact ? tab.label : "")
+        .help(tab.label)
         .animation(Motion.quick, value: hovering)
         .animation(Motion.glide, value: editing)
         .animation(Motion.glide, value: tab.pin)
@@ -578,6 +582,12 @@ private struct TabPill: View {
         }
         // Arriving and leaving from the strip rather than from nowhere.
         .transition(.scale(scale: 0.9, anchor: .leading).combined(with: .opacity))
+        .accessibilityElement(children: editing ? .contain : .ignore)
+        .accessibilityLabel(tab.label.isEmpty ? "New Tab" : tab.label)
+        .accessibilityValue(live ? "Selected" : "")
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction { browser.select(tab) }
+        .accessibilityAction(named: "Close tab") { close() }
     }
 
     @ViewBuilder

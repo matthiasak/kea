@@ -184,7 +184,13 @@ final class Extensions: NSObject, ObservableObject {
         controller = WKWebExtensionController(configuration: configuration)
         super.init()
         controller.delegate = self
-        installed = (try? JSONDecoder().decode([Installed].self, from: Data(contentsOf: Extensions.list))) ?? []
+        if let data = try? Data(contentsOf: Extensions.list) {
+            if let list = try? JSONDecoder().decode([Installed].self, from: data) {
+                installed = list
+            } else {
+                Store.quarantine(Extensions.list)
+            }
+        }
     }
 
     // MARK: - starting
@@ -509,6 +515,7 @@ final class Extensions: NSObject, ObservableObject {
         if let held = ExtensionShims.awake.removeValue(forKey: id) { IOPMAssertionRelease(held) }
         // Its ports read as gone only once WebKit has had a turn.
         DispatchQueue.main.async { ExtensionNative.stopOrphans() }
+        if let watcher = errorWatchers.removeValue(forKey: id) { NotificationCenter.default.removeObserver(watcher) }
         contexts[id] = nil
         actionsChanged += 1
     }
@@ -1014,7 +1021,7 @@ final class Extensions: NSObject, ObservableObject {
     /// (chrome-extension://<its id>/*) or every one's. No extension is ever
     /// given them — not from its manifest, not asked for later — whatever
     /// the question said; its own pages are its own without asking.
-    nonisolated static func reachesExtensions(_ pattern: WKWebExtension.MatchPattern) -> Bool {
+    static func reachesExtensions(_ pattern: WKWebExtension.MatchPattern) -> Bool {
         guard let scheme = pattern.scheme?.lowercased() else { return false }
         return [Extensions.scheme, Extensions.formerScheme, "webkit-extension"].contains(scheme)
     }
@@ -1024,12 +1031,12 @@ final class Extensions: NSObject, ObservableObject {
     /// access to file URLs" is turned on for it, and Kea has no such
     /// switch. WebKit's <all_urls> leaves file: out; a pattern naming it
     /// (file:///*) would be granted with the rest.
-    nonisolated static func reachesFiles(_ pattern: WKWebExtension.MatchPattern) -> Bool {
+    static func reachesFiles(_ pattern: WKWebExtension.MatchPattern) -> Bool {
         pattern.scheme?.lowercased() == "file"
     }
 
     /// What no extension is given or asked about: extension pages and files.
-    nonisolated static func withheld(_ pattern: WKWebExtension.MatchPattern) -> Bool {
+    static func withheld(_ pattern: WKWebExtension.MatchPattern) -> Bool {
         reachesExtensions(pattern) || reachesFiles(pattern)
     }
 

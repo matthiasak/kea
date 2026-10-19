@@ -215,7 +215,7 @@ final class PaneStage: NSView {
             addSubview(slot, positioned: .below, relativeTo: divider)
             slots.append(slot)
             let shadow = CALayer()
-            shadow.actions = ["bounds": NSNull(), "position": NSNull(), "hidden": NSNull()]
+            shadow.actions = ["bounds": NSNull(), "position": NSNull(), "hidden": NSNull(), "shadowPath": NSNull()]
             layer?.insertSublayer(shadow, at: 0)
             shadows.append(shadow)
             let cue = FocusCue()
@@ -321,6 +321,8 @@ final class PaneStage: NSView {
                 // Pages run the stage's full height, so its flip is no matter.
                 let shadow = shadows[index]
                 shadow.frame = frame
+                let round = max(0, min(corner, frame.width / 2, frame.height / 2))
+                shadow.shadowPath = CGPath(roundedRect: CGRect(origin: .zero, size: frame.size), cornerWidth: round, cornerHeight: round, transform: nil)
                 shadow.isHidden = corner == 0 || !visible
             }
             // Only with two pages on screen does it matter which one keys go to.

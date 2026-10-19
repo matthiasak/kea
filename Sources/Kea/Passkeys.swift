@@ -440,7 +440,7 @@ final class Passkeys: NSObject {
 
     /// Whether this Mac can derive keys from a passkey at all: the PRF
     /// extension, which sites use to encrypt data only your passkey opens.
-    static var prfAvailable: Bool {
+    nonisolated static var prfAvailable: Bool {
         if #available(macOS 15.0, *) { return true }
         return false
     }
@@ -818,8 +818,8 @@ private struct CBOR {
 final class PasskeyRelay: NSObject, WKScriptMessageHandlerWithReply {
     static let name = "keaPasskeys"
     /// The page's word to Kea's side, and the answer back (see `bridge`).
-    static let asked = "kea-passkeys-ask"
-    static let answered = "kea-passkeys-answer"
+    nonisolated static let asked = "kea-passkeys-ask"
+    nonisolated static let answered = "kea-passkeys-answer"
 
     func userContentController(
         _ controller: WKUserContentController,
@@ -853,7 +853,7 @@ final class PasskeyRelay: NSObject, WKScriptMessageHandlerWithReply {
     /// functions, and nothing of Kea's is there for a page to find — no
     /// window.webkit, no global of its own. Requests go to Kea's side as
     /// events on the window (see `bridge`).
-    static let page = """
+    nonisolated static let page = """
     (function () {
       if (!window.PublicKeyCredential || !window.CredentialsContainer) return;
       var proto = CredentialsContainer.prototype;

@@ -1,3 +1,4 @@
+import Combine
 import ImageIO
 import SwiftUI
 import WebKit
@@ -321,6 +322,10 @@ final class Tab: ObservableObject, Identifiable {
     /// Set when the page never arrived — no host, no network, a refused
     /// connection. Shown in place of the page rather than in a dialog.
     @Published var failure: String?
+    /// What a window watches of this tab, gone with it (see Browser.prepare).
+    var bag = Set<AnyCancellable>()
+    /// When its page's process went away lately (see webViewWebContentProcessDidTerminate).
+    var crashes: [Date] = []
     /// How far down the page you are, nought to one. The tab's own pill fills
     /// with it. Kept apart from the rest of the tab (see Reading): it changes
     /// all the way down a page, and only the fill has any use for it.
@@ -616,7 +621,7 @@ final class Tab: ObservableObject, Identifiable {
         // prefers-color-scheme goes dark with the frame, and not otherwise.
         // Safari's Develop menu can reach it, and so can the page's own
         // Inspect Element — a configuration handed over by an opener included.
-        if #available(macOS 13.3, *) { web.isInspectable = true }
+        web.isInspectable = true
         Web.pages.add(web)
         Web.inspector(web.configuration.preferences)
         web.navigationDelegate = delegate

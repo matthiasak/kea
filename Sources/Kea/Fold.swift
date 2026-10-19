@@ -60,6 +60,7 @@ extension Browser {
 struct Fold: View {
     @ObservedObject var browser: Browser
     @ObservedObject var prefs: Preferences
+    @ObservedObject private var widths = Shared.prefs.widths
 
     /// The column going back in, a moment after the pointer left it.
     @State private var leaving: DispatchWorkItem?

@@ -14,8 +14,9 @@ enum SidePanel: String {
 }
 
 /// The column's edge: pull it to make the column wider or narrower,
-/// double-click it to put it back. The hairline darkens under the pointer
-/// so the edge says it can be taken before it is.
+/// double-click it to put it back. A real AppKit view owns the strip so its
+/// resize cursor rect beats WebKit's and drags are measured in window points
+/// rather than the moving view's own geometry.
 struct EdgeHandle: View {
  @Binding var width: CGFloat
  let range: ClosedRange<CGFloat>
@@ -23,42 +24,162 @@ struct EdgeHandle: View {
  /// The column's inner edge is on its right: pulling right widens it.
  let growsRight: Bool
 
- /// The width the column had when the edge was picked up.
- @State private var grabbed: CGFloat?
- @State private var onEdge = false
+ @State private var active = false
 
  var body: some View {
   Rectangle()
-   .fill(Palette.ink.opacity(onEdge || grabbed != nil ? 0.18 : 0))
-   .frame(width: onEdge || grabbed != nil ? 2 : 1)
+   .fill(active ? Palette.muted : Color.clear)
+   .frame(width: 2)
    .frame(width: 9)
-   .contentShape(Rectangle())
-   .onHover { over in
-    onEdge = over
-    if over { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() }
+   .overlay {
+    EdgeStrip(
+     width: $width,
+     range: range,
+     standard: standard,
+     growsRight: growsRight,
+     active: $active
+    )
    }
-   .onDisappear {
-    if onEdge {
-     NSCursor.pop()
-     onEdge = false
-    }
-   }
-   .gesture(
-    DragGesture(minimumDistance: 1, coordinateSpace: .global)
-     .onChanged { value in
-      if grabbed == nil { grabbed = width }
-      let delta = growsRight ? value.translation.width : -value.translation.width
-      let wanted = (grabbed ?? width) + delta
-      width = min(range.upperBound, max(range.lowerBound, wanted))
-     }
-     .onEnded { _ in grabbed = nil }
+ }
+}
+
+private struct EdgeStrip: NSViewRepresentable {
+ @Binding var width: CGFloat
+ let range: ClosedRange<CGFloat>
+ let standard: CGFloat
+ let growsRight: Bool
+ @Binding var active: Bool
+
+ func makeNSView(context: Context) -> EdgeStripView {
+  let v = EdgeStripView()
+  updateNSView(v, context: context)
+  return v
+ }
+
+ func updateNSView(_ v: EdgeStripView, context: Context) {
+  v.currentWidth = { width }
+  v.setWidth = { next in
+   guard abs(width - next) >= 0.5 else { return }
+   var tx = Transaction()
+   tx.disablesAnimations = true
+   withTransaction(tx) { width = next }
+  }
+  v.resetWidth = {
+   withAnimation(Motion.settle) { width = standard }
+  }
+  v.setActive = { on in
+   if active != on { active = on }
+  }
+  v.range = range
+  v.growsRight = growsRight
+ }
+}
+
+private final class EdgeStripView: NSView {
+ var currentWidth: () -> CGFloat = { 0 }
+ var setWidth: (CGFloat) -> Void = { _ in }
+ var resetWidth: () -> Void = {}
+ var setActive: (Bool) -> Void = { _ in }
+ var range: ClosedRange<CGFloat> = 200...720
+ var growsRight = false
+
+ private var dragging = false
+ private var hovering = false
+ private var startX: CGFloat = 0
+ private var startWidth: CGFloat = 0
+
+ override var mouseDownCanMoveWindow: Bool { false }
+
+ override func resetCursorRects() {
+  addCursorRect(bounds, cursor: .resizeLeftRight)
+ }
+
+ override func viewDidMoveToWindow() {
+  super.viewDidMoveToWindow()
+  window?.invalidateCursorRects(for: self)
+ }
+
+ override func layout() {
+  super.layout()
+  window?.invalidateCursorRects(for: self)
+ }
+
+ override func updateTrackingAreas() {
+  super.updateTrackingAreas()
+  trackingAreas.forEach(removeTrackingArea)
+  addTrackingArea(
+   NSTrackingArea(
+    rect: bounds,
+    options: [.mouseEnteredAndExited, .cursorUpdate, .activeInKeyWindow, .inVisibleRect],
+    owner: self,
+    userInfo: nil
    )
-   .modifier(
-    OneClick(double: true) {
-     withAnimation(Motion.settle) { width = standard }
-    }
-   )
-   .animation(Motion.quick, value: onEdge)
+  )
+ }
+
+ override func cursorUpdate(with event: NSEvent) {
+  NSCursor.resizeLeftRight.set()
+ }
+
+ override func mouseEntered(with event: NSEvent) {
+  hovering = true
+  setActive(true)
+  NSCursor.resizeLeftRight.set()
+ }
+
+ override func mouseExited(with event: NSEvent) {
+  hovering = false
+  if !dragging {
+   setActive(false)
+   NSCursor.arrow.set()
+  }
+ }
+
+ override func mouseDown(with event: NSEvent) {
+  if event.clickCount == 2 {
+   resetWidth()
+   return
+  }
+  dragging = true
+  startX = event.locationInWindow.x
+  startWidth = currentWidth()
+  setActive(true)
+  NSCursor.resizeLeftRight.set()
+ }
+
+ override func mouseDragged(with event: NSEvent) {
+  guard dragging else { return }
+  NSCursor.resizeLeftRight.set()
+  let dx = event.locationInWindow.x - startX
+  let delta = growsRight ? dx : -dx
+  let wanted = (startWidth + delta).rounded()
+  let clamped = min(range.upperBound, max(range.lowerBound, wanted))
+  setWidth(clamped)
+ }
+
+ override func mouseUp(with event: NSEvent) {
+  guard dragging else { return }
+  dragging = false
+  let inside = bounds.contains(convert(event.locationInWindow, from: nil))
+  hovering = inside
+  setActive(inside)
+  if inside {
+   NSCursor.resizeLeftRight.set()
+  } else {
+   NSCursor.arrow.set()
+  }
+ }
+
+ // MARK: VoiceOver, as the divider between two pages has it (PaneDivider)
+ override func isAccessibilityElement() -> Bool { true }
+ override func accessibilityRole() -> NSAccessibility.Role? { .splitter }
+ override func accessibilityLabel() -> String? { "Column width" }
+ override func accessibilityValue() -> Any? { Int(currentWidth().rounded()) }
+ override func accessibilityPerformIncrement() -> Bool { step(10) }
+ override func accessibilityPerformDecrement() -> Bool { step(-10) }
+ private func step(_ by: CGFloat) -> Bool {
+  setWidth(min(range.upperBound, max(range.lowerBound, currentWidth() + by)))
+  return true
  }
 }
 
@@ -73,7 +194,11 @@ struct PanelHeaderGesture: ViewModifier {
     .contentShape(Rectangle())
     .gesture(
      DragGesture(minimumDistance: 12, coordinateSpace: .global)
-      .onEnded { browser.dropPanel(panel, atX: $0.location.x) }
+      .onChanged { _ in NSCursor.closedHand.set() }
+      .onEnded {
+       NSCursor.arrow.set()
+       browser.dropPanel(panel, atX: $0.location.x)
+      }
     )
     .modifier(OneClick(double: true) { browser.toggleExpanded(panel) })
   } else {

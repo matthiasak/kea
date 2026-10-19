@@ -395,17 +395,21 @@ final class Sync: ObservableObject {
 
  private static let recordKinds: [Kind] = [.bookmarks, .places, .settings, .chats]
 
+ /// Said only when it changes: whatever shows the status (the History menu's
+ /// Other Macs) is drawn again on every set, the same words or not.
+ private func say(_ text: String) { if status != text { status = text } }
+
  private func tick() async {
   guard place != .off else {
-   status = "Off"
+   say("Off")
    return
   }
   guard let key else {
-   status = "Type the passphrase"
+   say("Type the passphrase")
    return
   }
   guard let drop = drop() else {
-   status = place == .folder ? "Choose a folder" : "Set up the bucket"
+   say(place == .folder ? "Choose a folder" : "Set up the bucket")
    return
   }
   do {
@@ -563,11 +567,11 @@ final class Sync: ObservableObject {
    }.sorted { $0.seen > $1.seen }
 
    let rel = RelativeDateTimeFormatter().localizedString(for: now, relativeTo: Date())
-   status = "Synced \(rel)"
+   say("Synced \(rel)")
    saveState()
    if Store.testing { Disk.drain() }
   } catch {
-   status = error.localizedDescription
+   say(error.localizedDescription)
   }
  }
 
@@ -606,13 +610,7 @@ final class Sync: ObservableObject {
    return out
 
   case .chats:
-   var out: [String: Data] = [:]
-   for chat in Shared.chats.all {
-    if let data = try? enc.encode(chat) {
-     out[chat.id.uuidString] = data
-    }
-   }
-   return out
+   return Shared.chats.records()
 
   case .history, .tabs:
    return [:]

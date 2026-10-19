@@ -138,7 +138,7 @@ final class Bench {
             unlink(path)
             return
         }
-        fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK)
+        _ = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK)
 
         let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: .main)
         source.setEventHandler { [weak self] in self?.accept() }
@@ -202,7 +202,7 @@ final class Bench {
             self.fd = fd
             self.handle = handle
             self.gone = gone
-            fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK)
+            _ = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK)
             source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: .main)
             source.setEventHandler { [weak self] in self?.read() }
             source.resume()
@@ -870,7 +870,7 @@ final class Bench {
                 var times: [[Double]] = []
                 @MainActor func next(_ index: Int) {
                     guard index < pieces.count else {
-                        var out: [String: Any] = ["field": field.stringValue, "typed": browser.omni.typed, "offers": browser.omni.offers.map(\.key), "ms": times]
+                        var out: [String: Any] = ["field": field.stringValue, "typed": browser.omni.typed, "offers": browser.omni.offers.map(\.key), "landing": browser.omni.landing ?? -1, "ms": times]
                         guard request["go"] as? Bool == true, let tab = browser.active else { answer(out); return }
                         // Then Return, as the field's own delegate takes it:
                         // how long until WebKit is loading the page.
@@ -1414,13 +1414,6 @@ final class Bench {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.025) { settled(tries + 1) }
             }
             settled(0)
-        case "visible":
-            // Refused: it lent the tab to a window of its own, off every
-            // screen, so that WebKit would count the page as seen. No bench
-            // verb makes a window for now, off screen or not, after windows
-            // reached a screen during test runs; what needs a page to be
-            // seen is checked on a release candidate instead.
-            answer(["error": "visible is switched off: it made a window, and no bench verb makes one for now — check this on a release candidate"])
 
         case "ai":
             // The AI add-on's requests against a stand-in on this Mac: "mock"
@@ -1573,9 +1566,86 @@ final class Bench {
                 case "delete": chat.delete(id)
                 case "open": chat.open(id)
                 case "new": chat.new()
-                default: answer(["error": "ai chat star|task|delete|open|new [CHAT]"]); return
+                case "rename": chat.rename(id, to: request["name"] as? String ?? "")
+                case "clone": chat.clone(id)
+                case "compact": chat.compact()
+                case "cleanup": chat.cleanUp()
+                default: answer(["error": "ai chat star|task|delete|open|new|rename NAME|clone|compact|cleanup [CHAT]"]); return
                 }
                 answer(Bench.chatState(chat))
+            case "zoom":
+                if let val = (request["value"] as? NSNumber)?.doubleValue {
+                    browser.prefs.setChatZoom(val)
+                } else if let by = request["by"] as? Int {
+                    browser.prefs.setChatZoom(browser.prefs.chatZoom + Double(by) * 0.1)
+                }
+                answer(["zoom": browser.prefs.chatZoom])
+            case "sessions":
+                let q = request["query"] as? String ?? ""
+                let all = request["all"] as? Bool ?? false
+                let secs = Chats.sections(Shared.chats.index, query: q, allStarred: all).map { sec -> [String: Any] in
+                    [
+                        "title": sec.title,
+                        "items": sec.items.map { ["id": $0.id.uuidString, "title": $0.title] as [String: Any] },
+                        "more": sec.more,
+                    ]
+                }
+                answer(["sections": secs])
+            case "render":
+                guard let text = request["text"] as? String else {
+                    answer(["error": "ai render TEXT [PATH]"]); return
+                }
+                var diagrams: [[String: Any]] = []
+                func outline(_ blocks: [Markdown.Block]) -> [[String: Any]] {
+                    blocks.map { b -> [String: Any] in
+                        switch b {
+                        case let .heading(level, t):
+                            return ["kind": "heading", "level": level, "text": t]
+                        case let .paragraph(t):
+                            return ["kind": "paragraph", "text": t]
+                        case let .list(ordered, start, items):
+                            return ["kind": "list", "ordered": ordered, "start": start, "items": items.map(outline)]
+                        case let .quote(inner):
+                            return ["kind": "quote", "blocks": outline(inner)]
+                        case let .code(lang, codeText, closed):
+                            if lang == "mermaid" && closed {
+                                if let d = Mermaid.diagram(codeText) {
+                                    diagrams.append([
+                                        "kind": d.kind,
+                                        "nodes": d.nodes,
+                                        "edges": d.edges,
+                                        "width": Int(d.size.width),
+                                        "height": Int(d.size.height),
+                                    ])
+                                } else {
+                                    diagrams.append(["kind": "source"])
+                                }
+                            }
+                            return ["kind": "code", "language": lang, "closed": closed]
+                        case let .table(header, rows):
+                            return ["kind": "table", "columns": header.count, "rows": rows.count]
+                        case .rule:
+                            return ["kind": "rule"]
+                        }
+                    }
+                }
+                let parsed = Markdown.blocks(text)
+                let blocks = outline(parsed)
+                var reply: [String: Any] = ["blocks": blocks, "diagrams": diagrams]
+                if let path = request["path"] as? String {
+                    let w = CGFloat((request["width"] as? NSNumber)?.doubleValue ?? 380)
+                    let view = AnswerView(text: text, drawn: true).frame(width: w).padding(20).background(Palette.ground)
+                    let renderer = ImageRenderer(content: view)
+                    renderer.scale = 2
+                    if let image = renderer.nsImage, let tiff = image.tiffRepresentation,
+                       let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:])
+                    {
+                        let url = URL(fileURLWithPath: path)
+                        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+                        if (try? png.write(to: url)) != nil { reply["made"] = path }
+                    }
+                }
+                answer(reply)
             case "copy":
                 // What Copy puts on the clipboard, given back instead: the board is left alone.
                 guard let chat = browser.assisting else { answer(["error": "ai copy: Ubi Chat isn't open"]); return }
@@ -1618,7 +1688,7 @@ final class Bench {
                 }
                 answer(["strays": AIPage.strays(in: text, from: read)])
             default:
-                answer(["error": "ai mock URL | catalog [URL] | source PROVIDER SOURCE | models PROVIDER | key PROVIDER KEY | ask PROVIDER MODEL TEXT | read ID | check TEXT | organize PROVIDER [MODEL] [TEXT] | apply | use PROVIDER [MODEL] | summarize ID | question ID [TEXT] | agree | close | type TEXT | pick N | submit | eye | pin | chat star|task|delete|open|new [CHAT] | copy [N|all] | state | picture DIR"])
+                answer(["error": "ai mock URL | catalog [URL] | source PROVIDER SOURCE | models PROVIDER | key PROVIDER KEY | ask PROVIDER MODEL TEXT | read ID | check TEXT | organize PROVIDER [MODEL] [TEXT] | apply | use PROVIDER [MODEL] | summarize ID | question ID [TEXT] | agree | close | type TEXT | pick N | submit | eye | pin | chat star|task|delete|open|new|rename NAME|clone|compact|cleanup [CHAT] | copy [N|all] | state | picture DIR | zoom by|value | sessions [QUERY] [all] | render TEXT [PATH]"])
             }
 
         case "bookmarks":
@@ -3275,13 +3345,15 @@ final class Bench {
         return [
             "open": true, "notice": assistant.notice?.text ?? "", "addressed": assistant.addressed, "shy": assistant.shy,
             "listing": assistant.listing, "draft": assistant.draft, "sharesPage": assistant.sharesPage,
-            "chat": ["id": chat.id.uuidString, "title": chat.title, "starred": chat.starred, "task": chat.task,
-                     "pageHidden": chat.pageHidden,
+            "compacting": assistant.compacting, "zoom": assistant.browser?.prefs.chatZoom ?? 1,
+            "chat": ["id": chat.id.uuidString, "title": chat.title, "label": chat.label,
+                     "summary": chat.summary ?? "", "compacted": chat.compacted ?? 0,
+                     "starred": chat.starred, "task": chat.task, "pageHidden": chat.pageHidden,
                      "pins": chat.pins.map { ["title": $0.title, "url": $0.url.absoluteString, "hidden": $0.hidden] as [String: Any] }] as [String: Any],
             "turns": assistant.turns.map { ["question": $0.question, "answer": $0.answer, "done": $0.done, "failed": $0.failed ?? "",
                                             "strays": $0.strays, "place": $0.place] as [String: Any] },
-            "chats": Shared.chats.all.map { ["id": $0.id.uuidString, "title": $0.title, "starred": $0.starred, "task": $0.task,
-                                             "turns": $0.turns.count] as [String: Any] },
+            "chats": Shared.chats.index.map { ["id": $0.id.uuidString, "title": $0.title, "starred": $0.starred, "task": $0.task,
+                                               "turns": $0.turns] as [String: Any] },
         ]
     }
 
@@ -3311,7 +3383,7 @@ final class Bench {
 
     /// Once the page has stopped loading, or the time is up.
     private func wait(for tab: Tab, until limit: Date, _ answer: @escaping ([String: Any]) -> Void) {
-        if !tab.loading, tab.address != nil, tab.failure == nil || true {
+        if !tab.loading, tab.address != nil {
             // A beat for the document's own scripts to settle.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
                 guard let self else { return }

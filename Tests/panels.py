@@ -23,6 +23,57 @@ def close_to(a, b, tol=1.5):
     return abs(a - b) <= tol
 
 
+def drag_line(points):
+    sv.sp("mouse", points=points, hold=True, to="view")
+    sv.sp("mouse", points=[points[-1]], resume=True, to="view")
+    time.sleep(0.25)
+
+
+def drags(t, split):
+    tag = "splitView=True" if split else "splitView=False"
+    sv.page("a")
+    time.sleep(0.6)
+
+    sv.cmd({"do": "run", "command": "view.ask"})
+    time.sleep(0.6)
+    panels(chat={"width": 500})
+    time.sleep(0.2)
+    px, py, pw, ph = page_frame()
+    w = 500
+    for d in (3, 6, 10):
+        x, y = px + pw + d, py + ph / 2
+        drag_line([[x, y], [x - 20, y], [x - 40, y], [x - 60, y]])
+        w = panels()["chat"]["width"]
+        if abs(w - 500) > 1:
+            break
+        panels(chat={"width": 500})
+    ai_w = subprocess.run(["defaults", "read", sv.SUITE, "ai.width"], capture_output=True, text=True).stdout.strip()
+    t.ok(f"chat edge drag widens 500 -> 560 and stores ai.width ({tag})",
+         close_to(w, 560) and close_to(float(ai_w or 0), 560), (w, ai_w))
+
+    px, py, pw, ph = page_frame()
+    hx, hy = px + pw + 120, py + 14
+    pts = [[hx + (40 - hx) * i / 5.0, hy] for i in range(6)]
+    drag_line(pts)
+    time.sleep(0.4)
+    side = panels()["chat"]["side"]
+    t.ok(f"chat header drag moves panel to left ({tag})", side == "left", side)
+
+    sv.cmd({"do": "ai", "action": "close"})
+    sv.cmd({"do": "ui", "bookmarksSidebar": True})
+    time.sleep(0.6)
+    px, py, pw, ph = page_frame()
+    bw_now = 232
+    for d in (3, 6, 10):
+        x, y = px + pw + d, py + ph / 2
+        drag_line([[x, y], [x - 14, y], [x - 27, y], [x - 40, y]])
+        bw_now = panels()["bookmarks"]["width"]
+        if abs(bw_now - 232) > 1:
+            break
+        panels(bookmarks={"width": 232})
+    t.ok(f"bookmarks edge drag widens 232 -> 272 ({tag})", close_to(bw_now, 232 + 40), bw_now)
+
+
 def main():
     t = sv.T()
     try:
@@ -102,6 +153,14 @@ def main():
              st_re["bookmarks"]["width"] == 300 and st_re["bookmarks"]["side"] == "left"
              and float(ai_w or 0) == 500.0,
              (st_re, ai_w))
+
+        sv.setup()
+        sv.launch()
+        drags(t, False)
+
+        sv.setup(splitView=True)
+        sv.launch()
+        drags(t, True)
     finally:
         t.done()
         sv.finish()

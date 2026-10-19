@@ -31,6 +31,7 @@ struct Suggestion: Identifiable, Equatable {
     /// A command's row can read the same as the search for the same word
     /// ("Settings" typed with its capital), and two rows can't share a name.
     var id: String {
+        if let tab { return "tab " + tab.uuidString }
         if kind.isCommand { return "command " + key }
         if case .visited = kind { return History.identity(for: url) }
         return key
@@ -57,6 +58,7 @@ private struct PageText {
     let searchable: String
     let host: String
     let homepage: Bool
+    var title = ""
 }
 
 @MainActor
@@ -152,7 +154,8 @@ final class History: ObservableObject {
 
     private func remember(_ visit: Visit, url: URL? = nil) {
         guard let page = url ?? URL(string: visit.url) else { return }
-        let text = History.pageText(for: page)
+        var text = History.pageText(for: page)
+        text.title = visit.title.lowercased()
         pageText[visit.key] = text
         if !text.host.isEmpty { visitedHosts.insert(text.host) }
     }
@@ -233,6 +236,7 @@ final class History: ObservableObject {
             if last > seen.last { seen.last = last }
             if seen.title.isEmpty { seen.title = title }
             visits[key] = seen
+            pageText[key]?.title = seen.title.lowercased()
         } else {
             let visit = Visit(url: url.absoluteString, key: key, title: title, count: min(max(count, 0), History.mostVisits), last: last)
             visits[key] = visit
@@ -245,11 +249,11 @@ final class History: ObservableObject {
 
     /// A page's title usually lands a beat after the page does.
     func retitle(_ url: URL, _ title: String) {
-        ensureIndexed()
         let key = History.identity(for: url)
         guard !title.isEmpty, var seen = visits[key], seen.title != title else { return }
         seen.title = title
         visits[key] = seen
+        pageText[key]?.title = title.lowercased()
         save()
     }
 
@@ -318,35 +322,38 @@ final class History: ObservableObject {
         var id: String { key }
     }
 
-    func everything(matching typed: String = "") -> [Trace] {
+    func everything(matching typed: String = "", limit: Int = .max) -> [Trace] {
         ensureIndexed()
-        let needle = typed.trimmingCharacters(in: .whitespaces).lowercased()
-        return visits.values
-            // Every visit to a page also credits its domain, so the address
-            // field can offer the front door. Those credits have no title of
-            // their own, and in a list of where you have been they are a second
-            // copy of every line.
-            .filter { visit in
-                !(visit.title.isEmpty && pageText[visit.key]?.homepage == true)
-            }
-            .filter {
-                needle.isEmpty
-                    || pageText[$0.key]?.searchable.contains(needle) == true
-                    || $0.title.lowercased().contains(needle)
-            }
-            .sorted { $0.last > $1.last }
-            .compactMap { visit in
-                URL(string: visit.url).map {
-                    Trace(
-                        key: visit.key,
-                        address: pageText[visit.key]?.address ?? visit.key,
-                        title: visit.title,
-                        url: $0,
-                        last: visit.last,
-                        count: visit.count
-                    )
+        let words = typed.lowercased().split(separator: " ")
+        return Array(
+            visits.values
+                // Every visit to a page also credits its domain, so the address
+                // field can offer the front door. Those credits have no title of
+                // their own, and in a list of where you have been they are a second
+                // copy of every line.
+                .filter { visit in
+                    !(visit.title.isEmpty && pageText[visit.key]?.homepage == true)
                 }
-            }
+                .filter { visit in
+                    guard !words.isEmpty else { return true }
+                    let text = pageText[visit.key]
+                    return words.allSatisfy { text?.searchable.contains($0) == true || text?.title.contains($0) == true }
+                }
+                .sorted { $0.last > $1.last }
+                .lazy.compactMap { visit in
+                    URL(string: visit.url).map {
+                        Trace(
+                            key: visit.key,
+                            address: self.pageText[visit.key]?.address ?? visit.key,
+                            title: visit.title,
+                            url: $0,
+                            last: visit.last,
+                            count: visit.count
+                        )
+                    }
+                }
+                .prefix(limit)
+        )
     }
 
     func forget(_ key: String) {
@@ -360,22 +367,30 @@ final class History: ObservableObject {
     /// The last eight places, newest first; worked out again only once the
     /// history has changed.
     func recent() -> [Trace] {
-        ensureIndexed()
         if let recentCache { return recentCache }
+        // Without the index (see ensureIndexed): the History menu asks for this
+        // at launch, and it is no reason to build one.
         var top: [Visit] = []
-        for visit in visits.values where !(visit.title.isEmpty && pageText[visit.key]?.homepage == true) {
+        for visit in visits.values where !(visit.title.isEmpty && History.isFrontDoor(visit.url)) {
             if top.count == 8, visit.last <= top[7].last { continue }
             top.insert(visit, at: top.firstIndex { visit.last > $0.last } ?? top.count)
             if top.count > 8 { top.removeLast() }
         }
         let made = top.compactMap { visit in
             URL(string: visit.url).map {
-                Trace(key: visit.key, address: pageText[visit.key]?.address ?? visit.key,
+                Trace(key: visit.key, address: History.pageText(for: $0).address,
                       title: visit.title, url: $0, last: visit.last, count: visit.count)
             }
         }
         recentCache = made
         return made
+    }
+
+    /// A site's front door: an address with no path but its slash.
+    private static func isFrontDoor(_ address: String) -> Bool {
+        guard let url = URL(string: address) else { return false }
+        let path = url.path()
+        return path.isEmpty || path == "/"
     }
 
     // MARK: - reading
@@ -385,7 +400,7 @@ final class History: ObservableObject {
     /// often and recently beats one you saw once in March.
     func suggestions(for typed: String, limit: Int = 5) -> [Suggestion] {
         ensureIndexed()
-        let needle = strip(typed)
+        let needle = History.stripped(typed)
         // An empty field proposes nothing. A list of guesses in front of
         // someone who has not yet said what they want is noise, and it is in
         // the way of the one thing they came here to do.
@@ -410,13 +425,24 @@ final class History: ObservableObject {
             if best.count > limit { best.removeLast() }
         }
 
+        // Titles too, every word somewhere in one, from three letters up; always
+        // below a match on the address, so the addresses keep their order.
+        let words = needle.count >= 3 ? needle.split(separator: " ").map(String.init) : []
         for visit in visits.values {
-            guard let text = pageText[visit.key],
-                  let rank = rank(text.searchable, against: needle, ascii: ascii)
-            else { continue }
-            // The front door before the room inside it: a bare domain is
-            // what a bare domain typed into a field means.
-            let score = rank + 4 + frecency(visit, now: now) + (text.homepage ? 1.5 : 0)
+            guard let text = pageText[visit.key] else { continue }
+            // How often and how lately, flattened: a site visited a hundred times
+            // must not outrank the one whose name starts with what was typed.
+            let standing = log1p(History.score(visit, now: now))
+            let score: Double
+            if let rank = rank(text.searchable, against: needle, ascii: ascii) {
+                // The front door before the room inside it: a bare domain is
+                // what a bare domain typed into a field means.
+                score = rank + 4 + standing + (text.homepage ? 1.5 : 0)
+            } else if !words.isEmpty, !text.title.isEmpty, words.allSatisfy({ text.title.contains($0) }) {
+                score = 1 + 4 + standing
+            } else {
+                continue
+            }
             offer(text.address, score) {
                 URL(string: visit.url).map { Suggestion(key: text.address, title: visit.title, url: $0, kind: .visited) }
             }
@@ -469,12 +495,6 @@ final class History: ObservableObject {
         return found
     }
 
-    /// Frecency, plus the same preference for a front door over a room inside
-    /// it that the search uses.
-    private func standing(_ visit: Visit, now: Date) -> Double {
-        frecency(visit, now: now) + (pageText[visit.key]?.homepage == true ? 1.5 : 0)
-    }
-
     /// Where the match falls decides most of the ordering: the start of the
     /// host is what people mean, the middle of a path almost never is.
     private func rank(_ key: String, against needle: String, ascii: [UInt8]?) -> Double? {
@@ -487,10 +507,12 @@ final class History: ObservableObject {
                if bytes.starts(with: ascii) { return 6 }
                let hostEnd = bytes.firstIndex(where: { $0 == 0x2F || $0 == 0x3F || $0 == 0x23 }) ?? bytes.endIndex
                let host = bytes[..<hostEnd]
-               if let dot = host.firstIndex(of: 0x2E), host[(dot + 1)...].starts(with: ascii) { return 3 }
-               if ascii.count >= 2, ascii.count <= host.count {
-                   for start in 0...(host.count - ascii.count) {
-                       if host[start...].starts(with: ascii) { return 2 }
+               if let dot = host.firstIndex(of: 0x2E), host[(dot + 1)...].contains(0x2E), host[(dot + 1)...].starts(with: ascii) { return 3 }
+               // Never into the last label: "co" is no reason to offer every .com.
+               let searched = ascii.contains(0x2E) ? host : host[..<(host.lastIndex(of: 0x2E) ?? host.endIndex)]
+               if ascii.count >= 2, ascii.count <= searched.count {
+                   for start in searched.startIndex...(searched.endIndex - ascii.count) {
+                       if searched[start...].starts(with: ascii) { return 2 }
                    }
                }
                return 0
@@ -503,11 +525,11 @@ final class History: ObservableObject {
         let hostEnd = key.firstIndex(where: { "/?#".contains($0) }) ?? key.endIndex
         let host = key[..<hostEnd]
         // "google" finding mail.google.com without the subdomain.
-        if let dot = host.firstIndex(of: "."), host[host.index(after: dot)...].hasPrefix(needle) { return 3 }
+        if let dot = host.firstIndex(of: "."), host[host.index(after: dot)...].contains("."), host[host.index(after: dot)...].hasPrefix(needle) { return 3 }
         // Only from two letters up. A single letter matching anywhere inside
         // a name turns "x" into example.com and netflix.com, which is not what
         // anybody meant by it.
-        if needle.count >= 2, host.contains(needle) { return 2 }
+        if needle.count >= 2, (needle.contains(".") ? host : host[..<(host.lastIndex(of: ".") ?? host.endIndex)]).contains(needle) { return 2 }
         // Deliberately no match on the path. "blog" turning up six articles
         // from three sites is not an answer to anything.
         return nil
@@ -515,20 +537,13 @@ final class History: ObservableObject {
 
     /// Often, and lately. A month-old visit counts for about a third of a
     /// fresh one, which is roughly how long a habit takes to stop being one.
-    private func frecency(_ visit: Visit, now: Date) -> Double {
-        History.score(visit, now: now)
-    }
-
     nonisolated private static func score(_ visit: Visit, now: Date) -> Double {
         let days = max(0, now.timeIntervalSince(visit.last) / 86_400)
         return Double(visit.count) * exp(-days / 30)
     }
 
-    private func strip(_ typed: String) -> String { History.stripped(typed) }
-
     // MARK: - the file
 
-    private static var folder: URL { Store.folder }
     private static var file: URL { Store.file("history.json") }
 
     private func load() {
@@ -609,17 +624,25 @@ final class History: ObservableObject {
         guard !saving else { return }
         saving = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
-            guard let self else { return }
-            saving = false
-            let now = Date()
-            // A cap, so the file can't grow without end. What goes is what has
-            // been visited least and longest ago.
-            let snapshot = self.visits
-            let file = History.file
-            Disk.write(file) {
-                let list = Array(snapshot.values.sorted { History.score($0, now: now) > History.score($1, now: now) }.prefix(2_000))
-                return try? JSONEncoder().encode(list)
-            }
+            guard let self, saving else { return }
+            write(now: false)
+        }
+    }
+
+    /// A visit still waiting out `save`'s moment, written now: for the way out.
+    func flush() {
+        if saving { write(now: true) }
+    }
+
+    private func write(now: Bool) {
+        saving = false
+        let stamp = Date()
+        // A cap, so the file can't grow without end. What goes is what has
+        // been visited least and longest ago.
+        let snapshot = visits
+        Disk.write(History.file, now: now) {
+            let list = Array(snapshot.values.sorted { History.score($0, now: stamp) > History.score($1, now: stamp) }.prefix(2_000))
+            return try? JSONEncoder().encode(list)
         }
     }
 

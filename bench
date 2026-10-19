@@ -69,7 +69,6 @@
     ./bench field TEXT [type] [go]     test run: TEXT pasted into the address field (type: a key at a time),
                                        each timed until the window has caught up; go: then Return, timed
                                        until the page is loading
-    ./bench visible ID                 switched off: it made a window (off screen), and no verb makes one for now
     ./bench ai mock URL | key PROVIDER KEY | ask PROVIDER MODEL TEXT | read ID | check TEXT | signin | use PROVIDER [MODEL] | summarize ID | question ID TEXT | agree | state | picture DIR
                                        test run: the AI add-on's requests, against a stand-in on this Mac;
                                        what of a page would go to the model, and an answer checked against it
@@ -196,7 +195,7 @@ def main(argv):
         if not args: sys.exit("usage: bench wait ID [SECONDS]")
         request["id"] = args[0]
         if len(args) > 1: request["seconds"] = float(args[1])
-    elif verb in ("text", "close", "select", "visible"):
+    elif verb in ("text", "close", "select"):
         if len(args) != 1: sys.exit(f"usage: bench {verb} ID")
         request["id"] = args[0]
     elif verb == "sleep":

@@ -59,5 +59,5 @@ Recreate the **LLM Extension / Ubi Chat** experience natively in Kea using **loc
 - **Context Window Protection & Ephemeral Local Spooling:**
   - Large pages, logs, or file outputs exceeding a token/byte threshold are spooled to local ephemeral storage rather than stuffed inline into the prompt; the model inspects slices via `grep_resource` and `read_resource(offset, limit)`.
 - **Local-Only Storage & Privacy:**
-  - All workspaces, chat turns, starred/task states, agents, skills, and pinned resources are stored strictly on-device in Kea's profile folder (`Store.file("chats.json")` / local SQLite or JSON).
+  - All workspaces, chat turns, starred/task states, agents, skills, and pinned resources are stored strictly on-device in Kea's profile folder (`Store.file("chats")`, an index plus a file per chat).
   - Requests go directly from the Mac to the user's chosen `AIProvider` (or local Ollama / LM Studio / Custom server) using `AIClient` and `AIKeys`.

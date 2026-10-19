@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 import WebKit
 import Combine
 import NaturalLanguage
@@ -3283,7 +3284,7 @@ enum ExtensionShims {
     static var panelPath: [String: String] = [:]
     static var panelOnClick: Set<String> = []
     /// One voice for every extension that reads aloud.
-    static let speaker = NSSpeechSynthesizer()
+    static let speaker = AVSpeechSynthesizer()
 
     static func answer(_ message: Any, from context: WKWebExtensionContext, owner: Extensions) async throws -> Any? {
         guard let body = message as? [String: Any], let api = body["api"] as? String else {
@@ -3713,19 +3714,21 @@ enum ExtensionShims {
         // MARK: speech
         case "tts.speak":
             let options = (args.count > 1 ? args[1] : nil) as? [String: Any] ?? [:]
-            if !(options["enqueue"] as? Bool ?? false) { speaker.stopSpeaking() }
-            if let voice = options["voiceName"] as? String,
-               let match = NSSpeechSynthesizer.availableVoices.first(where: { NSSpeechSynthesizer.attributes(forVoice: $0)[.name] as? String == voice }) {
-                speaker.setVoice(match)
+            if !(options["enqueue"] as? Bool ?? false) { speaker.stopSpeaking(at: .immediate) }
+            let utterance = AVSpeechUtterance(string: first as? String ?? "")
+            if let voiceName = options["voiceName"] as? String {
+                utterance.voice = AVSpeechSynthesisVoice.speechVoices().first { $0.name == voiceName }
             }
-            if let rate = options["rate"] as? Double { speaker.rate = Swift.Float(180 * rate) }
-            speaker.startSpeaking(first as? String ?? "")
+            if let rate = options["rate"] as? Double {
+                utterance.rate = min(max(AVSpeechUtteranceDefaultSpeechRate * Swift.Float(rate), AVSpeechUtteranceMinimumSpeechRate), AVSpeechUtteranceMaximumSpeechRate)
+            }
+            speaker.speak(utterance)
             return nil
         case "tts.stop":
-            speaker.stopSpeaking()
+            speaker.stopSpeaking(at: .immediate)
             return nil
         case "tts.pause":
-            speaker.pauseSpeaking(at: .immediateBoundary)
+            speaker.pauseSpeaking(at: .immediate)
             return nil
         case "tts.resume":
             speaker.continueSpeaking()
@@ -3733,11 +3736,8 @@ enum ExtensionShims {
         case "tts.isSpeaking":
             return speaker.isSpeaking
         case "tts.getVoices":
-            return NSSpeechSynthesizer.availableVoices.map { voice -> [String: Any] in
-                let attributes = NSSpeechSynthesizer.attributes(forVoice: voice)
-                return ["voiceName": attributes[.name] as? String ?? voice.rawValue,
-                        "lang": (attributes[.localeIdentifier] as? String ?? "").replacingOccurrences(of: "_", with: "-"),
-                        "remote": false, "eventTypes": ["start", "end"]]
+            return AVSpeechSynthesisVoice.speechVoices().map {
+                ["voiceName": $0.name, "lang": $0.language, "remote": false, "eventTypes": ["start", "end"]]
             }
 
         // MARK: the worker, up before a page talks to it

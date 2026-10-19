@@ -80,11 +80,15 @@ struct PeekPanel: View {
                 HStack(alignment: .top, spacing: 10) {
                     Page(tab: tab)
                         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .background {
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .fill(Palette.ground)
+                                .shadow(color: .black.opacity(0.25), radius: 30, y: 10)
+                        }
                         .overlay(
                             RoundedRectangle(cornerRadius: 12, style: .continuous)
                                 .strokeBorder(Palette.hairline, lineWidth: 1)
                         )
-                        .shadow(color: .black.opacity(0.25), radius: 30, y: 10)
                     VStack(spacing: 8) {
                         Knob("xmark", help: "Close (esc)") { browser.closePeek() }
                         // ⌥ on it keeps the page beside this one, with Split

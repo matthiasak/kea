@@ -126,6 +126,8 @@ struct KeaApp: App {
                     .shortcut("view.reload")
                 Button("Reload Page From Origin") { browser.reload(fromOrigin: true) }
                     .shortcut("view.reloadOrigin")
+                Button("Stop Loading") { if let tab = browser.active, tab.loading { tab.stop() } }
+                    .shortcut("view.stop")
                 Button("Reading Mode") { browser.toggleReader() }
                     .shortcut("view.reader")
                 Button("Float Video") { browser.toggleFloat() }
@@ -389,6 +391,7 @@ private final class CursorGroundView: NSView {
 
 struct ContentView: View {
     @ObservedObject var browser: Browser
+    @ObservedObject private var widths = Shared.prefs.widths
 
     @State private var keys: Any?
     @State private var window: NSWindow?
@@ -476,7 +479,14 @@ struct ContentView: View {
             }
         }
         .ignoresSafeArea()
-        .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { windowWidth = $0 }
+        // Read only to fit the side panels (panelRoom): kept up to date while none
+        // is open, it redrew the whole window on every frame of a live resize.
+        .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { width in
+            if chatColumn || bookmarksColumn || windowWidth == 0 { windowWidth = width }
+        }
+        .onChange(of: chatColumn || bookmarksColumn) { _, up in
+            if up, let width = window?.contentView?.bounds.width { windowWidth = width }
+        }
         .background { fullscreenWatch }
         .animation(Motion.glide, value: browser.prefs.sidebar)
         .animation(Motion.glide, value: browser.prefs.sidePosition)
@@ -1094,7 +1104,7 @@ struct ContentView: View {
             }
             return take(event) ? nil : event
         }
-        ContentView.keyHooks[ObjectIdentifier(browser)] = { event in take(event) ? nil : event }
+        if Store.testing { ContentView.keyHooks[ObjectIdentifier(browser)] = { event in take(event) ? nil : event } }
     }
 
     /// Whether a key is this window's to act on.
@@ -1436,8 +1446,14 @@ struct ContentView: View {
             browser.duplicate()
         case "n" where shifted:
             browser.newShyTab()
+        case "." where !shifted:
+            guard let tab = browser.active, tab.loading else { return false }
+            tab.stop()
         case "y" where !shifted:
             browser.recalling.toggle()
+        case "y" where shifted:
+            guard browser.prefs.ai else { return false }
+            browser.toggleChat()
         case "j" where shifted:
             browser.hoarding.toggle()
         case "v" where shifted:

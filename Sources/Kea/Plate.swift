@@ -56,13 +56,16 @@ struct Plate<Content: View, Foot: View>: View {
             }
         }
         .frame(width: width, alignment: .leading)
-        .background(Palette.ground, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .background {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Palette.ground)
+                .shadow(color: .black.opacity(0.16), radius: 34, y: 12)
+        }
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .strokeBorder(Palette.hairline, lineWidth: 1)
         )
-        .shadow(color: .black.opacity(0.16), radius: 34, y: 12)
     }
 }
 

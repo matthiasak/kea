@@ -94,8 +94,8 @@ extension Browser {
     /// The most a copied picture may weigh, and the most pixels it may
     /// unpack to: a small file can claim to be enormous, and it is this
     /// process that would decode it.
-    private static let largestImage = 50_000_000
-    private static let mostPixels = 100_000_000
+    nonisolated private static let largestImage = 50_000_000
+    nonisolated private static let mostPixels = 100_000_000
 
     /// The menu itself, popped where the pointer already is — the click that
     /// asked for this one happened a moment ago, in JavaScript, with no

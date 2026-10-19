@@ -87,6 +87,12 @@ struct Omnibox: View {
             .padding(.vertical, 14)
             .background {
                 ZStack {
+                    // The field's shadow, cast by its shape alone: cast by the field, it was
+                    // worked out again from the breath and the caret on every frame.
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(Palette.ground)
+                        .shadow(color: .black.opacity(0.06), radius: 24, y: 8)
+
                     // A slow, almost invisible breath under the field. It is
                     // the only thing on an empty tab, and a thing that never
                     // moves at all reads as a picture of an app rather than
@@ -105,7 +111,6 @@ struct Omnibox: View {
                     )
                     .allowsHitTesting(false)
             )
-            .shadow(color: .black.opacity(0.06), radius: 24, y: 8)
             .modifier(Shake(travel: shake))
             .onChange(of: browser.refusals) { _, _ in
                 shake = 0
@@ -132,18 +137,17 @@ struct Omnibox: View {
                     .onTapGesture { _ = browser.lockSiteOffer() }
             }
             ForEach(Array(omni.offers.enumerated()), id: \.element.id) { index, offer in
-                Row(offer: offer, picked: omni.picked == index)
+                Row(offer: offer, picked: omni.picked == index, landing: omni.picked == nil && omni.landing == index)
                     .contentShape(Rectangle())
                     .onTapGesture { browser.take(offer) }
             }
         }
         .padding(6)
-        .background(Palette.ground, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .background { RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Palette.ground).shadow(color: .black.opacity(0.07), radius: 20, y: 6) }
         .overlay(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .strokeBorder(Palette.hairline, lineWidth: 1)
         )
-        .shadow(color: .black.opacity(0.07), radius: 20, y: 6)
         .transition(.scale(scale: 0.98, anchor: .top).combined(with: .opacity))
     }
 
@@ -152,6 +156,7 @@ struct Omnibox: View {
         /// Where the arrow keys have walked to. The pointer gets its own,
         /// quieter mark, and changes nothing but the look of the row.
         let picked: Bool
+        let landing: Bool
 
         @State private var hovering = false
 
@@ -214,6 +219,9 @@ struct Omnibox: View {
                 } else if hovering {
                     RoundedRectangle(cornerRadius: 9, style: .continuous)
                         .fill(Palette.hover)
+                } else if landing {
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .fill(Palette.sunset.opacity(0.06))
                 }
             }
             .onHover { hovering = $0 }
@@ -344,6 +352,7 @@ private struct Breath: NSViewRepresentable {
             glow.shadowPath = CGPath(roundedRect: bounds, cornerWidth: 26, cornerHeight: 26, transform: nil)
             effectiveAppearance.performAsCurrentDrawingAppearance { glow.shadowColor = Palette.NS.ink.cgColor }
             CATransaction.commit()
+            guard !Motion.reduced else { return }
             // From 0.97 to 1.03, from 0.65 to full, 2.6 s each way, for as
             // long as the field is there.
             let size = CABasicAnimation(keyPath: "transform.scale")

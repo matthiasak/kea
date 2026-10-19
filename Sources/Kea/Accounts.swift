@@ -29,7 +29,7 @@ struct AccountList: View {
                     .font(.system(size: 10.5))
                 Spacer(minLength: 0)
             }
-            .foregroundStyle(Palette.faint)
+            .foregroundStyle(Palette.muted)
             .padding(.horizontal, 12)
             .padding(.vertical, 7)
             .background(Palette.wash.opacity(0.5))

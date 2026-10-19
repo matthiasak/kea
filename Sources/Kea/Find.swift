@@ -81,14 +81,13 @@ struct FindBar: View {
         .padding(.leading, narrow ? 10 : 16)
         .padding(.trailing, narrow ? 6 : 8)
         .padding(.vertical, 8)
-        .background(Palette.ground, in: Capsule())
+        .background { Capsule().fill(Palette.ground).shadow(color: .black.opacity(0.10), radius: 18, y: 5) }
         .overlay(
             Capsule().strokeBorder(
                 browser.missed ? Color.red.opacity(0.35) : Palette.hairline,
                 lineWidth: 1
             )
         )
-        .shadow(color: .black.opacity(0.10), radius: 18, y: 5)
         .padding(.top, 12)
         .padding(.trailing, 14)
         .frame(maxWidth: availableWidth == nil ? nil : .infinity,

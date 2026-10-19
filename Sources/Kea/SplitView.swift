@@ -107,6 +107,15 @@ private struct PaneLayers: View {
 
             if browser.fieldShowing && focused {
                 Omnibox(browser: browser, omni: omni, over: !tab.isBlank, fitted: true)
+                    // A kea fact under the field on a lone blank page (Settings › General);
+                    // a pair's blank page lists the open tabs there instead (OpenTabs).
+                    .overlay {
+                        if tab.isBlank, !paired, browser.prefs.keaFacts {
+                            KeaFact(omni: omni)
+                                .alignmentGuide(VerticalAlignment.center) { $0[.top] }
+                                .offset(y: -55)
+                        }
+                    }
                     .transition(.scale(scale: 0.97).combined(with: .opacity))
             }
 

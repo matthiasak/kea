@@ -52,6 +52,8 @@ final class Links: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         // Every window, and windows.json (see Windows.swift).
         Browsers.flush()
+        // The last page visited, still waiting out History's moment (see History.save).
+        MainActor.assumeIsolated { Shared.history.flush() }
         // And the bookmarks or downloads list saved a moment ago, still on
         // their way to the disk.
         Disk.drain()
@@ -222,12 +224,12 @@ final class Links: NSObject, NSApplicationDelegate {
     /// Gives up waiting after a second or so and runs anyway — a launch
     /// started hidden has a window nobody can see yet.
     @MainActor
-    static func onceShown(_ then: @escaping () -> Void, tries: Int = 0) {
+    static func onceShown(_ then: @escaping @MainActor () -> Void, tries: Int = 0) {
         let shown = NSApp.windows.contains { $0.isVisible && $0.contentView != nil }
         if shown || tries > 40 {
-            DispatchQueue.main.async(execute: then)
+            DispatchQueue.main.async { MainActor.assumeIsolated { then() } }
         } else {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) { onceShown(then, tries: tries + 1) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) { MainActor.assumeIsolated { onceShown(then, tries: tries + 1) } }
         }
     }
 
@@ -242,10 +244,6 @@ final class Links: NSObject, NSApplicationDelegate {
     private static func comeForward() {
         // Never a test run's: a probe started hidden stays off every screen.
         guard !Store.testing else { return }
-        guard #available(macOS 14, *) else {
-            NSApp.activate(ignoringOtherApps: true)
-            return
-        }
         NSApp.activate()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
             guard !NSApp.isActive else { return }

@@ -159,7 +159,7 @@ def main():
 
         b_marks = json.load(open(f"{support_b}/bookmarks.json"))
         b_hist = json.load(open(f"{support_b}/history.json"))
-        b_chats = json.load(open(f"{support_b}/chats.json"))
+        b_chats = json.load(open(f"{support_b}/chats/index.json"))
         b_pins = json.load(open(f"{support_b}/pins.json"))
         b_look = subprocess.run(["defaults", "read", suite_b, "look"], capture_output=True, text=True).stdout.strip()
         devs_b = st_b.get("devices", [])
@@ -170,6 +170,9 @@ def main():
              any(h.get("url") == "https://example.com/kea" for h in b_hist), b_hist)
         t.ok("B receives chats from A",
              any(c.get("title") == "Trip" for c in b_chats), b_chats)
+        t.ok("A moves its old chats.json to a file per chat",
+             not os.path.exists(f"{support_a}/chats.json")
+             and any(c["title"] == "Trip" for c in json.load(open(f"{support_a}/chats/index.json"))))
         t.ok("B receives pins from A",
              any(p.get("home", "").endswith("/pinme") for defs in b_pins.values() for p in defs), b_pins)
         t.ok("B receives portable look setting from A", b_look == "dark", b_look)

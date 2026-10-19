@@ -93,7 +93,7 @@ struct WelcomePanel: View {
                      ? "No other browser found on this Mac — nothing to bring."
                      : unreadable.map { "\($0.source.name) is on this Mac, but nothing of it was found in \($0.looked)." }.joined(separator: "\n"))
                     .font(.system(size: 13))
-                    .foregroundStyle(Palette.faint)
+                    .foregroundStyle(Palette.muted)
                     .fixedSize(horizontal: false, vertical: true)
             } else {
                 VStack(alignment: .leading, spacing: 14) {
@@ -172,7 +172,7 @@ struct WelcomePanel: View {
                     if asked, !isDefault {
                         Text("macOS asks in its own dialog")
                             .font(.system(size: 13))
-                            .foregroundStyle(Palette.faint)
+                            .foregroundStyle(Palette.muted)
                     }
                 }
             }
@@ -181,7 +181,7 @@ struct WelcomePanel: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text("A few things worth knowing")
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(Palette.faint)
+                    .foregroundStyle(Palette.muted)
                     .textCase(.uppercase)
                     .tracking(0.6)
                     .padding(.top, 6)
@@ -338,7 +338,7 @@ struct WelcomePanel: View {
             HStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title).font(.system(size: 13.5)).foregroundStyle(Palette.ink)
-                    Text(detail).font(.system(size: 11.5)).foregroundStyle(Palette.faint)
+                    Text(detail).font(.system(size: 11.5)).foregroundStyle(Palette.muted)
                 }
                 Spacer()
                 Switch(on: $on)

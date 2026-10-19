@@ -364,7 +364,15 @@ extension Browser {
         // In front of you: straight back, a reload beats a white page with a
         // button on it. Behind another tab: the moment you come back to it.
         if tab.id == activeID, !tab.isBlank {
-            tab.recoverFromCrash()
+            // Three in twenty seconds is a page that kills its own process as it
+            // loads: reloading it again would only do that again, forever.
+            let now = Date()
+            tab.crashes = tab.crashes.filter { now.timeIntervalSince($0) < 20 } + [now]
+            if tab.crashes.count >= 3 {
+                tab.failure = "This page keeps crashing, so Kea stopped reloading it."
+            } else {
+                tab.recoverFromCrash()
+            }
         } else {
             tab.stale = true
         }

@@ -102,7 +102,14 @@ enum SiteSearch {
 
     static var learned: [SearchSite] {
         if let loaded { return loaded }
-        let read = (try? Data(contentsOf: file)).flatMap { try? JSONDecoder().decode([SearchSite].self, from: $0) } ?? []
+        var read: [SearchSite] = []
+        if let data = try? Data(contentsOf: file) {
+            if let list = try? JSONDecoder().decode([SearchSite].self, from: data) {
+                read = list
+            } else {
+                Store.quarantine(file)
+            }
+        }
         // Named by their address, whatever an earlier build wrote.
         let kept = read.filter { Keyword.accepts($0.template) && sameSite($0.template, $0.host) }
             .map { SearchSite(name: $0.host, host: $0.host, template: $0.template) }
@@ -162,7 +169,7 @@ enum SiteSearch {
     /// Forgotten, all of them: with the history (Browser.clearHistory).
     static func forget() {
         loaded = []
-        try? FileManager.default.removeItem(at: file)
+        Disk.remove(file)
     }
 
     private static func bare(_ host: String) -> String {

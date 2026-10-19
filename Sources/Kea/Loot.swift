@@ -54,9 +54,11 @@ final class Loot: ObservableObject {
     private static var file: URL { Store.file("downloads.json") }
 
     private func load() {
-        guard let data = try? Data(contentsOf: Loot.file),
-              let list = try? JSONDecoder().decode([Keep].self, from: data)
-        else { return }
+        guard let data = try? Data(contentsOf: Loot.file) else { return }
+        guard let list = try? JSONDecoder().decode([Keep].self, from: data) else {
+            Store.quarantine(Loot.file)
+            return
+        }
         kept = list
     }
 

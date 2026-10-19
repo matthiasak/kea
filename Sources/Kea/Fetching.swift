@@ -664,6 +664,7 @@ struct FetchDoor: View {
             .buttonStyle(.plain)
             .onHover { hovering = $0 }
             .help("Downloads (⇧⌘J)")
+            .accessibilityLabel("Downloads")
             .transition(.scale(scale: 0.6).combined(with: .opacity))
             .animation(Motion.quick, value: fetches.done)
             .animation(Motion.quick, value: fetches.showing)

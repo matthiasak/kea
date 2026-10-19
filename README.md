@@ -87,6 +87,7 @@ git pull && ./build.sh
   - **Cloud:** Anthropic, OpenAI, Google Gemini, OpenRouter (one-click OAuth PKCE sign-in), plus providers from the `models.dev` catalog.
   - **Key sources:** Store keys in the macOS Keychain, read from an `$ENV_VAR`, or fetch on demand from a shell command (e.g. `op read …`).
 - **Dual-format copy.** Copying an answer puts both rich HTML and clean Markdown on the pasteboard.
+- **Sessions.** A list of chats beside the conversation (search, Starred, Tasks, by day) to rename, star, clone or delete; the model names each chat; Compact folds earlier turns into a summary and keeps them; answers render Markdown and Mermaid diagrams (flowchart, sequence, pie, state, class) drawn by Kea itself; the transcript zooms on its own (⋯ › Zoom).
 
 ### Privacy, Security & Extensions
 - **Zero-cost ad blocking.** Compiles a `WKContentRuleList` enforced inside WebKit's network layer before requests leave the Mac. Toggle per site from the address bar's site card.
@@ -102,7 +103,7 @@ git pull && ./build.sh
 |---|---|---|
 | Passwords | macOS login keychain (`Kea`) | Kea (via macOS Keychain / Touch ID) |
 | AI API keys | Keychain (`app.kea.browser.ai`), `$ENV`, or shell command | Read only at request time; never logged or written to disk |
-| Bookmarks, history, session, hidden rules, Ubi Chat | `~/Library/Application Support/Kea/*.json` | Local files on your Mac |
+| Bookmarks, history, session, hidden rules, Ubi Chat | `~/Library/Application Support/Kea/*.json` (Ubi Chat: `Kea/chats/`, an index and a file per chat) | Local files on your Mac |
 | Cookies & site storage | `~/Library/WebKit/app.kea.browser/` | WebKit's per-space data stores |
 | Extensions | `~/Library/Application Support/Kea/Extensions/` | Each extension within its granted permissions |
 

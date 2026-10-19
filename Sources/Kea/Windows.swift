@@ -52,7 +52,11 @@ final class Front: ObservableObject {
     func set(_ browser: Browser?) {
         guard browser !== self.browser else { return }
         self.browser = browser
-        relay = browser?.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
+        relay = browser?.objectWillChange
+            // A burst of changes (a find typed, a panel toggled) redraws the menus
+            // once a tenth of a second, not on every one of them.
+            .throttle(for: .milliseconds(100), scheduler: DispatchQueue.main, latest: true)
+            .sink { [weak self] _ in self?.objectWillChange.send() }
     }
 }
 
@@ -226,7 +230,7 @@ enum Browsers {
     private static func comeForward() {
         // Never a test run's: a probe started hidden stays off every screen.
         guard !Store.testing else { return }
-        if #available(macOS 14, *) { NSApp.activate() } else { NSApp.activate(ignoringOtherApps: true) }
+        NSApp.activate()
     }
 
     // MARK: - closing
@@ -333,7 +337,11 @@ enum Browsers {
 
     static func read() -> [WindowRecord] {
         guard let data = try? Data(contentsOf: file) else { return [] }
-        return (try? JSONDecoder().decode([WindowRecord].self, from: data)) ?? []
+        guard let records = try? JSONDecoder().decode([WindowRecord].self, from: data) else {
+            Store.quarantine(file)
+            return []
+        }
+        return records
     }
 
     /// Start with a fresh window (see Session.startFresh): one window, the

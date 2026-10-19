@@ -10,6 +10,7 @@ struct SideBar: View {
     @ObservedObject var browser: Browser
     @ObservedObject var prefs: Preferences
     @ObservedObject var swipe: Browser.SwipeOffset
+    @ObservedObject private var widths = Shared.prefs.widths
     /// On the window's ground, beside the page's card (see CardEdge): the
     /// ground's colour and no edge of its own, the card's edge being the line.
     var onFrame = false
@@ -506,6 +507,7 @@ private struct SideFoot: View {
     @ObservedObject var browser: Browser
     @ObservedObject var prefs: Preferences
     @ObservedObject var fetches: Fetches
+    @ObservedObject private var widths = Shared.prefs.widths
 
     var body: some View {
         HStack(spacing: 2) {
@@ -626,6 +628,12 @@ private struct PinSquare: View {
         .help(tab.label)
         .animation(Motion.quick, value: hovering)
         .transition(.scale(scale: 0.8).combined(with: .opacity))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(tab.label.isEmpty ? "New Tab" : tab.label)
+        .accessibilityValue(live ? "Selected" : "")
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction { browser.select(tab) }
+        .accessibilityAction(named: "Close tab") { browser.close(tab) }
     }
 }
 
@@ -652,7 +660,7 @@ private struct SideRow: View {
     /// under the pointer rather than hiding beneath it as the ring does.
     private var speaker: Bool { !tab.loading && (tab.noisy || tab.muted) }
 
-    var body: some View {
+    private var row: some View {
         HStack(spacing: 8) {
             if editing {
                 TabAddressField(browser: browser)
@@ -770,6 +778,17 @@ private struct SideRow: View {
             withAnimation(.easeOut(duration: 0.5)) { shake = 1 }
         }
         .transition(.scale(scale: 0.94, anchor: .leading).combined(with: .opacity))
+    }
+
+    var body: some View {
+        row
+            .help(tab.label)
+            .accessibilityElement(children: editing ? .contain : .ignore)
+            .accessibilityLabel(tab.label.isEmpty ? "New Tab" : tab.label)
+            .accessibilityValue(live ? "Selected" : "")
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction { if interactive { browser.select(tab) } }
+            .accessibilityAction(named: "Close tab") { if interactive { close() } }
     }
 
     @ViewBuilder
@@ -893,6 +912,7 @@ struct Speaker: View {
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
         .help(tab.muted ? "Unmute Tab" : "Mute Tab")
+        .accessibilityLabel(tab.muted ? "Unmute Tab" : "Mute Tab")
         .animation(Motion.quick, value: hovering)
     }
 }
@@ -921,6 +941,7 @@ struct Door: View {
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
         .help(help)
+        .accessibilityLabel(help.components(separatedBy: "   ")[0])
         .animation(Motion.quick, value: hovering)
         .animation(Motion.quick, value: on)
     }
