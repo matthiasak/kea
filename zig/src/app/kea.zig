@@ -3,7 +3,7 @@
 const std = @import("std");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;
-const ui = nanoui.ui;
+const browsers = @import("browsers.zig");
 const Store = @import("../data/store.zig").Store;
 const Prefs = @import("../data/prefs.zig").Prefs;
 const History = @import("../data/history.zig").History;
@@ -11,7 +11,6 @@ const Bookmarks = @import("../data/bookmarks.zig").Bookmarks;
 const SiteSearch = @import("../data/site_search.zig").SiteSearch;
 const Pins = @import("../data/pins.zig").Pins;
 const Browser = @import("../model/browser.zig").Browser;
-const window_view = @import("../chrome/window_view.zig");
 const kea_import = @import("../data/kea_import.zig");
 
 /// The app's name wherever Swift's strings name Kea the app.
@@ -41,6 +40,7 @@ pub const Kea = struct {
     site_search: SiteSearch,
     pins: Pins,
     browsers: std.ArrayList(*Browser) = .empty,
+    windows: browsers.Windows = .{},
 
     pub fn create(gpa: std.mem.Allocator, ui_app: ?*nanoui.App, opts: Options) !*Kea {
         const self = try gpa.create(Kea);
@@ -74,18 +74,10 @@ pub const Kea = struct {
     }
 
     pub fn destroy(self: *Kea) void {
-        while (self.browsers.items.len > 0) {
-            const b = self.browsers.items[self.browsers.items.len - 1];
-            // Closing the window runs `onWindowClose`, which drops `b`.
-            if (b.window) |w| w.close();
-            if (self.browsers.items.len > 0 and self.browsers.items[self.browsers.items.len - 1] == b) {
-                _ = self.browsers.pop();
-                b.destroy();
-            }
-        }
+        self.flush();
+        browsers.closeAll(self);
         self.browsers.deinit(self.gpa);
         self.browsers = .empty;
-        self.flush();
         self.pins.deinit();
         self.site_search.deinit();
         self.bookmarks.deinit();
@@ -96,9 +88,10 @@ pub const Kea = struct {
     }
 
     /// What quitting must not lose (`applicationWillTerminate`, Links.swift:52-60):
-    /// the last visit still waiting out History's moment, then every write on its way.
+    /// every window written down, the last visit still waiting out History's
+    /// moment, then every write on its way.
     pub fn flush(self: *Kea) void {
-        for (self.browsers.items) |b| b.flushSession();
+        browsers.flush(self);
         self.history.flush();
         self.store.disk.drain();
     }
@@ -108,42 +101,9 @@ pub const Kea = struct {
         for (self.browsers.items) |b| b.redraw();
     }
 
-    /// A new browser, in its own window unless headless.
+    /// The oldest window's browser, its tabs from the session files; in a
+    /// window of its own unless headless (`app/browsers.zig`).
     pub fn newBrowser(self: *Kea) !*Browser {
-        const b = try Browser.create(self);
-        errdefer b.destroy();
-        try self.browsers.append(self.gpa, b);
-        errdefer _ = self.browsers.pop();
-        if (self.opts.headless) return b;
-        const app = self.ui_app orelse return b;
-        const off: ?f64 = if (self.opts.hidden) -20000 else null;
-        const win = try app.newWindow(.{
-            .title = app_name,
-            .width = 1280,
-            .height = 820,
-            .min_width = 520,
-            .min_height = 380,
-            .title_bar = .hidden,
-            .visible = !self.opts.hidden,
-            .x = off,
-            .y = off,
-            .on_close = .{ .ctx = b, .func = onWindowClose },
-            .content = .{ .view = ui.View.init(b, window_view.view) },
-        });
-        try b.bindWindow(win);
-        return b;
-    }
-
-    fn onWindowClose(ctx: *anyopaque, _: *nanoui.Window) void {
-        const b: *Browser = @ptrCast(@alignCast(ctx));
-        const self = b.kea;
-        b.unbindWindow();
-        for (self.browsers.items, 0..) |item, i| {
-            if (item == b) {
-                _ = self.browsers.orderedRemove(i);
-                break;
-            }
-        }
-        b.destroy();
+        return browsers.open(self, null, null, null);
     }
 };

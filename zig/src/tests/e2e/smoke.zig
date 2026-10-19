@@ -11,7 +11,7 @@ pub const cases = [_]Case{
     .{ .name = "corrupt session.json is quarantined as .unreadable-<n>.json", .run = quarantine },
     .{ .name = "a tab loads and gets its title", .run = loadsTitle },
     .{ .name = "split halves the hole width", .run = splitHalves },
-    .{ .name = "bookmarks panel shrinks the hole by its width + 9", .run = marksPanel },
+    .{ .name = "bookmarks panel shrinks the hole by its width", .run = marksPanel },
     .{ .name = "omnibox offers a visited host", .run = omniOffer },
     .{ .name = "typing 'github ' shows the GitHub site chip", .run = siteChip },
     .{ .name = "cmd-. stops a slow load", .run = stopSlow },
@@ -86,14 +86,23 @@ fn splitHalves(h: *Harness) !void {
 fn marksPanel(h: *Harness) !void {
     const b = try h.start();
     b.prefs.set("sidebar", true);
+    // The column's room is taken once its slide is over (`make(room:after:)`).
+    h.frame();
+    try h.waitFor(b, roomTaken, 2, "the column's room");
     h.frame();
     const before = b.active_page_frame.w;
     h.press("b", 11, true, true); // ⌃⌘B
     h.frame();
     const after = b.active_page_frame.w;
-    const want = b.prefs.marks_width + 9;
+    // The panel's edge handle lies over the panel (BookmarksSidebar), so the page gives up its width.
+    const want = b.prefs.marks_width;
     try h.expect(b.marks_open, "⌃⌘B didn't open the panel", .{});
     try h.expect(@abs((before - after) - want) <= 2, "hole {d:.1} → {d:.1}, want a {d:.1} shrink", .{ before, after, want });
+}
+
+fn roomTaken(b: *app.Browser) bool {
+    if (b.room.due != null) if (b.window) |w| if (w.surface) |s| s.frame();
+    return b.room.due == null;
 }
 
 fn omniOffer(h: *Harness) !void {

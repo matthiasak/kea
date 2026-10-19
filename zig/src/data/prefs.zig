@@ -291,9 +291,10 @@ pub const Prefs = struct {
         return if (self.sidebar and self.side_position == .right) .left else .right;
     }
 
+    /// `Browser.panelOnLeft(.bookmarks)`: as Ubi Chat, away from the tab column.
     pub fn effectiveMarksSide(self: *const Prefs) SidePosition {
         if (self.marks_side) |s| return s;
-        return if (self.sidebar and self.side_position == .left) .right else .left;
+        return if (self.sidebar and self.side_position == .right) .left else .right;
     }
 
     // MARK: reading and writing one key

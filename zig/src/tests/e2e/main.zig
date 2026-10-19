@@ -14,7 +14,7 @@ pub const Case = struct {
     run: *const fn (*Harness) anyerror!void,
 };
 
-const cases = @import("smoke.zig").cases;
+const cases = @import("smoke.zig").cases ++ @import("windows.zig").cases;
 
 pub const Harness = struct {
     gpa: std.mem.Allocator,

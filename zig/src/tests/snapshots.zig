@@ -14,6 +14,8 @@ const State = struct {
 
 const states = [_]State{
     .{ .name = "p0-default", .opts = .{} },
+    .{ .name = "p3-cards", .opts = .{ .sidebar = true, .tabs = 3 } },
+    .{ .name = "p3-strip", .opts = .{ .sidebar = false, .tabs = 3 } },
 };
 
 pub fn main(init: std.process.Init) !void {
@@ -39,6 +41,8 @@ pub fn main(init: std.process.Init) !void {
             try f.init(gpa, opts);
             defer f.deinit();
             f.tester.settle(2);
+            // The window's ground, which the hosted window paints behind the view.
+            if (f.browser.applied_ground) |g| f.tester.theme.background = g;
             const path = try std.fmt.allocPrint(gpa, "{s}/{s}-{s}.png", .{ dir, s.name, if (dark) "dark" else "light" });
             defer gpa.free(path);
             try f.tester.screenshot(path);

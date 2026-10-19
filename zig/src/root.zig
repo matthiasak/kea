@@ -2,6 +2,8 @@
 //! `zig build ui-test`, `perf`, `e2e` and `snapshots`.
 pub const kea = @import("app/kea.zig");
 pub const Kea = kea.Kea;
+pub const browsers = @import("app/browsers.zig");
+pub const windows_file = @import("data/windows_file.zig");
 pub const Browser = @import("model/browser.zig").Browser;
 pub const Tab = @import("web/tab.zig").Tab;
 pub const StageHost = @import("web/stage_host.zig").StageHost;

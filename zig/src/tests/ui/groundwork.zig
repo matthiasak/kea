@@ -24,17 +24,17 @@ test "strip layout: one hole the window's width" {
     try std.testing.expectEqual(@as(f32, 900), h[0].y + h[0].h);
 }
 
-test "sidebar moves the hole past the column and its edge" {
+test "sidebar moves the hole past the column" {
     var f: Fixture = undefined;
     try f.init(gpa, .{ .sidebar = true });
     defer f.deinit();
     const h = f.holes();
     try std.testing.expectEqual(@as(usize, 1), h.len);
-    // Column, 9 pt edge handle, 6 pt card gutter.
-    try std.testing.expectApproxEqAbs(f.kea.prefs.side_width + 9 + 6, h[0].x, 0.5);
+    // The column's edge handle lies over its own inner edge (Side.swift).
+    try std.testing.expectApproxEqAbs(f.kea.prefs.side_width, h[0].x, 0.5);
 }
 
-test "ctrl-cmd-B bookmarks panel shrinks the hole by panel + edge" {
+test "ctrl-cmd-B bookmarks panel shrinks the hole by the panel" {
     var f: Fixture = undefined;
     try f.init(gpa, .{ .sidebar = false });
     defer f.deinit();
@@ -43,6 +43,5 @@ test "ctrl-cmd-B bookmarks panel shrinks the hole by panel + edge" {
     f.tester.frame();
     try std.testing.expect(f.browser.marks_open);
     const after = f.holes()[0].w;
-    // Framed now: 6 pt gutters on both sides of the card.
-    try std.testing.expectApproxEqAbs(f.kea.prefs.marks_width + 9 + 12, before - after, 0.5);
+    try std.testing.expectApproxEqAbs(f.kea.prefs.marks_width, before - after, 0.5);
 }

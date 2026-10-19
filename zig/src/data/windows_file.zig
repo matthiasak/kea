@@ -1,8 +1,6 @@
 //! `windows.json` (`Windows.swift`): the oldest window's frame and space
 //! first, then every other window whole. A frame is `NSStringFromRect` text.
 const std = @import("std");
-const nanoui = @import("nanoui");
-const objc = nanoui.objc;
 const json = @import("json.zig");
 const session = @import("session.zig");
 const Store = @import("store.zig").Store;
@@ -50,26 +48,6 @@ pub fn startFresh(store: *Store) void {
     if (records.value.len <= 1) return;
     write(store, records.value[0..1], true);
 }
-
-/// Soon, not now: a window being dragged moves many times a second. The
-/// owner (`app/browsers.zig`) outlives it and builds the records in `save`.
-pub const Soon = struct {
-    saving: bool = false,
-    ctx: *anyopaque,
-    save: *const fn (*anyopaque) void,
-
-    pub fn saveSoon(self: *Soon) void {
-        if (self.saving) return;
-        self.saving = true;
-        objc.dispatchAfter(std.time.ns_per_s, self, fire);
-    }
-
-    fn fire(ctx: ?*anyopaque) callconv(.c) void {
-        const self: *Soon = @ptrCast(@alignCast(ctx.?));
-        self.saving = false;
-        self.save(self.ctx);
-    }
-};
 
 // MARK: tests
 

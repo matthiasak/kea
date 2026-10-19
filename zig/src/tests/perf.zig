@@ -24,9 +24,9 @@ pub fn main(init: std.process.Init) !void {
         _ = t.renderer.drawTimed(target, t.instances.items, t.text.texture(), t.size, ui.Color.transparent);
     }
 
-    // Press the edge handle (just past the column), then drag it.
+    // Press the edge handle (the 9 points over the column's inner edge), then drag it.
     const y = t.size.h / 2;
-    t.moveTo(f.kea.prefs.side_width + 4.5, y);
+    t.moveTo(f.kea.prefs.side_width - 4.5, y);
     t.ctx.pointerDown();
     t.frame();
 
@@ -48,7 +48,7 @@ pub fn main(init: std.process.Init) !void {
     t.ctx.pointerUp();
     t.frame();
     // The numbers only count if the edge followed the pointer out and back
-    // (out to the column's 360 pt clamp, back near 232).
+    // (out past 355, back near 232).
     const final = f.kea.prefs.side_width;
     if (widest < 355 or final > 245) {
         std.debug.print("perf: the drag missed the edge (widest {d:.0}, final {d:.0})\n", .{ widest, final });

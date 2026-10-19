@@ -15,8 +15,13 @@ const SearchSite = @import("../data/site_search.zig").SearchSite;
 const Parts = @import("../data/url.zig").Parts;
 const Tab = @import("../web/tab.zig").Tab;
 const StageHost = @import("../web/stage_host.zig").StageHost;
+const Lights = @import("../chrome/lights.zig").Lights;
+const browsers = @import("../app/browsers.zig");
 const session = @import("../data/session.zig");
 const Uuid = @import("../data/json.zig").Uuid;
+const overlays = @import("../chrome/overlays.zig");
+const room = @import("../chrome/room.zig");
+const EdgeDrag = @import("../chrome/panels.zig").EdgeDrag;
 
 pub const PaneFocus = enum { left, right };
 
@@ -25,6 +30,8 @@ pub const ClosedTab = struct {
     url_len: usize = 0,
     title: [256]u8 = undefined,
     title_len: usize = 0,
+    /// When it closed (`ui.clock`), weighed against a closed window's for ⇧⌘T.
+    at: f64 = 0,
 };
 
 pub const Browser = struct {
@@ -32,6 +39,14 @@ pub const Browser = struct {
     gpa: std.mem.Allocator,
     window: ?*nanoui.Window = null,
     stage_host: ?*StageHost = null,
+    lights: ?*Lights = null,
+    /// Its window's line in `windows.json` (`WindowRecord.id`).
+    record_id: Uuid,
+    /// The oldest window's rows live in the session files; any other's in
+    /// its line of `windows.json` (`Browser.usesFiles`).
+    uses_files: bool,
+    /// The last window, closed with the app running: kept, tabs and all.
+    shut: bool = false,
 
     // Shared with every window, owned by `kea`.
     store: *Store,
@@ -81,7 +96,17 @@ pub const Browser = struct {
     left_pane_frame: ui.Rect = .{},
     right_pane_frame: ui.Rect = .{},
 
-    pub fn create(kea: *Kea) !*Browser {
+    // The window (ContentView): what is open over it, the ground last
+    // given to its NSWindow, the room the page leaves, an edge being pulled.
+    overlay: ?overlays.Overlay = null,
+    overlay_anchor: ui.Rect = .{},
+    applied_ground: ?ui.Color = null,
+    room: room.State = .{},
+    edge_drag: ?EdgeDrag = null,
+
+    /// `rows` null: the oldest window, its tabs from the session files.
+    /// Otherwise a window's own row (empty for a new window).
+    pub fn create(kea: *Kea, rows: ?session.Shape) !*Browser {
         const self = try kea.gpa.create(Browser);
         self.* = .{
             .kea = kea,
@@ -90,17 +115,24 @@ pub const Browser = struct {
             .prefs = &kea.prefs,
             .history = &kea.history,
             .bookmarks = &kea.bookmarks,
+            .record_id = Uuid.random(),
+            .uses_files = rows == null,
         };
-        self.restoreSession();
+        if (rows) |shape| self.restoreSession(shape) else {
+            const shape = session.read(self.store, Uuid.first);
+            defer shape.deinit();
+            self.restoreSession(shape.value);
+        }
         if (self.tabs.items.len == 0) {
             _ = self.openTab("", true, false);
         }
         return self;
     }
 
+    /// Its tabs let go; what's kept was written by whoever closed it.
     pub fn destroy(self: *Browser) void {
-        self.flushSession();
         if (self.stage_host) |sh| sh.destroy();
+        if (self.lights) |l| l.drop();
         for (self.tabs.items) |t| t.destroy();
         self.tabs.deinit(self.gpa);
         self.closed_tabs.deinit(self.gpa);
@@ -112,6 +144,7 @@ pub const Browser = struct {
 
     pub fn bindWindow(self: *Browser, w: *nanoui.Window) !void {
         self.window = w;
+        self.lights = try Lights.keep(self.gpa, w.nswindow, self.prefs);
         if (w.surface) |s| {
             const sh = try StageHost.create(self.gpa, s);
             sh.on_rects_ctx = self;
@@ -127,11 +160,15 @@ pub const Browser = struct {
     pub fn unbindWindow(self: *Browser) void {
         if (self.stage_host) |sh| sh.destroy();
         self.stage_host = null;
+        if (self.lights) |l| l.drop();
+        self.lights = null;
         self.window = null;
     }
 
     fn onStageRects(ctx: ?*anyopaque, holes: []const ui.Rect) void {
         const self: *Browser = @ptrCast(@alignCast(ctx orelse return));
+        // The column moved or changed sides: the lights follow it.
+        if (self.lights) |l| l.follow();
         if (holes.len >= 1) {
             self.left_pane_frame = holes[0];
             if (self.focused_pane == .left or self.split_right_id == null) self.active_page_frame = holes[0];
@@ -152,7 +189,8 @@ pub const Browser = struct {
         const sh = self.stage_host orelse return;
         const primary = self.tabById(self.active_id);
         const secondary = if (self.prefs.split_view and self.split_right_id != null) self.tabById(self.split_right_id.?) else null;
-        const framed = self.prefs.sidebar or self.marks_open or secondary != null;
+        // The page's corners are the card's (`Page(corner: cards ? cardRadius : 0)`).
+        const framed = self.prefs.sidebar;
         sh.setPanes(if (primary) |p| p.web else null, if (secondary) |s| s.web else null, framed);
     }
 
@@ -205,6 +243,7 @@ pub const Browser = struct {
             @memcpy(ct.url[0..ct.url_len], t.url()[0..ct.url_len]);
             ct.title_len = @min(t.title().len, ct.title.len);
             @memcpy(ct.title[0..ct.title_len], t.title()[0..ct.title_len]);
+            ct.at = ui.clock.now();
             self.closed_tabs.append(self.gpa, ct) catch {};
         }
         if (self.stage_host) |sh| if (t.web) |wv| sh.forget(wv);
@@ -379,24 +418,34 @@ pub const Browser = struct {
     }
 
     /// `Browser.session`: kept tabs only, `active` the one in front or, when
-    /// that one isn't kept, the kept one just before it.
-    fn writeSession(self: *Browser, now: bool) void {
-        if (self.restoring) return;
+    /// that one isn't kept, the kept one just before it. Its strings are the
+    /// tabs'; `entries` (on `gpa`) is the caller's to free.
+    pub fn row(self: *Browser, gpa: std.mem.Allocator) !session.Shape {
         var entries: std.ArrayList(session.Entry) = .empty;
-        defer entries.deinit(self.gpa);
+        errdefer entries.deinit(gpa);
         var active: i64 = 0;
         for (self.tabs.items) |t| {
             if (t.id == self.active_id) active = @max(0, @as(i64, @intCast(entries.items.len)) - @intFromBool(!kept(t)));
             if (!kept(t)) continue;
-            entries.append(self.gpa, .{
+            try entries.append(gpa, .{
                 .url = t.url(),
                 .title = t.title(),
                 // ponytail: letter from the title until P4 ports Tab.pin.
                 .pin = if (t.pinned) monogram(t.title()) else null,
                 .home = if (t.pinned) t.url() else null,
-            }) catch return;
+            });
         }
-        session.write(self.store, Uuid.first, .{ .tabs = entries.items, .active = active }, now);
+        return .{ .tabs = try entries.toOwnedSlice(gpa), .active = active };
+    }
+
+    /// `writeRow`: the session files for the oldest window, its line of
+    /// `windows.json` for any other.
+    fn writeSession(self: *Browser, now: bool) void {
+        if (self.restoring) return;
+        if (!self.uses_files) return if (now) browsers.save(self.kea, true) else browsers.saveSoon(self.kea);
+        const shape = self.row(self.gpa) catch return;
+        defer self.gpa.free(shape.tabs);
+        session.write(self.store, Uuid.first, shape, now);
     }
 
     /// Not a private tab, and only with a web address (`Browser.kept`).
@@ -410,18 +459,16 @@ pub const Browser = struct {
         return "K";
     }
 
-    fn restoreSession(self: *Browser) void {
-        const shape = session.read(self.store, Uuid.first);
-        defer shape.deinit();
+    fn restoreSession(self: *Browser, shape: session.Shape) void {
         self.restoring = true;
         defer self.restoring = false;
-        for (shape.value.tabs, 0..) |e, i| {
-            const t = self.openTab(e.url, i == shape.value.active, false);
+        for (shape.tabs, 0..) |e, i| {
+            const t = self.openTab(e.url, i == shape.active, false);
             t.setTitle(e.title);
             t.pinned = e.pin != null;
         }
         // No tab in front (Start with a fresh window): an empty one beside the pins.
-        if (shape.value.active < 0) _ = self.openTab("", true, false);
+        if (shape.active < 0) _ = self.openTab("", true, false);
     }
 
     fn onTabChanged(ctx: ?*anyopaque, tab: *Tab) void {

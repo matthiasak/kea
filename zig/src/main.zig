@@ -3,21 +3,35 @@
 const std = @import("std");
 const nanoui = @import("nanoui");
 const kea = @import("app/kea.zig");
+const browsers = @import("app/browsers.zig");
 
 pub fn main(init: std.process.Init) !void {
-    const app = try nanoui.App.create(init, .{ .name = kea.app_name, .quit_on_last_window_closed = true });
+    // Closing the last window keeps the app, as Safari and Chrome do (#327).
+    const app = try nanoui.App.create(init, .{ .name = kea.app_name, .quit_on_last_window_closed = false });
     defer app.destroy();
     const k = try kea.Kea.create(app.gpa, app, .{});
     defer k.destroy();
     app.options.ctx = k;
     app.options.on_terminate = onTerminate;
+    app.options.on_reopen = onReopen;
+    app.options.on_active = onActive;
+    app.options.dock_menu = browsers.dockMenu(k);
     _ = try k.newBrowser();
+    browsers.restore(k);
     try app.run();
 }
 
 fn onTerminate(ctx: ?*anyopaque) void {
     const k: *kea.Kea = @ptrCast(@alignCast(ctx.?));
     k.flush();
+}
+
+fn onReopen(ctx: ?*anyopaque) void {
+    browsers.ensureWindow(@ptrCast(@alignCast(ctx.?)));
+}
+
+fn onActive(ctx: ?*anyopaque, active: bool) void {
+    browsers.appActive(@ptrCast(@alignCast(ctx.?)), active);
 }
 
 test {
@@ -45,5 +59,11 @@ test {
     _ = @import("web/stage_host.zig");
     _ = @import("model/browser.zig");
     _ = @import("chrome/window_view.zig");
+    _ = @import("chrome/room.zig");
     _ = @import("app/kea.zig");
+    _ = @import("design/palette.zig");
+    _ = @import("chrome/ring.zig");
+    _ = @import("chrome/tests_controls.zig");
+    _ = @import("chrome/lights.zig");
+    _ = @import("app/browsers.zig");
 }
