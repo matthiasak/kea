@@ -72,6 +72,7 @@ pub fn dropPanel(b: *Browser, panel: SidePanel, x: f32, width: f32) void {
 }
 
 pub fn toggleExpanded(b: *Browser, panel: SidePanel) void {
+    b.let_out = panel;
     b.expanded_panel = if (b.expanded_panel == panel) null else panel;
     b.redraw();
 }
@@ -125,15 +126,30 @@ fn columnWidth(b: *Browser, c: *ui.Context, panel: SidePanel, left: bool, width:
     return motion.glideTo(c, pid, 1, width);
 }
 
+fn columnSlot(b: *Browser, c: *ui.Context, p: *const Palette, panel: SidePanel, left: bool, shown: bool, target_w: f32, win_resized: bool) void {
+    const pid = col_id_base ^ @as(u64, @intFromEnum(panel)) ^ (if (left) @as(u64, 0x100) else @as(u64, 0x200));
+    if (b.let_out != panel) {
+        ui.jump(c, pid, 1, if (shown) target_w else 0);
+        _ = ui.tween(c, pid, 2, if (shown) 1 else 0, 0, .linear);
+    }
+    const alpha = motion.quickTo(c, pid, 2, if (shown) 1 else 0);
+    const w = columnWidth(b, c, panel, left, if (shown) target_w else 0, win_resized);
+    if (!shown and (alpha <= 0.001 or w <= 0.5)) return;
+    if (!shown) ui.key(c, if (left) "kea.panel.leave.l" else "kea.panel.leave.r");
+    _ = c.open(.{ .width = px(w), .height = .fill, .opacity = alpha, .clip = true }, null);
+    defer c.end();
+    panelView(b, c, p, panel, left, if (shown) w else target_w, false, false);
+}
+
 pub fn beside(b: *Browser, c: *ui.Context, p: *const Palette, r: Room, left: bool) void {
     const st = &b.column;
     const win_resized = st.panel_win_w != 0 and st.panel_win_w != r.window_width;
     if (!left) st.panel_win_w = r.window_width;
     const chat = r.chatShown() and panelOnLeft(b, .chat) == left;
     const marks = r.marksShown() and panelOnLeft(b, .bookmarks) == left;
-    if (left and chat) panelView(b, c, p, .chat, true, columnWidth(b, c, .chat, true, r.chatWidth(), win_resized), false, false);
-    if (marks) panelView(b, c, p, .bookmarks, left, columnWidth(b, c, .bookmarks, left, r.marksWidth(), win_resized), false, false);
-    if (!left and chat) panelView(b, c, p, .chat, false, columnWidth(b, c, .chat, false, r.chatWidth(), win_resized), false, false);
+    if (left) columnSlot(b, c, p, .chat, true, chat, r.chatWidth(), win_resized);
+    columnSlot(b, c, p, .bookmarks, left, marks, r.marksWidth(), win_resized);
+    if (!left) columnSlot(b, c, p, .chat, false, chat, r.chatWidth(), win_resized);
 }
 
 const let_out_id: u64 = std.hash.Wyhash.hash(0, "kea.panel.let-out");
@@ -146,7 +162,10 @@ pub fn letOut(b: *Browser, c: *ui.Context, p: *const Palette, r: Room) void {
         .bookmarks => if (r.marksColumn() and !r.marks_popped) e else null,
     } else null;
     if (shown) |s| b.let_out = s;
-    const v = presence.presence(c, let_out_id, shown != null, motion.glide, null) orelse return;
+    const v = presence.presence(c, let_out_id, shown != null, motion.glide, null) orelse {
+        b.let_out = null;
+        return;
+    };
     const panel = b.let_out orelse return;
     ui.column(c, .{ .absolute = true, .width = .fill, .height = .fill, .opacity = std.math.clamp(v, 0, 1) });
     defer ui.end(c);

@@ -42,7 +42,8 @@ const cg = struct {
 
 const state_names = [_][]const u8{
     "p0-default",             "p3-cards",                "p3-strip",              "p4-strip-12-tabs",
-    "p4-column-pins-groups",  "p6-site-card",            "p6-omnibox-list",       "p6-site-chip",
+    "p4-column-pins-groups",  "p4-strip-icons",          "p4-column-pins-icons",  "p6-site-card",
+    "p6-omnibox-list",        "p6-site-chip",
     "p8-side-panel",          "p7-split",                "p7-peek",               "p7-switcher",
     "p8-settings-general",    "p8-settings-tabs",        "p8-settings-shortcuts", "p8-settings-downloads",
     "p8-settings-privacy",    "p8-settings-ai",          "p8-settings-about",     "p8-welcome",
@@ -61,6 +62,7 @@ const Sidecar = struct {
     cards: bool = false,
     holes: []const ui.Rect = &.{},
     card: ?ui.Rect = null,
+    icons: []const ui.Rect = &.{},
 };
 
 const FilmLights = struct {
@@ -239,84 +241,44 @@ fn findClusters(gpa: std.mem.Allocator, diff_map: []const u8, width: u32, height
             if (cy < min_y) min_y = cy;
             if (cy > max_y) max_y = cy;
 
-            if (cx > 0) {
-                const nb = cur - 1;
+            const nbs = [_]?u32{
+                if (cx > 0) cur - 1 else null,
+                if (cx + 1 < width) cur + 1 else null,
+                if (cy > 0) cur - width else null,
+                if (cy + 1 < height) cur + width else null,
+            };
+            for (nbs) |maybe_nb| if (maybe_nb) |nb| {
                 if (diff_map[nb] != 0 and !visited[nb]) {
                     visited[nb] = true;
                     try queue.append(gpa, nb);
                 }
-            }
-            if (cx + 1 < width) {
-                const nb = cur + 1;
-                if (diff_map[nb] != 0 and !visited[nb]) {
-                    visited[nb] = true;
-                    try queue.append(gpa, nb);
-                }
-            }
-            if (cy > 0) {
-                const nb = cur - width;
-                if (diff_map[nb] != 0 and !visited[nb]) {
-                    visited[nb] = true;
-                    try queue.append(gpa, nb);
-                }
-            }
-            if (cy + 1 < height) {
-                const nb = cur + width;
-                if (diff_map[nb] != 0 and !visited[nb]) {
-                    visited[nb] = true;
-                    try queue.append(gpa, nb);
-                }
-            }
+            };
         }
-
         const cw = max_x - min_x + 1;
         const ch = max_y - min_y + 1;
         const area = cw * ch;
         if (area >= 4) {
             count += 1;
-            const cl = Cluster{
-                .x = min_x,
-                .y = min_y,
-                .w = cw,
-                .h = ch,
-                .area = area,
-                .pixels = @intCast(queue.items.len),
-            };
+            const cl = Cluster{ .x = min_x, .y = min_y, .w = cw, .h = ch, .area = area, .pixels = @intCast(queue.items.len) };
             if (largest == null or cl.area > largest.?.area) largest = cl;
         }
     }
     return .{ .count = count, .largest = largest };
 }
 
-fn compareState(
-    gpa: std.mem.Allocator,
-    ref_dir: []const u8,
-    zig_dir: []const u8,
-    out_dir: []const u8,
-    state: []const u8,
-    look: []const u8,
-    report: *std.ArrayList(u8),
-) !void {
+fn compareState(gpa: std.mem.Allocator, ref_dir: []const u8, zig_dir: []const u8, out_dir: []const u8, state: []const u8, look: []const u8, report: *std.ArrayList(u8)) !void {
     const ref_png = try std.fmt.allocPrint(gpa, "{s}/{s}-{s}.png", .{ ref_dir, state, look });
     defer gpa.free(ref_png);
     var zig_png = try std.fmt.allocPrint(gpa, "{s}/{s}-{s}.png", .{ zig_dir, state, look });
     defer gpa.free(zig_png);
-
     const ref_img_raw = decodePngFile(gpa, ref_png) catch {
         try report.print(gpa, "| `{s}-{s}` | missing ref | - | - | - |\n", .{ state, look });
         return;
     };
     defer ref_img_raw.deinit(gpa);
-
     var zig_state_for_sidecar = state;
-    var zig_img_raw = decodePngFile(gpa, zig_png) catch blk: {
-        const fallback = if (std.mem.eql(u8, state, "site"))
-            "p6-site-card"
-        else if (std.mem.eql(u8, state, "strip"))
-            "p3-strip"
-        else if (std.mem.eql(u8, state, "column"))
-            "p3-cards"
-        else {
+    const zig_img_raw = decodePngFile(gpa, zig_png) catch blk: {
+        const fallback = if (std.mem.eql(u8, state, "site")) "p6-site-card" else if (std.mem.eql(u8, state, "strip")) "p3-strip" else if (std.mem.eql(u8, state, "column")) "p3-cards" else {
             try report.print(gpa, "| `{s}-{s}` | missing zig | - | - | - |\n", .{ state, look });
             return;
         };
@@ -329,20 +291,16 @@ fn compareState(
         };
     };
     defer zig_img_raw.deinit(gpa);
-
     const ref_sc_path = try std.fmt.allocPrint(gpa, "{s}/{s}-{s}.json", .{ ref_dir, state, look });
     defer gpa.free(ref_sc_path);
     const zig_sc_path = try std.fmt.allocPrint(gpa, "{s}/{s}-{s}.json", .{ zig_dir, zig_state_for_sidecar, look });
     defer gpa.free(zig_sc_path);
-
     const ref_sc_parsed = readSidecar(gpa, ref_sc_path);
     defer if (ref_sc_parsed) |p| p.deinit();
     const zig_sc_parsed = readSidecar(gpa, zig_sc_path);
     defer if (zig_sc_parsed) |p| p.deinit();
-
     const ref_sc = if (ref_sc_parsed) |p| p.value else Sidecar{};
     const zig_sc = if (zig_sc_parsed) |p| p.value else Sidecar{};
-
     var ref_use = ref_img_raw;
     var zig_use = zig_img_raw;
     var cropped_zig: ?Image = null;
@@ -386,35 +344,23 @@ fn compareState(
     }
 
     if (ref_use.width != zig_use.width or ref_use.height != zig_use.height) {
-        try report.print(gpa, "| `{s}-{s}` | size mismatch ({d}x{d} vs {d}x{d}) | - | - | - |\n", .{
-            state, look, ref_use.width, ref_use.height, zig_use.width, zig_use.height,
-        });
+        try report.print(gpa, "| `{s}-{s}` | size mismatch ({d}x{d} vs {d}x{d}) | - | - | - |\n", .{ state, look, ref_use.width, ref_use.height, zig_use.width, zig_use.height });
         return;
     }
-
     const w = ref_use.width;
     const h = ref_use.height;
     const n_px = @as(usize, w) * h;
-
     const mask = try gpa.alloc(bool, n_px);
     defer gpa.free(mask);
     @memset(mask, false);
-
     const cards = ref_sc.cards or zig_sc.cards;
     applySidecarMasks(mask, w, h, ref_sc, cards);
     applySidecarMasks(mask, w, h, zig_sc, cards);
-
     const diff_map = try gpa.alloc(u8, n_px);
     defer gpa.free(diff_map);
     @memset(diff_map, 0);
-
-    const diff_img = Image{
-        .width = w,
-        .height = h,
-        .bgra = try gpa.alloc(u8, n_px * 4),
-    };
+    const diff_img = Image{ .width = w, .height = h, .bgra = try gpa.alloc(u8, n_px * 4) };
     defer diff_img.deinit(gpa);
-
     var unmasked_total: u64 = 0;
     var diff_pixels: u64 = 0;
 
@@ -562,6 +508,61 @@ fn compareFilms(gpa: std.mem.Allocator, ref_dir: []const u8, zig_dir: []const u8
     }
 }
 
+fn compareIconCrops(gpa: std.mem.Allocator, ref_dir: []const u8, zig_dir: []const u8, report: *std.ArrayList(u8)) !void {
+    try report.appendSlice(gpa, "\n## Icon Crop Comparison\n\n| State | Crops | Mean Abs Diff (/255) | Max Diff | Status |\n|---|---:|---:|---:|---|\n");
+    const icon_states = [_][]const u8{ "p4-strip-icons", "p4-column-pins-icons" };
+    for (icon_states) |state| {
+        for ([_][]const u8{ "light", "dark" }) |look| {
+            const ref_path = try std.fmt.allocPrint(gpa, "{s}/{s}-{s}.png", .{ ref_dir, state, look });
+            defer gpa.free(ref_path);
+            const zig_path = try std.fmt.allocPrint(gpa, "{s}/{s}-{s}.png", .{ zig_dir, state, look });
+            defer gpa.free(zig_path);
+            const sc_path = try std.fmt.allocPrint(gpa, "{s}/{s}-{s}.json", .{ zig_dir, state, look });
+            defer gpa.free(sc_path);
+            const zig_img = decodePngFile(gpa, zig_path) catch {
+                try report.print(gpa, "| `{s}-{s}` | - | - | - | missing zig |\n", .{ state, look });
+                continue;
+            };
+            defer zig_img.deinit(gpa);
+            const ref_img = decodePngFile(gpa, ref_path) catch {
+                try report.print(gpa, "| `{s}-{s}` | - | - | - | missing ref |\n", .{ state, look });
+                continue;
+            };
+            defer ref_img.deinit(gpa);
+            const sc_parsed = readSidecar(gpa, sc_path);
+            defer if (sc_parsed) |p| p.deinit();
+            const sc = if (sc_parsed) |p| p.value else Sidecar{};
+            const sx: f32 = if (sc.points[0] > 0) @as(f32, @floatFromInt(zig_img.width)) / @as(f32, @floatFromInt(sc.points[0])) else 2.0;
+            const sy: f32 = if (sc.points[1] > 0) @as(f32, @floatFromInt(zig_img.height)) / @as(f32, @floatFromInt(sc.points[1])) else 2.0;
+            var sum_diff: u64 = 0;
+            var samples: u64 = 0;
+            var max_diff: u32 = 0;
+            for (sc.icons) |r| {
+                const x0: u32 = @intFromFloat(@max(0, @round(r.x * sx)));
+                const y0: u32 = @intFromFloat(@max(0, @round(r.y * sy)));
+                const cw: u32 = @intFromFloat(@max(1, @round(r.w * sx)));
+                const ch: u32 = @intFromFloat(@max(1, @round(r.h * sy)));
+                var y = y0;
+                while (y < @min(y0 + ch, @min(ref_img.height, zig_img.height))) : (y += 1) {
+                    var x = x0;
+                    while (x < @min(x0 + cw, @min(ref_img.width, zig_img.width))) : (x += 1) {
+                        const off = (@as(usize, y) * zig_img.width + x) * 4;
+                        for (0..3) |c_idx| {
+                            const d = @abs(@as(i32, ref_img.bgra[off + c_idx]) - @as(i32, zig_img.bgra[off + c_idx]));
+                            sum_diff += d;
+                            samples += 1;
+                            if (d > max_diff) max_diff = d;
+                        }
+                    }
+                }
+            }
+            const mean: f64 = if (samples > 0) @as(f64, @floatFromInt(sum_diff)) / @as(f64, @floatFromInt(samples)) else 0;
+            const pass = mean <= 6.0 and max_diff <= 40;
+            try report.print(gpa, "| `{s}-{s}` | {d} | {d:.2} | {d} | {s} |\n", .{ state, look, sc.icons.len, mean, max_diff, if (pass) "PASS" else "FAIL" });
+        }
+    }
+}
+
 pub fn main(init: std.process.Init) !void {
     const gpa = init.gpa;
     const args = try init.minimal.args.toSlice(init.arena.allocator());
@@ -586,6 +587,7 @@ pub fn main(init: std.process.Init) !void {
         }
     }
 
+    try compareIconCrops(gpa, ref_dir, zig_dir, &report);
     try compareFilms(gpa, ref_dir, zig_dir, &report);
 
     const report_path = try std.fmt.allocPrint(gpa, "{s}/report.md", .{out_dir});

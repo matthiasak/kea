@@ -8,6 +8,7 @@ const ui = nanoui.ui;
 const Browser = @import("../model/browser.zig").Browser;
 const Tab = @import("../web/tab.zig").Tab;
 const swipe = @import("../web/swipe.zig");
+const Parts = @import("../data/url.zig").Parts;
 const Palette = @import("../design/palette.zig").Palette;
 const card = @import("../design/card.zig");
 const motion = @import("../design/motion.zig");
@@ -20,11 +21,11 @@ fn px(v: f32) ui.Length {
 /// Inside the hole box; every layer is absolute over the page.
 pub fn draw(c: *ui.Context, p: *const Palette, t: *Tab) void {
     if (t.browser == null or t.browser.?.stage_host == null) {
-        if (t.cover) |picture| cover(c, t, picture);
+        cover(c, t);
     }
     flew(c, p, t.floating);
     trouble(c, p, t);
-    swipeLayers(c, p, t);
+    swipeLayers(t.browser, c, p, t);
     if (t.question()) |_| question(c, p, t);
 }
 
@@ -40,12 +41,36 @@ fn flew(c: *ui.Context, p: *const Palette, floating: bool) void {
 
 /// The page as it was left, anchored where the page starts, never in the
 /// way of a click.
-// ponytail: comes in with its 0.2 s fade but leaves at once; its bytes go with it.
-fn cover(c: *ui.Context, t: *Tab, picture: []const u8) void {
-    const fade = ui.tween(c, c.peekId(null), 0x636f_76, 1, 0.2, .ease_out);
+var last_cover: struct {
+    tab: u64 = 0,
+    serial: u32 = 0,
+    bytes: []u8 = &.{},
+} = .{};
+
+fn cover(c: *ui.Context, t: *Tab) void {
+    const a = std.heap.c_allocator;
+    if (t.cover) |picture| {
+        if (last_cover.tab != t.serial or last_cover.serial != t.cover_serial) {
+            if (last_cover.bytes.len > 0) a.free(last_cover.bytes);
+            last_cover.bytes = a.dupe(u8, picture) catch &.{};
+            last_cover.tab = t.serial;
+            last_cover.serial = t.cover_serial;
+        }
+    }
+    const has_cover = t.cover != null;
+    const fade = ui.tween(c, c.peekId("kea.cover"), 0x636f_76, if (has_cover) 1 else 0, 0.2, .ease_out);
+    const picture = t.cover orelse if (last_cover.tab == t.serial and last_cover.bytes.len > 0) last_cover.bytes else null;
+    if (fade <= 0.001 or picture == null) {
+        if (!has_cover and last_cover.tab == t.serial and last_cover.bytes.len > 0) {
+            a.free(last_cover.bytes);
+            last_cover = .{};
+        }
+        return;
+    }
+    const cov_serial = if (has_cover) t.cover_serial else last_cover.serial;
     ui.column(c, .{ .absolute = true, .width = .fill, .height = .fill, .clip = true, .opacity = fade });
     defer ui.end(c);
-    _ = ui.image(c, .{ .key = c.print("kea.cover.{d}.{d}", .{ t.serial, t.cover_serial }), .bytes = picture, .max_width = 1e5, .max_height = 1e5, .radius = 0, .scale = c.scale });
+    _ = ui.image(c, .{ .key = c.print("kea.cover.{d}.{d}", .{ t.serial, cov_serial }), .bytes = picture.?, .max_width = 1e5, .max_height = 1e5, .radius = 0, .scale = c.scale });
 }
 
 /// `Trouble`: one line, and another go.
@@ -69,9 +94,11 @@ var last_list: struct {
     len: usize = 0,
     titles: [8][96]u8 = undefined,
     title_lens: [8]u8 = @splat(0),
+    urls: [8][160]u8 = undefined,
+    url_lens: [8]u8 = @splat(0),
 } = .{};
 
-fn swipeLayers(c: *ui.Context, p: *const Palette, t: *Tab) void {
+fn swipeLayers(b: ?*Browser, c: *ui.Context, p: *const Palette, t: *Tab) void {
     const pid = c.peekId("kea.swipe");
     const has_list = if (t.pull) |pull| pull.stops.len > 0 else false;
     const has_disc = if (t.pull) |pull| pull.stops.len == 0 else false;
@@ -86,19 +113,22 @@ fn swipeLayers(c: *ui.Context, p: *const Palette, t: *Tab) void {
         last_list.picked = pull.picked;
         last_list.len = @min(pull.stops.len, 8);
         for (pull.stops[0..last_list.len], 0..) |st, i| {
-            const src = if (st.title.len > 0) st.title else st.url;
-            const n = @min(src.len, 96);
-            @memcpy(last_list.titles[i][0..n], src[0..n]);
-            last_list.title_lens[i] = @intCast(n);
+            const tn = @min(st.title.len, 96);
+            @memcpy(last_list.titles[i][0..tn], st.title[0..tn]);
+            last_list.title_lens[i] = @intCast(tn);
+            const un = @min(st.url.len, 160);
+            @memcpy(last_list.urls[i][0..un], st.url[0..un]);
+            last_list.url_lens[i] = @intCast(un);
         }
-        list(c, p, pull, list_in, true);
+        list(b, c, p, pull, list_in, true);
     } else if (list_in > 0 and last_list.tab == t.id and last_list.len > 0) {
         var stops_buf: [8]swipe.Stop = undefined;
         for (0..last_list.len) |i| {
-            const slice = last_list.titles[i][0..last_list.title_lens[i]];
-            stops_buf[i] = .{ .title = @constCast(slice), .url = @constCast(slice) };
+            const t_slice = last_list.titles[i][0..last_list.title_lens[i]];
+            const u_slice = last_list.urls[i][0..last_list.url_lens[i]];
+            stops_buf[i] = .{ .title = @constCast(t_slice), .url = @constCast(u_slice) };
         }
-        list(c, p, .{
+        list(b, c, p, .{
             .back = last_list.back,
             .travel = last_list.travel,
             .armed = true,
@@ -153,7 +183,7 @@ fn disc(c: *ui.Context, p: *const Palette, pull: swipe.Pull, shown: f32) void {
 /// `HistoryList`: the pages that way, the lit one where the disc was.
 /// Enters with scale 0.92 and leaves with scale 0.96 from its edge over
 /// `easeOut(0.16)` (`Stage.swift:68-71,87`).
-fn list(c: *ui.Context, p: *const Palette, pull: swipe.Pull, shown: f32, entering: bool) void {
+fn list(b: ?*Browser, c: *ui.Context, p: *const Palette, pull: swipe.Pull, shown: f32, entering: bool) void {
     const travel: f32 = @floatCast(pull.travel);
     const reach = 150 * (1 - @exp(-travel / 110));
     const count: f32 = @floatFromInt(pull.stops.len);
@@ -181,8 +211,13 @@ fn list(c: *ui.Context, p: *const Palette, pull: swipe.Pull, shown: f32, enterin
     for (pull.stops, 0..) |stop, i| {
         const lit = i == pull.picked;
         ui.row(c, .{ .width = .fill, .height = px(28), .padding = .xy(9, 0), .gap = 8, .align_items = .center, .radius = 7, .background = if (lit) p.ink.alpha(0.10) else null });
-        ui.icon(c, "globe", .{ .size = 11, .frame = 14, .color = p.muted });
-        ui.text(c, if (stop.title.len > 0) stop.title else stop.url, .{ .size = 12.5, .color = if (lit) p.ink else p.ink.alpha(0.75), .truncate = true });
+        const fav = if (b) |br| br.kea.favicons.icon(stop.url) else null;
+        if (fav == null or !ui.image(c, .{ .key = fav.?.key, .bytes = fav.?.png, .max_width = 14, .max_height = 14, .radius = 0, .scale = 0.5 })) {
+            ui.icon(c, "globe", .{ .size = 11, .frame = 14, .color = p.muted });
+        }
+        const host = if (Parts.parse(stop.url)) |parts| parts.hostName() orelse stop.url else stop.url;
+        const label = if (stop.title.len > 0) stop.title else if (host.len > 0) host else stop.url;
+        ui.text(c, label, .{ .size = 12.5, .color = if (lit) p.ink else p.ink.alpha(0.75), .truncate = true });
         ui.end(c);
     }
 }

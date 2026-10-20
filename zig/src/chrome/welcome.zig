@@ -139,8 +139,18 @@ fn found(c: *ui.Context, p: *const Palette, s: *importing.Session) void {
     ui.column(c, .{ .opacity = if (enabled) 1 else 0.5 });
     if (big(c, p, if (s.bringing) "Bringing…" else "Bring them in", true) and enabled) importing.bringAll(s);
     ui.end(c);
-    if (s.bringing) ring.ring(c, 10);
-    if (s.welcome_said) |said| ui.text(c, said, .{ .size = 13, .color = p.muted });
+    const bring_a = motion.quickTo(c, panel_id, 23, if (s.bringing) 1 else 0);
+    if (bring_a > 0.001) {
+        ui.column(c, .{ .opacity = bring_a });
+        ring.ring(c, 10);
+        ui.end(c);
+    }
+    const said_a = motion.quickTo(c, panel_id, 20, if (s.welcome_said != null) 1 else 0);
+    if (s.welcome_said) |said| if (said_a > 0.001) {
+        ui.column(c, .{ .opacity = said_a });
+        ui.text(c, said, .{ .size = 13, .color = p.muted });
+        ui.end(c);
+    };
 }
 
 /// `Choice`: what it is, a word about it, and its switch.
@@ -234,19 +244,25 @@ fn linksPage(b: *Browser, c: *ui.Context, p: *const Palette) void {
         break :blk v;
     };
     ui.row(c, .{ .gap = 12, .align_items = .center });
-    if (is_default) {
-        ui.row(c, .{ .gap = 8, .align_items = .center });
+    const def_a = motion.quickTo(c, panel_id, 21, if (is_default) 1 else 0);
+    const ask_a = motion.quickTo(c, panel_id, 22, if (!is_default) 1 else 0);
+    if (def_a > 0.001) {
+        ui.row(c, .{ .gap = 8, .align_items = .center, .absolute = !is_default, .opacity = def_a });
         ui.icon(c, "checkmark", .{ .size = 11, .weight = .medium, .color = p.ink });
         ui.text(c, app_name ++ " is the default browser", .{ .size = 13, .color = p.ink });
         ui.end(c);
-    } else {
-        if (big(c, p, "Make " ++ app_name ++ " the default", true)) {
+    }
+    if (ask_a > 0.001) {
+        ui.row(c, .{ .gap = 12, .align_items = .center, .absolute = is_default, .opacity = ask_a });
+        if (big(c, p, "Make " ++ app_name ++ " the default", true) and !is_default) {
             s.asked = true;
-            const a = std.heap.c_allocator.create(Asked) catch return ui.end(c);
-            a.* = .{ .kea = b.kea, .window = b.record_id };
-            links.becomeDefault(a, answered);
+            if (std.heap.c_allocator.create(Asked)) |a| {
+                a.* = .{ .kea = b.kea, .window = b.record_id };
+                links.becomeDefault(a, answered);
+            } else |_| {}
         }
         if (s.asked) ui.text(c, "macOS asks in its own dialog", .{ .size = 13, .color = p.muted });
+        ui.end(c);
     }
     ui.end(c);
 
@@ -285,7 +301,10 @@ fn foot(b: *Browser, c: *ui.Context, p: *const Palette) void {
     ui.row(c, .{ .gap = 14, .width = .fill, .max_width = 520, .align_items = .center });
     defer ui.end(c);
     ui.row(c, .{ .gap = 6 });
-    for (0..pages) |n| _ = c.leaf(.{ .width = .{ .px = 6 }, .height = .{ .px = 6 }, .radius = 3, .background = if (n == s.page) p.sunset else p.faint.alpha(0.6) }, .none, null);
+    for (0..pages) |n| {
+        const lit = motion.quickTo(c, panel_id, @intCast(10 + n), if (n == s.page) 1 else 0);
+        _ = c.leaf(.{ .width = .{ .px = 6 }, .height = .{ .px = 6 }, .radius = 3, .background = p.faint.alpha(0.6).mix(p.sunset, lit) }, .none, null);
+    }
     ui.end(c);
     ui.spacer(c);
     if (s.page > 0 and plain(c, p, "Back")) {

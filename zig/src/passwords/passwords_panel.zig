@@ -229,12 +229,16 @@ fn account(b: *Browser, c: *ui.Context, p: *const Palette, k: Kept) Act {
         ui.text(c, "••••••••••", .{ .size = 10, .mono = true, .color = p.muted });
     ui.spacer(c);
     _ = c.leaf(.{ .min_width = 8, .width = .{ .px = 8 } }, .none, null);
-    if (!it.hovered and shown == null) return .none;
+    const active = it.hovered or shown != null;
+    const a = motion.quickTo(c, it.id, 1, if (active) 1 else 0);
+    if (a <= 0.001) return .none;
+    ui.row(c, .{ .gap = 10, .align_items = .center, .opacity = a });
+    defer ui.end(c);
     var act: Act = .none;
-    if (plate.quick(c, p, if (shown != null) "Hide" else "Show", null).clicked)
+    if (plate.quick(c, p, if (shown != null) "Hide" else "Show", null).clicked and active)
         act = if (shown != null) .hide else .{ .show = k };
-    if (plate.quick(c, p, "Copy", null).clicked) act = .{ .copy = k };
-    if (plate.quick(c, p, "Remove", p.red.alpha(0.75)).clicked) act = .{ .forget = k };
+    if (plate.quick(c, p, "Copy", null).clicked and active) act = .{ .copy = k };
+    if (plate.quick(c, p, "Remove", p.red.alpha(0.75)).clicked and active) act = .{ .forget = k };
     return act;
 }
 

@@ -49,13 +49,30 @@ pub fn door(b: *Browser, c: *ui.Context, p: *const Palette, comptime salt: []con
     const h = motion.quickTo(c, it.id, 0, if (it.hovered) 1 else 0);
     c.node(i).style.background = p.hover.alpha(h);
     ui.column(c, .{ .width = px(12), .height = px(12), .align_items = .center, .justify = .center });
-    if (!showing) {
+    const a0 = motion.quickTo(c, it.id, 1, if (!showing) 1 else 0);
+    const a1 = motion.quickTo(c, it.id, 2, if (showing and done) 1 else 0);
+    const a2 = motion.quickTo(c, it.id, 3, if (showing and !done and f.fraction != null) 1 else 0);
+    const a3 = motion.quickTo(c, it.id, 4, if (showing and !done and f.fraction == null) 1 else 0);
+    if (a0 > 0.001) {
+        ui.column(c, .{ .absolute = true, .width = px(12), .height = px(12), .align_items = .center, .justify = .center, .opacity = a0 });
         ui.icon(c, "arrow.down.circle", .{ .size = 12, .weight = .medium, .color = p.muted.mix(p.ink.alpha(0.7), h) });
-    } else if (done) {
+        ui.end(c);
+    }
+    if (a1 > 0.001) {
+        ui.column(c, .{ .absolute = true, .width = px(12), .height = px(12), .align_items = .center, .justify = .center, .opacity = a1 });
         ui.icon(c, "arrow.down", .{ .size = 10, .weight = .semibold, .color = p.ink.alpha(0.75) });
-    } else if (f.fraction) |fraction| {
-        ring.progressArc(c, 12, @floatCast(fraction));
-    } else ring.ring(c, 12);
+        ui.end(c);
+    }
+    if (a2 > 0.001) {
+        ui.column(c, .{ .absolute = true, .width = px(12), .height = px(12), .align_items = .center, .justify = .center, .opacity = a2 });
+        ring.progressArc(c, 12, @floatCast(f.fraction orelse 1));
+        ui.end(c);
+    }
+    if (a3 > 0.001) {
+        ui.column(c, .{ .absolute = true, .width = px(12), .height = px(12), .align_items = .center, .justify = .center, .opacity = a3 });
+        ring.ring(c, 12);
+        ui.end(c);
+    }
     ui.end(c);
     if (it.clicked and shown) sheet.show(b, .hoarding);
 }

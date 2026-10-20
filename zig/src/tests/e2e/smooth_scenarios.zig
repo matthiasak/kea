@@ -477,7 +477,7 @@ fn s12LoadingRing(_: *Harness, b: *app.Browser, s: *ui.Surface, fl: *ui.FrameLog
     for (0..3) |iter| {
         const tab = b.open("kea-test://site/slow", .{ .foreground = true });
         b.redraw();
-        smooth.waitUntilSettled(s, 0.85);
+        smooth.waitUntilSettled(s, 1.2);
 
         const t0 = ui.clock.now();
         const m0 = fl.mark();
@@ -489,7 +489,7 @@ fn s12LoadingRing(_: *Harness, b: *app.Browser, s: *ui.Surface, fl: *ui.FrameLog
         const fps = @as(f64, @floatFromInt(m1 - m0)) / elapsed;
         b.close(tab);
         b.redraw();
-        smooth.waitUntilSettled(s, 0.3);
+        smooth.waitUntilSettled(s, 0.8);
         spans[iter] = .{ .start = m0, .end = m1, .extra = .{ .fps = fps } };
     }
     return spans;

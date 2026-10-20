@@ -21,6 +21,7 @@ pub const runners = [_]*const fn (std.mem.Allocator) anyerror!Metric{
     s09Shortcuts,
     s10Downloads,
     s11Switcher,
+    s12ColdIcons,
 };
 
 // Scenario 1: tabs hover-sweep and edge drag, in sidebar and strip (200 tabs).
@@ -424,4 +425,43 @@ fn s11Switcher(gpa: std.mem.Allocator) !Metric {
         samples[i] = h.stepFrame();
     }
     return summarize("11. Ctrl+Tab switcher (120 candidates)", false, cold, &samples);
+}
+
+// Scenario 12: cold icons (200 distinct hosts adopted via Favicons.adopt).
+fn s12ColdIcons(gpa: std.mem.Allocator) !Metric {
+    var h: Harness = undefined;
+    try h.init(gpa, .{ .sidebar = true });
+    defer h.deinit();
+    seed.seedColdIcons200(h.f.browser);
+
+    const cold = h.stepFrame();
+    const t = &h.f.tester;
+    // Drain budgeted icon decodes across the scroll range before steady-state sampling.
+    for (0..36) |_| {
+        t.ctx.input.mouse = .{ .x = 110.0, .y = 300.0 };
+        _ = t.ctx.applyScroll(-120.0);
+        _ = h.stepFrame();
+    }
+    for (0..36) |_| {
+        t.ctx.input.mouse = .{ .x = 110.0, .y = 300.0 };
+        _ = t.ctx.applyScroll(120.0);
+        _ = h.stepFrame();
+    }
+    h.f.tester.settle(0.6);
+    h.warmup(4);
+
+    var samples: [steady_steps]Sample = undefined;
+    for (0..40) |i| {
+        const y: f32 = 80.0 + @as(f32, @floatFromInt(i % 20)) * 32.0;
+        t.ctx.input.mouse = .{ .x = 110.0, .y = y };
+        t.ctx.updateHot();
+        samples[i] = h.stepFrame();
+    }
+    for (0..40) |i| {
+        t.ctx.input.mouse = .{ .x = 110.0, .y = 300.0 };
+        _ = t.ctx.applyScroll(if (i < 20) -120.0 else 120.0);
+        t.ctx.updateHot();
+        samples[40 + i] = h.stepFrame();
+    }
+    return summarize("12. Cold icons (200 distinct hosts)", false, cold, &samples);
 }

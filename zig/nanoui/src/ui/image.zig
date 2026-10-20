@@ -123,6 +123,34 @@ pub fn decodeFit(gpa: std.mem.Allocator, bytes: []const u8, max_side: u32) !Fitt
     }
     const orig_w: u32 = if (width > 0) @intCast(width) else 0;
     const orig_h: u32 = if (height > 0) @intCast(height) else 0;
+    const orig_longest: u32 = @max(orig_w, orig_h);
+    if (orig_longest > 0 and orig_longest <= 256) {
+        const img = CGImageSourceCreateImageAtIndex(src, 0, null) orelse return error.NotImage;
+        defer CGImageRelease(img);
+        const iw = CGImageGetWidth(img);
+        const ih = CGImageGetHeight(img);
+        if (iw == 0 or ih == 0) return error.NotImage;
+        const longest: u32 = @intCast(@max(iw, ih));
+        const side = @min(max_side, longest);
+        const w: usize = @max(1, @as(usize, @intFromFloat(@round(@as(f64, @floatFromInt(iw)) * @as(f64, @floatFromInt(side)) / @as(f64, @floatFromInt(longest))))));
+        const h: usize = @max(1, @as(usize, @intFromFloat(@round(@as(f64, @floatFromInt(ih)) * @as(f64, @floatFromInt(side)) / @as(f64, @floatFromInt(longest))))));
+        const out = try gpa.alloc(u8, w * h * 4);
+        errdefer gpa.free(out);
+        @memset(out, 0);
+        const space = cf.CGColorSpaceCreateWithName(cf.kCGColorSpaceSRGB) orelse return error.ColorSpace;
+        defer cf.CGColorSpaceRelease(space);
+        const ctx = cf.CGBitmapContextCreate(out.ptr, w, h, 8, w * 4, space, bgra_premultiplied) orelse return error.BitmapContext;
+        defer cf.CGContextRelease(ctx);
+        CGContextSetInterpolationQuality(ctx, 3);
+        CGContextDrawImage(ctx, .{ .origin = .{ .x = 0, .y = 0 }, .size = .{ .width = @floatFromInt(w), .height = @floatFromInt(h) } }, img);
+        return .{
+            .width = @intCast(iw),
+            .height = @intCast(ih),
+            .w = @intCast(w),
+            .h = @intCast(h),
+            .bgra = out,
+        };
+    }
     const side: i32 = @intCast(@min(max_side, if (orig_w > 0 and orig_h > 0) @max(orig_w, orig_h) else max_side));
     const max_n = CFNumberCreate(null, 3, &side) orelse return error.Data;
     defer cf.CFRelease(max_n);

@@ -156,11 +156,10 @@ fn leavePins(b: *Browser, c: *ui.Context, p: *const Palette) void {
     tab_leaving.pruneIn(&st.pin_snaps, st.pin_seen.items, b.gpa);
     var k: usize = 0;
     for (st.pin_leaving.items) |*l| {
-        const v = motion.quickTo(c, pinId(l.id), 0x6c65_6176, 0);
-        if (v <= 0.001) {
+        const v = presence.presence(c, pinId(l.id), false, motion.settle, null) orelse {
             l.snap.deinit(b.gpa);
             continue;
-        }
+        };
         st.pin_leaving.items[k] = l.*;
         k += 1;
         const item = &st.pin_leaving.items[k - 1];
@@ -196,11 +195,10 @@ fn pinSquare(b: *Browser, c: *ui.Context, p: *const Palette, t: *Tab, live: bool
     };
     var v: f32 = 1;
     if (interactive) {
-        _ = ui.tween(c, pinId(t.id), 0x6c65_6176, 1, 0, .linear);
         const known = for (st.pin_last.items) |s| {
             if (s.id == t.id) break true;
         } else false;
-        v = presence.presenceFrom(c, pinId(t.id), if (!fresh and !known) 0 else 1, true, motion.settle, null) orelse 1;
+        v = presence.presenceFrom(c, pinId(t.id), if (!fresh and !known) 0 else 1, true, motion.bounce, null) orelse 1;
         st.pin_seen.append(b.gpa, .{ .id = t.id, .x = x, .y = y, .w = cell.w, .h = cell.h }) catch {};
     }
     const i = c.open(.{
@@ -213,13 +211,17 @@ fn pinSquare(b: *Browser, c: *ui.Context, p: *const Palette, t: *Tab, live: bool
         .justify = .center,
         .shadow = shadow,
         .opacity = std.math.clamp(v, 0, 1),
-        .scale = 0.8 + 0.2 * v,
+        .scale = 0.5 + 0.5 * v,
+        .motion_blur = true,
         .control = true,
     }, null);
     defer c.end();
     const it = c.interact(i, .{});
     // Salts 0 and 1 are the square's place.
-    const hover = motion.quickTo(c, it.id, 2, if (it.hovered) 1 else 0);
+    const hover = motion.quickTo(c, it.id, 3, if (it.hovered) 1 else 0);
+    const lift = if (c.reduce_motion or !interactive) 0 else motion.liftTo(c, it.id, 6, if (it.hovered) 1 else 0);
+    const press = if (c.reduce_motion or !interactive) 0 else motion.liftTo(c, it.id, 7, if (it.pressed) 1 else 0);
+    c.node(i).style.scale *= 1 + 0.06 * lift - 0.08 * press;
     if (live and interactive) st.live(it.id, p.side_pin_live, radius);
     // The live square's ground is the sliding one (`matchedGeometryEffect`),
     // unless none was drawn this frame.
@@ -239,7 +241,8 @@ fn pinSquare(b: *Browser, c: *ui.Context, p: *const Palette, t: *Tab, live: bool
     } else if (b.prefs.glyph == .icons and iconOf(b, t) != null) {
         mark.mark(c, p, iconOf(b, t), t.pin orelse "", scale * 16 / 34, t.asleep());
     } else {
-        const ink = if (live) p.ink else p.muted;
+        const lv = std.math.clamp(motion.liveTo(c, it.id, 2, if (live) 1 else 0), 0, 1);
+        const ink = p.muted.mix(p.ink, lv);
         ui.text(c, t.pin orelse "", .{ .size = scale * 12 / 34, .weight = .medium, .color = ink.alpha(if (t.asleep()) 0.45 else 1) });
     }
     c.end();
@@ -287,8 +290,7 @@ fn carry(b: *Browser, c: *ui.Context, t: *Tab, it: ui.Interaction, index: usize,
 
 fn iconOf(b: *Browser, t: *Tab) ?mark.Icon {
     if (t.isBlank()) return null;
-    const ic = b.kea.favicons.icon(t.url()) orelse return null;
-    return .{ .key = ic.key, .png = ic.png };
+    return b.kea.favicons.icon(t.url());
 }
 
 /// `PinField`: the letter typed in the square itself, one character worn

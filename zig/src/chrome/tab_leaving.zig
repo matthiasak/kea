@@ -77,14 +77,15 @@ pub fn draw(b: *Browser, c: *ui.Context, p: *const Palette, s: *const Snap, x: f
     var style: ui.Style = .{
         .absolute = true,
         .direction = .row,
-        .offset = .{ .x = x, .y = (metrics.strip - 28) / 2 },
+        .offset = .{ .x = x, .y = (metrics.strip - 28) / 2 + 4 * (1 - v) },
         .width = px(w),
         .height = px(28),
         .radius = 9,
         .align_items = .center,
         .opacity = o,
-        .scale = 0.92 + 0.08 * v,
+        .scale = 0.75 + 0.25 * v,
         .scale_anchor = .{ .x = 0, .y = 0.5 },
+        .group = true,
     };
     const compact = !s.pinned and !tab_width.titled(each);
     if (s.pinned) {
@@ -161,20 +162,22 @@ pub fn leave(b: *Browser, c: *ui.Context, p: *const Palette, last: anytype, each
 
 pub fn drawSideRow(b: *Browser, c: *ui.Context, p: *const Palette, s: *const Snap, x: f32, y: f32, w: f32, v: f32) void {
     const o = std.math.clamp(v, 0, 1);
+    const shift_x: f32 = if (b.prefs.side_position == .right) 14 * (1 - v) else -14 * (1 - v);
     _ = c.open(.{
         .absolute = true,
         .direction = .row,
         .gap = 8,
         .padding = .{ .left = 10, .right = 10 },
-        .offset = .{ .x = x, .y = y },
+        .offset = .{ .x = x + shift_x, .y = y },
         .width = px(w),
         .height = px(28),
         .radius = 9,
         .align_items = .center,
         .clip = true,
         .opacity = o,
-        .scale = 0.94 + 0.06 * v,
+        .scale = 0.85 + 0.15 * v,
         .scale_anchor = .{ .x = 0, .y = 0.5 },
+        .group = true,
     }, null);
     defer c.end();
     const icon: ?mark.Icon = if (b.prefs.glyph == .icons) b.kea.favicons.icon(s.url()) else null;
@@ -199,7 +202,8 @@ pub fn drawPin(b: *Browser, c: *ui.Context, p: *const Palette, s: *const Snap, x
         .align_items = .center,
         .justify = .center,
         .opacity = o,
-        .scale = 0.85 + 0.15 * v,
+        .scale = 0.6 + 0.4 * v,
+        .group = true,
     }, null);
     defer c.end();
     const glyph = scale * 16 / 34;

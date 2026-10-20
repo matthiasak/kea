@@ -91,7 +91,7 @@ fn one(b: *Browser, c: *ui.Context, p: *const Palette, comptime kind: Kind) void
     const on = isOn(b, kind);
     const was = b.sheet.drawn.contains(kind);
     if (on and !was) fresh(b, kind);
-    const t = presence.presence(c, sheet_id +% @intFromEnum(kind), on, motion.settle, null) orelse {
+    const t = presence.presence(c, sheet_id +% @intFromEnum(kind), on, motion.bounce, motion.settle) orelse {
         if (was) fresh(b, kind);
         b.sheet.drawn.remove(kind);
         return;
@@ -100,10 +100,10 @@ fn one(b: *Browser, c: *ui.Context, p: *const Palette, comptime kind: Kind) void
     const o = std.math.clamp(t, 0, 1);
     // Keyed by kind: another sheet arriving under it leaves its ids (its
     // focused field) where they were.
-    _ = c.open(.{ .absolute = true, .width = .fill, .height = .fill, .align_items = .center, .justify = .center, .opacity = o }, "kea.sheet." ++ @tagName(kind));
+    _ = c.open(.{ .absolute = true, .width = .fill, .height = .fill, .align_items = .center, .justify = .center }, "kea.sheet." ++ @tagName(kind));
     defer c.end();
-    const floor = c.leaf(.{ .absolute = true, .width = .fill, .height = .fill, .background = ui.Color.black.alpha(0.10) }, .none, "kea.sheet.floor");
-    const box = c.open(.{ .scale = 0.97 + 0.03 * t }, "kea.sheet.panel");
+    const floor = c.leaf(.{ .absolute = true, .width = .fill, .height = .fill, .background = ui.Color.black.alpha(0.10), .opacity = o }, .none, "kea.sheet.floor");
+    const box = c.open(.{ .scale = 0.9 + 0.1 * t, .offset = .{ .y = 24 * (1 - t) }, .opacity = o, .group = true, .motion_blur = true }, "kea.sheet.panel");
     defer c.end();
     // Leaving, it is only a picture: the window under it has the pointer.
     if (on) {

@@ -7,13 +7,16 @@
 const std = @import("std");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;
-const cg = @import("../sys/cg.zig");
 const disk = @import("../data/disk.zig");
 const Parts = @import("../data/url.zig").Parts;
-const Icon = @import("../chrome/mark.zig").Icon;
+const mark = @import("../chrome/mark.zig");
+const Icon = mark.Icon;
+pub const Mono = mark.Mono;
+const decode = @import("favicons_decode.zig");
+pub const square = decode.square;
+pub const kinds = decode.kinds;
 const Kea = @import("../app/kea.zig").Kea;
 const Tab = @import("tab.zig").Tab;
-
 const probe = @embedFile("js/favicons.js");
 /// `IconRelay`: a page that changes its icon says so, at most every 2 s, top page only.
 pub const relay_script = @embedFile("js/icon_relay.js");
@@ -25,9 +28,10 @@ const Set = std.StringHashMapUnmanaged(void);
 
 /// An icon in memory: `name` is its `ui.image` key, new for each picture
 /// so a changed icon is decoded again.
-const Kept = struct { png: []u8, name: []u8 };
+pub const Kept = struct { png: []u8, name: []u8, mono: Mono = .none };
 
 pub const Favicons = struct {
+    pub const square = decode.square;
     /// Null once the app's state is gone; in-flight fetches then free this.
     kea: ?*Kea,
     folder: []u8,
@@ -66,9 +70,18 @@ pub const Favicons = struct {
         if (std.mem.startsWith(u8, page, "data:") or std.mem.startsWith(u8, page, "about:")) return null;
         var buf: [300]u8 = undefined;
         const k = self.cached(site(&buf, page) orelse return null) orelse return null;
-        return .{ .key = k.name, .png = k.png };
+        return .{ .key = k.name, .png = k.png, .mono = k.mono };
     }
 
+    pub fn iconEntry(self: *Favicons, page: []const u8) ?Kept {
+        if (std.mem.startsWith(u8, page, "data:") or std.mem.startsWith(u8, page, "about:")) return null;
+        var buf: [300]u8 = undefined;
+        return self.cached(site(&buf, page) orelse return null);
+    }
+
+    pub fn monoOf(self: *Favicons, page: []const u8) Mono {
+        return if (self.iconEntry(page)) |k| k.mono else .none;
+    }
     /// What is already known, nothing fetched: in the dark, the dark variant
     /// when there is one; `www.` and without count as one site.
     pub fn cached(self: *Favicons, host: []const u8) ?Kept {
@@ -97,15 +110,33 @@ pub const Favicons = struct {
             putSet(&self.absent, key);
             return null;
         };
+        if (!decode.validPng(png)) {
+            a.free(png);
+            putSet(&self.absent, key);
+            return null;
+        }
         return self.remember(key, png) orelse {
             a.free(png);
             return null;
         };
     }
 
-    fn remember(self: *Favicons, key: []const u8, png: []u8) ?Kept {
+    pub fn remember(self: *Favicons, key: []const u8, png: []u8) ?Kept {
+        if (self.memory.getPtr(key)) |old| {
+            if (std.mem.eql(u8, old.png, png)) {
+                a.free(png);
+                if (self.absent.fetchRemove(key)) |kv| a.free(kv.key);
+                return old.*;
+            }
+        }
+        const mono = decode.analyzeMono(png);
+        const suffix = switch (mono) {
+            .none => "",
+            .dark => "@d",
+            .light => "@l",
+        };
         self.serial += 1;
-        const name = std.fmt.allocPrint(a, "icon:{s}#{d}", .{ key, self.serial }) catch return null;
+        const name = std.fmt.allocPrint(a, "icon:{s}#{d}{s}", .{ key, self.serial, suffix }) catch return null;
         const gop = self.memory.getOrPut(a, key) catch {
             a.free(name);
             return null;
@@ -118,7 +149,7 @@ pub const Favicons = struct {
             a.free(name);
             return null;
         };
-        gop.value_ptr.* = .{ .png = png, .name = name };
+        gop.value_ptr.* = .{ .png = png, .name = name, .mono = mono };
         if (self.absent.fetchRemove(key)) |kv| a.free(kv.key);
         return gop.value_ptr.*;
     }
@@ -152,6 +183,27 @@ pub const Favicons = struct {
         const d = std.mem.eql(u8, best, "NSAppearanceNameDarkAqua");
         self.dark_cache = d;
         return d;
+    }
+
+    /// Appearance changed: updates `dark_cache`, clears `missing`, refetches
+    /// every non-asleep tab with a web view, and notifies windows.
+    pub fn setDark(self: *Favicons, is_dark: bool) void {
+        const prev = self.dark_cache orelse {
+            self.dark_cache = is_dark;
+            return;
+        };
+        if (prev == is_dark) return;
+        self.dark_cache = is_dark;
+        freeSet(&self.missing);
+        self.missing = .empty;
+        if (self.kea) |k| {
+            for (k.browsers.items) |b| {
+                for (b.tabs.items) |t| {
+                    if (t.web != null and !t.loading and !t.asleep()) self.fetch(t, false);
+                }
+            }
+            k.iconsChanged();
+        }
     }
 
     /// Asks the page which icon it wants to be known by, fetches it and keeps
@@ -498,79 +550,9 @@ fn landed(job: *Job) void {
     removeSet(&f.busy, job.host);
     const png = job.png orelse return putSet(&f.missing, job.host);
     job.png = null;
-    if (f.remember(job.key, png) == null) return a.free(png);
-    if (!job.shy) f.keep(job.key, png);
+    const kept = f.remember(job.key, png) orelse return a.free(png);
+    if (!job.shy) f.keep(job.key, kept.png);
     kea.iconsChanged();
-}
-
-// MARK: decoding
-
-/// The kinds of picture a site's icon may be; anything else isn't opened.
-const kinds = [_][]const u8{ "public.png", "com.microsoft.ico", "public.jpeg", "com.compuserve.gif", "org.webmproject.webp", "com.microsoft.bmp" };
-
-fn number(n: anytype) objc.Object {
-    return switch (@TypeOf(n)) {
-        bool => objc.msg(objc.Object, objc.class("NSNumber"), "numberWithBool:", .{n}),
-        else => objc.msg(objc.Object, objc.class("NSNumber"), "numberWithInteger:", .{@as(objc.NSInteger, n)}),
-    };
-}
-
-fn dict(keys: []const cg.CFStringRef, values: []const objc.Object) objc.Object {
-    return objc.msg(objc.Object, objc.class("NSDictionary"), "dictionaryWithObjects:forKeys:count:", .{ values.ptr, keys.ptr, keys.len });
-}
-
-fn intValue(props: objc.Object, key: cg.CFStringRef) usize {
-    const v = objc.msg(?objc.Object, props, "objectForKey:", .{key}) orelse return 0;
-    return @intCast(@max(0, objc.msg(objc.NSInteger, v, "integerValue", .{})));
-}
-
-/// One of the allowed kinds, at most 4096 px a side, drawn into a 64 pt
-/// square (128 px) as PNG bytes on `gpa`; the frame nearest 64 px from
-/// above for an .ico of many. Any thread.
-pub fn square(gpa: std.mem.Allocator, bytes: []const u8) ?[]u8 {
-    const pool = objc.Pool.push();
-    defer pool.pop();
-    const data = cg.CFDataCreate(null, bytes.ptr, @intCast(bytes.len)) orelse return null;
-    defer cg.CFRelease(data);
-    const src = cg.CGImageSourceCreateWithData(data, dict(&.{cg.kCGImageSourceShouldCache}, &.{number(false)})) orelse return null;
-    defer cg.CFRelease(src);
-    const kind = objc.fromNSString(@ptrCast(@constCast(cg.CGImageSourceGetType(src) orelse return null)));
-    for (kinds) |k| {
-        if (std.mem.eql(u8, k, kind)) break;
-    } else return null;
-    var best: usize = 0;
-    var best_side: usize = 0;
-    for (0..@min(cg.CGImageSourceGetCount(src), 32)) |i| {
-        const props = cg.CGImageSourceCopyPropertiesAtIndex(src, i, null) orelse continue;
-        defer objc.release(props);
-        const w = intValue(props, cg.kCGImagePropertyPixelWidth);
-        const h = intValue(props, cg.kCGImagePropertyPixelHeight);
-        if (w == 0 or h == 0 or w > 4096 or h > 4096) continue;
-        const side = @max(w, h);
-        if (best_side == 0 or (side >= 64 and (best_side < 64 or side < best_side)) or (best_side < 64 and side > best_side)) {
-            best = i;
-            best_side = side;
-        }
-    }
-    if (best_side == 0) return null;
-    const decoded = cg.CGImageSourceCreateThumbnailAtIndex(src, best, dict(
-        &.{ cg.kCGImageSourceCreateThumbnailFromImageAlways, cg.kCGImageSourceThumbnailMaxPixelSize, cg.kCGImageSourceCreateThumbnailWithTransform },
-        &.{ number(true), number(128), number(true) },
-    )) orelse return null;
-    defer cg.CGImageRelease(decoded);
-    const w: f64 = @floatFromInt(cg.CGImageGetWidth(decoded));
-    const h: f64 = @floatFromInt(cg.CGImageGetHeight(decoded));
-    const side = 64;
-    const bitmap = cg.Bitmap.init(gpa, side, side, 2) catch return null;
-    defer bitmap.deinit(gpa);
-    cg.CGContextSetInterpolationQuality(bitmap.ctx, cg.interpolation_high);
-    const scale = @min(side / w, side / h);
-    // Device-pixel sizing for each drawn mark happens in `Images.get`.
-    cg.CGContextDrawImage(bitmap.ctx, .{
-        .origin = .{ .x = (side - w * scale) / 2, .y = (side - h * scale) / 2 },
-        .size = .{ .width = w * scale, .height = h * scale },
-    }, decoded);
-    return bitmap.png(gpa) catch null;
 }
 
 test {

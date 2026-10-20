@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Headless Swift Kea reference capture (run from /tmp/sb)."""
-import json, os, shutil, sqlite3, struct, subprocess, sys, time, urllib.parse, uuid
+import json, os, shutil, sqlite3, struct, subprocess, sys, time, urllib.parse, uuid, zlib
 from pathlib import Path
 MAIN_REPO = "/Users/keas/code/search-browser"
 if os.path.realpath(os.getcwd()) == os.path.realpath(MAIN_REPO) and os.environ.get("KEA_REF_ALLOW_CWD") != "1":
@@ -81,13 +81,8 @@ EXT_MANIFEST = json.dumps({"manifest_version": 3, "name": "Kea Fixture", "versio
 EXT_POPUP = "<!doctype html><title>Fixture Popup</title><body>The fixture's popup</body>"
 
 def read_reduce_motion():
-    r = subprocess.run(
-        ["defaults", "read", "com.apple.universalaccess", "reduceMotion"],
-        capture_output=True, text=True,
-    )
-    val = r.stdout.strip().lower()
-    return 1 if val in ("1", "true", "yes") else 0
-
+    r = subprocess.run(["defaults", "read", "com.apple.universalaccess", "reduceMotion"], capture_output=True, text=True)
+    return 1 if r.stdout.strip().lower() in ("1", "true", "yes") else 0
 
 def png_dimensions(path):
     try:
@@ -114,36 +109,10 @@ def seed_support():
     chat_id = str(uuid.uuid4()).upper()
     turn_id = str(uuid.uuid4()).upper()
     now_apple = time.time() - 978307200.0
-    chat_obj = {
-        "id": chat_id,
-        "title": "Kea facts",
-        "touched": now_apple,
-        "starred": False,
-        "task": False,
-        "pageHidden": False,
-        "pins": [],
-        "turns": [{
-            "id": turn_id,
-            "question": "Tell me about the kea",
-            "answer": CHAT_ANSWER,
-            "done": True,
-            "strays": [],
-            "place": "on this Mac · Ollama · llama3.2",
-        }],
-    }
-    index_obj = [{
-        "id": chat_id,
-        "title": "Kea facts",
-        "touched": now_apple,
-        "starred": False,
-        "task": False,
-        "turns": 1,
-    }]
-    with open(os.path.join(chats_dir, f"{chat_id}.json"), "w") as f:
-        json.dump(chat_obj, f)
-    with open(os.path.join(chats_dir, "index.json"), "w") as f:
-        json.dump(index_obj, f)
-
+    chat_obj = {"id": chat_id, "title": "Kea facts", "touched": now_apple, "starred": False, "task": False, "pageHidden": False, "pins": [], "turns": [{"id": turn_id, "question": "Tell me about the kea", "answer": CHAT_ANSWER, "done": True, "strays": [], "place": "on this Mac · Ollama · llama3.2"}]}
+    index_obj = [{"id": chat_id, "title": "Kea facts", "touched": now_apple, "starred": False, "task": False, "turns": 1}]
+    with open(os.path.join(chats_dir, f"{chat_id}.json"), "w") as f: json.dump(chat_obj, f)
+    with open(os.path.join(chats_dir, "index.json"), "w") as f: json.dump(index_obj, f)
     chrome_dir = os.path.join(sv.SUPPORT, "Import/Google/Chrome/Default")
     os.makedirs(chrome_dir, exist_ok=True)
     with open(os.path.join(chrome_dir, "Bookmarks"), "w") as f:
@@ -186,6 +155,21 @@ def seed_support():
     with open(os.path.join(ext_dir, "popup.html"), "w") as f:
         f.write(EXT_POPUP)
 
+    icons_dir = os.path.join(sv.SUPPORT, "icons")
+    os.makedirs(icons_dir, exist_ok=True)
+    icon_src = Path("zig/src/tests/fixtures/icon.png")
+    if icon_src.exists():
+        shutil.copyfile(icon_src, os.path.join(icons_dir, "icon-colour.test.png"))
+
+    def write_rgba_png(path, side, inset, r, g, b):
+        raw = b"".join(b"\x00" + b"".join((bytes((r, g, b, 255)) if (inset <= x < side - inset and inset <= y < side - inset) else b"\x00\x00\x00\x00") for x in range(side)) for y in range(side))
+        chunk = lambda tag, d: struct.pack(">I", len(d)) + tag + d + struct.pack(">I", zlib.crc32(tag + d) & 0xFFFFFFFF)
+        open(path, "wb").write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", side, side, 8, 6, 0, 0, 0)) + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+
+    write_rgba_png(os.path.join(icons_dir, "icon-black.test.png"), 128, 24, 0, 0, 0)
+    write_rgba_png(os.path.join(icons_dir, "icon-white.test.png"), 128, 24, 255, 255, 255)
+    write_rgba_png(os.path.join(icons_dir, "icon-16.test.png"), 128, 0, 40, 140, 220)
+
 
 def collect_holes():
     holes = []
@@ -211,56 +195,28 @@ def collect_holes():
 
 
 def write_sidecar(out_dir, name, look, pixels, points, lights, cards, holes, extra=None):
-    data = {
-        "pixels": pixels,
-        "points": points,
-        "lights": lights,
-        "cards": bool(cards),
-        "holes": holes,
-    }
-    if extra:
-        data.update(extra)
-    sidecar = os.path.join(out_dir, f"{name}-{look}.json")
-    with open(sidecar, "w") as f:
-        json.dump(data, f, indent=2)
-
+    data = {"pixels": pixels, "points": points, "lights": lights, "cards": bool(cards), "holes": holes}
+    if extra: data.update(extra)
+    with open(os.path.join(out_dir, f"{name}-{look}.json"), "w") as f: json.dump(data, f, indent=2)
 
 def write_standalone_sidecar(out_dir, name, look, png_path):
     px, pt = png_dimensions(png_path)
     write_sidecar(out_dir, name, look, px, pt, [], False, [])
 
-
 def capture_picture(out_dir, name, look, settle=0.8):
-    if settle > 0:
-        time.sleep(settle)
+    if settle > 0: time.sleep(settle)
     png_path = os.path.abspath(os.path.join(out_dir, f"{name}-{look}.png"))
     r = sv.cmd({"do": "picture", "path": png_path, "page": False})
     holes, pr = collect_holes()
     cards = bool(pr.get("sidebar", True)) and not bool(pr.get("folded", False))
-    write_sidecar(
-        out_dir, name, look,
-        r.get("pixels", [2880, 1800]),
-        r.get("points", [1440, 900]),
-        r.get("lights", []),
-        cards,
-        holes,
-    )
+    write_sidecar(out_dir, name, look, r.get("pixels", [2880, 1800]), r.get("points", [1440, 900]), r.get("lights", []), cards, holes)
     print(f"captured {name}-{look}.png")
     return r
 
-
 def open_bg_tabs(want_total):
-    st = sv.sp("state")
-    cur = len(st.get("tabs", []))
+    cur = len(sv.sp("state").get("tabs", []))
     while cur < want_total:
-        idx = cur
-        sv.cmd({
-            "do": "split",
-            "action": "open",
-            "url": f"{sv.BASE}/Tab%20{idx}",
-            "foreground": False,
-            "atEnd": True,
-        })
+        sv.cmd({"do": "split", "action": "open", "url": f"{sv.BASE}/Tab%20{cur}", "foreground": False, "atEnd": True})
         cur += 1
     time.sleep(0.8)
 
@@ -543,6 +499,37 @@ def capture_look(out_dir, look, reduce_motion, errors):
             time.sleep(1.0)
 
         guard("fold", do_fold)
+
+        def do_icons_states():
+            sv.quit()
+            subprocess.run(["defaults", "write", sv.SUITE, "glyph", "-string", "icons"], check=True)
+            subprocess.run(["defaults", "write", sv.SUITE, "sidebar", "-bool", "false"], check=True)
+            seed_support()
+            sv.launch()
+            sv.cmd({"do": "window"})
+            sv.cmd({"do": "resize", "width": 1440, "height": 900, "steps": 1})
+            time.sleep(0.8)
+            hosts = ["icon-colour.test", "icon-black.test", "icon-white.test", "icon-16.test"]
+            tabs = sv.sp("state").get("tabs", [])
+            if tabs:
+                sv.cmd({"do": "go", "id": tabs[0]["id"], "url": f"https://{hosts[0]}/Tab%201"})
+            for idx in range(1, 4):
+                sv.cmd({"do": "split", "action": "open", "url": f"https://{hosts[idx % len(hosts)]}/Tab%20{idx + 1}", "foreground": False, "atEnd": True})
+            capture_picture(out_dir, "p4-strip-icons", look, settle=1.0)
+
+            sv.cmd({"do": "ui", "sidebar": True})
+            for idx in range(4, 8):
+                sv.cmd({"do": "split", "action": "open", "url": f"https://{hosts[(idx - 1) % len(hosts)]}/Tab%20{idx}", "foreground": False, "atEnd": True})
+            tabs = sv.sp("state")["tabs"]
+            for t_item in tabs[1:4]:
+                sv.cmd({"do": "pin", "id": t_item["id"], "listed": False})
+            loose = [t_item for t_item in sv.sp("state")["tabs"] if t_item["id"] not in sv.sp("state")["pins"]]
+            sv.cmd({"do": "group", "id": loose[-1]["id"], "new": True, "name": "Reading"})
+            sv.cmd({"do": "group", "id": loose[-2]["id"], "name": "Reading"})
+            capture_picture(out_dir, "p4-column-pins-icons", look, settle=1.0)
+            subprocess.run(["defaults", "write", sv.SUITE, "glyph", "-string", "letters"], check=True)
+
+        guard("p4-icons", do_icons_states)
 
         if not reduce_motion:
             sv.cmd({"do": "ui", "folded": True, "peek": False})

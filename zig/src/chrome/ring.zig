@@ -9,7 +9,6 @@ const palette = @import("../design/palette.zig");
 const motion = @import("../design/motion.zig");
 
 const turn_seconds: f32 = 0.85;
-const turns: u32 = 51;
 
 const Picture = struct {
     size: f32,
@@ -52,12 +51,11 @@ fn paint(b: cg.Bitmap, p: Picture) void {
     switch (p.kind) {
         .turn => {
             // A circle inset by half its line, stroked to 0.78 and turned
-            // clockwise (y is up here, so the angle falls).
+            // clockwise on the GPU (`Style.spin`).
             const lw: f64 = 1.4;
-            const start = -tau * @as(f64, @floatFromInt(p.step)) / turns;
             cg.CGContextSetLineWidth(b.ctx, lw);
             b.stroke(pal.muted.alpha(0.7));
-            cg.CGContextAddArc(b.ctx, mid, mid, mid - lw / 2, start, start + 0.78 * tau, 0);
+            cg.CGContextAddArc(b.ctx, mid, mid, mid - lw / 2, 0, 0.78 * tau, 0);
             cg.CGContextStrokePath(b.ctx);
         },
         .progress => {
@@ -98,16 +96,11 @@ fn show(c: *ui.Context, p: Picture) void {
     _ = ui.image(c, .{ .key = key, .bytes = bytes, .max_width = p.size, .max_height = p.size, .radius = 0, .scale = p.scale });
 }
 
-/// Which of the 64 turns shows at `time` seconds.
-pub fn turnAt(time: f64) u32 {
-    const f = time / turn_seconds;
-    return @as(u32, @intFromFloat(@floor((f - @floor(f)) * turns))) % turns;
-}
-
-/// `Ring(size:)`: turning once every 0.75 s, a frame asked for each turn.
+/// `Ring(size:)`: turning once every 0.85 s on the GPU.
 pub fn ring(c: *ui.Context, size: f32) void {
-    show(c, .{ .size = size, .scale = c.scale, .dark = c.theme.dark, .kind = .turn, .step = turnAt(c.time) });
-    c.frameIn(turn_seconds / @as(f32, @floatFromInt(turns)));
+    _ = c.open(.{ .width = .{ .px = size }, .height = .{ .px = size }, .spin = 2 * std.math.pi / turn_seconds }, null);
+    defer c.end();
+    show(c, .{ .size = size, .scale = c.scale, .dark = c.theme.dark, .kind = .turn, .step = 0 });
 }
 
 /// The download door's progress: `fraction` done, easing over 0.2 s.
@@ -121,13 +114,10 @@ pub fn windArc(c: *ui.Context, size: f32, fraction: f32) void {
     show(c, .{ .size = size, .scale = c.scale, .dark = c.theme.dark, .kind = .wind, .step = @intFromFloat(@round(std.math.clamp(fraction, 0, 1) * 100)) });
 }
 
-test "ring pictures are PNGs and the turn follows the clock" {
+test "ring pictures are PNGs and the arc has a gap" {
     const t = std.testing;
-    try t.expectEqual(@as(u32, 0), turnAt(0));
-    try t.expectEqual(@as(u32, 5), turnAt(turn_seconds / turns * 5.5));
-    try t.expectEqual(@as(u32, 0), turnAt(turn_seconds * 3 + 0.001));
     for ([_]Picture{
-        .{ .size = 10, .scale = 2, .dark = false, .kind = .turn, .step = 3 },
+        .{ .size = 10, .scale = 2, .dark = false, .kind = .turn, .step = 0 },
         .{ .size = 12, .scale = 2, .dark = true, .kind = .progress, .step = 40 },
     }) |p| {
         const bytes = png(p) orelse return error.NoPicture;

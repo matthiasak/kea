@@ -24,6 +24,8 @@ extern "c" fn CFRelease(cf: *anyopaque) void;
 
 pub const all = [_]ScenarioDef{
     .{ .id = "S14", .name = "Scroll a long page (surface must stay idle)", .run = s14PageScroll },
+    .{ .id = "S15", .name = "Switch tabs x10 (page transition)", .run = s15SwitchTabs },
+    .{ .id = "S16", .name = "Signature tour", .run = s16SignatureTour },
 };
 
 fn sendWebScroll(wv: objc.Object, dy: i32) void {
@@ -74,4 +76,95 @@ fn s14PageScroll(h: *Harness, b: *app.Browser, s: *ui.Surface, fl: *ui.FrameLog)
         .{ .start = m1, .end = m1, .extra = extra },
         .{ .start = m1, .end = m1, .extra = extra },
     };
+}
+
+fn s15SwitchTabs(h: *Harness, b: *app.Browser, s: *ui.Surface, fl: *ui.FrameLog) ![3]SpanMark {
+    b.prefs.set("sidebar", false);
+    const t0 = try web.open(h, b, "kea-test://site/page?title=Switch0");
+    const t1 = try web.open(h, b, "kea-test://site/page?title=Switch1");
+    const t2 = try web.open(h, b, "kea-test://site/page?title=Switch2");
+    const pages = [_]*app.Tab{ t0, t1, t2 };
+    b.select(t0);
+    b.setEditing(false);
+    b.redraw();
+    smooth.waitUntilSettled(s, 0.5);
+
+    var spans: [3]SpanMark = undefined;
+    for (0..3) |iter| {
+        const m0 = fl.mark();
+        for (0..10) |step| {
+            b.select(pages[(step + 1) % pages.len]);
+            b.redraw();
+            smooth.waitLoop(0.3);
+        }
+        smooth.waitUntilSettled(s, 0.4);
+        spans[iter] = .{ .start = m0, .end = fl.mark() };
+    }
+    return spans;
+}
+
+fn s16SignatureTour(h: *Harness, b: *app.Browser, s: *ui.Surface, fl: *ui.FrameLog) ![3]SpanMark {
+    b.prefs.set("sidebar", false);
+    while (b.tabs.items.len < 12) {
+        var buf: [64]u8 = undefined;
+        const url = try std.fmt.bufPrint(&buf, "kea-test://site/page?title=Tour{d}", .{b.tabs.items.len + 1});
+        _ = try web.open(h, b, url);
+    }
+    b.select(b.tabs.items[0]);
+    b.setEditing(false);
+    b.redraw();
+    smooth.waitUntilSettled(s, 0.6);
+
+    var spans: [3]SpanMark = undefined;
+    for (0..3) |iter| {
+        const m0 = fl.mark();
+        // Open and close Settings, History and the omnibox twice each.
+        for (0..2) |_| {
+            app.sheet.toggle(b, .tuning);
+            smooth.waitLoop(0.22);
+            app.sheet.toggle(b, .tuning);
+            smooth.waitLoop(0.22);
+            app.sheet.toggle(b, .recalling);
+            smooth.waitLoop(0.22);
+            app.sheet.toggle(b, .recalling);
+            smooth.waitLoop(0.22);
+            b.edit();
+            b.redraw();
+            smooth.waitLoop(0.22);
+            b.dismiss();
+            b.redraw();
+            smooth.waitLoop(0.22);
+        }
+        // Ctrl+Tab with 12 tabs and release.
+        for (0..4) |_| {
+            b.switchTabs(false);
+            smooth.waitLoop(0.18);
+        }
+        b.commitTabSwitch(null);
+        smooth.waitLoop(0.22);
+        // Open 3 tabs and close them.
+        var opened: [3]*app.Tab = undefined;
+        for (0..3) |i| {
+            var buf: [64]u8 = undefined;
+            const url = try std.fmt.bufPrint(&buf, "kea-test://site/page?title=Extra{d}", .{i + 1});
+            opened[i] = b.open(url, .{ .foreground = true });
+            b.redraw();
+            smooth.waitLoop(0.15);
+        }
+        for (opened) |t| {
+            b.close(t);
+            b.redraw();
+            smooth.waitLoop(0.15);
+        }
+        // Hover-sweep the strip.
+        for (0..24) |step| {
+            const x = 90.0 + @as(f64, @floatFromInt(step)) * 32.0;
+            smooth.mouseMovedTo(s, x, 26.0);
+            smooth.waitLoop(1.0 / 120.0);
+        }
+        smooth.mouseMovedTo(s, 500.0, 300.0);
+        smooth.waitUntilSettled(s, 0.4);
+        spans[iter] = .{ .start = m0, .end = fl.mark() };
+    }
+    return spans;
 }

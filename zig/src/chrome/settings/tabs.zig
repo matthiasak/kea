@@ -7,12 +7,17 @@ const Browser = @import("../../model/browser.zig").Browser;
 const app_name = @import("../../app/kea.zig").app_name;
 const Palette = @import("../../design/palette.zig").Palette;
 const controls = @import("../controls.zig");
+const motion = @import("../../design/motion.zig");
+const disclose = @import("../disclose.zig");
 const plate = @import("../controls_plate.zig");
 const frame = @import("frame.zig");
 
 pub fn view(b: *Browser, c: *ui.Context, p: *const Palette) void {
     tabs(b, c, p);
-    if (!b.prefs.sidebar) toolbar(b, c, p);
+    if (disclose.begin(c, 0x6b65_612e_7462_7330, !b.prefs.sidebar, motion.settle)) {
+        defer disclose.end(c);
+        toolbar(b, c, p);
+    }
 }
 
 /// With the sidebar they are already beside the window's buttons: nothing to move.
@@ -29,7 +34,8 @@ fn tabs(b: *Browser, c: *ui.Context, p: *const Palette) void {
     defer ui.end(c);
     if (frame.prefLine(b, c, p, "sidebar", "Tabs in a sidebar", c.print("Down the {s} instead of across the top. Pull its edge to make it wider; double-click the edge to reset.", .{side})))
         for (b.kea.browsers.items) |w| w.syncStageHost();
-    if (prefs.sidebar) {
+    if (disclose.begin(c, 0x6b65_612e_7462_7331, prefs.sidebar, motion.settle)) {
+        defer disclose.end(c);
         frame.rule(c, p);
         plate.line(c, p, "Sidebar position", c.print("Tabs down the {s} edge of the window", .{side}));
         var at: usize = @intFromEnum(prefs.side_position);
@@ -59,7 +65,8 @@ fn tabs(b: *Browser, c: *ui.Context, p: *const Palette) void {
     _ = frame.prefLine(b, c, p, "uses_spaces", "Spaces", "Separate sets of tabs, signed in where the others are or starting afresh, switched with ⌃1–⌃9, two fingers sideways over the column, or the space's icon. Mission Control's own ⌃1–⌃9, if you turned them on, take those keys first.");
     frame.rule(c, p);
     _ = frame.prefLine(b, c, p, "uses_tab_groups", "Tab groups", "Named sections in the sidebar. Right-click a tab to start a group; click its heading to hide or show its tabs.");
-    if (prefs.sidebar) {
+    if (disclose.begin(c, 0x6b65_612e_7462_7332, prefs.sidebar, motion.settle)) {
+        defer disclose.end(c);
         frame.rule(c, p);
         _ = frame.prefLine(b, c, p, "lists_pins", "Pinned rows", "As in Arc: pins as squares for the sites you live in, pins as rows under them for pages you keep, and a line over the rest with Clear. Right-click a tab to pin it as a row.");
     }

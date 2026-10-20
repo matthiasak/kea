@@ -43,6 +43,9 @@ pub fn door(c: *ui.Context, p: *const Palette, icon: []const u8, opts: DoorOptio
     c.addA11y(i, .button, said, "", opts.on, true);
     const h = hover(c, it, 0);
     const o = motion.quickTo(c, it.id, 1, if (opts.on) 1 else 0);
+    const lift = if (c.reduce_motion) 0 else motion.liftTo(c, it.id, 6, if (it.hovered) 1 else 0);
+    const press = if (c.reduce_motion) 0 else motion.liftTo(c, it.id, 7, if (it.pressed) 1 else 0);
+    c.node(i).style.scale *= 1 + 0.08 * lift - 0.10 * press;
     c.node(i).style.background = p.side_hover.alpha(h).mix(p.side_wash, o);
     ui.icon(c, icon, .{ .size = 11, .weight = .medium, .color = p.muted.mix(p.ink.alpha(0.7), h).mix(p.ink, o) });
     return it;

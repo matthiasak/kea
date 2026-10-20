@@ -60,6 +60,8 @@ pub const Place = struct {
     offset: ui.Point = .{},
     opacity: f32 = 1,
     scale: f32 = 1,
+    arrived: bool = true,
+    motion_blur: bool = false,
     /// Carried: the drop chip under it.
     chip: ?ui.Style = null,
 };
@@ -104,7 +106,8 @@ pub fn pill(b: *Browser, c: *ui.Context, p: *const Palette, tab: *Tab, o: Option
         .offset = o.place.offset,
         .opacity = o.place.opacity,
         .scale = o.place.scale,
-        .scale_anchor = .{ .x = 0, .y = 0.5 },
+        .scale_anchor = if (o.place.arrived) .{ .x = 0.5, .y = 0.5 } else .{ .x = 0, .y = 0.5 },
+        .motion_blur = o.place.motion_blur,
         .control = o.interactive,
     };
     if (o.place.chip) |chip| {
@@ -123,7 +126,15 @@ pub fn pill(b: *Browser, c: *ui.Context, p: *const Palette, tab: *Tab, o: Option
     const i = c.open(style, null);
     defer c.end();
     const it = if (o.interactive) c.interact(i, .{}) else no_press;
-    const h = motion.quickTo(c, c.node(i).id, 0, if (it.hovered) 1 else 0);
+    const hovered = it.hovered and o.interactive;
+    const id = c.node(i).id;
+    const h = motion.quickTo(c, id, 0, if (hovered) 1 else 0);
+    const lift = if (c.reduce_motion or !o.interactive) 0 else motion.liftTo(c, id, 6, if (hovered) 1 else 0);
+    const press = if (c.reduce_motion or !o.interactive) 0 else motion.liftTo(c, id, 7, if (it.pressed) 1 else 0);
+    c.node(i).style.scale *= 1 + 0.03 * lift - 0.05 * press;
+    if (!o.live and o.place.chip == null and lift > 0.01) {
+        c.node(i).style.shadow = .{ .color = p.ink.alpha(0.10 * lift), .blur = 10, .y = 2 };
+    }
     if (o.interactive) {
         c.help(i, tab.label());
         c.addA11y(i, .tab, if (tab.label().len == 0) "New Tab" else tab.label(), if (o.live) "Selected" else "", o.live, true);
@@ -133,7 +144,9 @@ pub fn pill(b: *Browser, c: *ui.Context, p: *const Palette, tab: *Tab, o: Option
         const rest: ?ui.Color = if (is_pin) p.wash.alpha(0.55) else null;
         c.node(i).style.background = if (rest) |r| r.mix(p.hover, h) else p.hover.alpha(h);
     }
-    const colour = if (o.live) p.ink else p.muted.mix(p.ink.alpha(0.7), h);
+    const base = p.muted.mix(p.ink.alpha(0.7), h);
+    const lv = std.math.clamp(motion.liveTo(c, id, 2, if (o.live) 1 else 0), 0, 1);
+    const colour = base.mix(p.ink, lv);
     var d: Drawn = .{ .it = it, .index = i };
     if (edit) {
         tab_address.field(b, c, p, tab);

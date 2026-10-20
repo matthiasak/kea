@@ -71,19 +71,19 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette) void {
     ui.column(c, .{ .absolute = true, .width = .fill, .height = .fill, .direction = .column, .justify = .end, .align_items = .center, .gap = 8, .padding = .{ .bottom = 30 } });
     defer ui.end(c);
     if (b.announcement) |text| {
-        if (presence.presence(c, id_said, live, motion.settle, null)) |t| announcement(b, c, p, text, t) else b.hush();
+        if (presence.presence(c, id_said, live, motion.bounce, motion.settle)) |t| announcement(b, c, p, text, t) else b.hush();
     }
     // A question answered (or its tab gone) leaves as it was last drawn.
-    if (presence.presence(c, id_ask, b.asking != null, motion.settle, null)) |t| {
+    if (presence.presence(c, id_ask, b.asking != null, motion.bounce, motion.settle)) |t| {
         if (b.asking) |asking| captureAsking(b, c, p, asking, t) else _ = question(c, p, b.bars.ask, t, false);
     } else b.bars.ask.forget(b.gpa);
-    if (presence.presence(c, id_keep, b.passwords.offering != null, motion.settle, null)) |t| {
+    if (presence.presence(c, id_keep, b.passwords.offering != null, motion.bounce, motion.settle)) |t| {
         if (b.passwords.offering) |offer| keepAsking(b, c, p, offer, t) else _ = question(c, p, b.bars.keep, t, false);
     } else b.bars.keep.forget(b.gpa);
     // Swift changes what the store bar watches outside any animation, so it
     // comes and goes at once (its transition never plays).
     if (ext_ui.offered(b)) |id| ext_ui.storeOffer(b, c, p, id, 1);
-    if (presence.presence(c, id_veil, b.veiling, motion.settle, null)) |t| hint(c, p, veil_hint, t);
+    if (presence.presence(c, id_veil, b.veiling, motion.bounce, motion.settle)) |t| hint(c, p, veil_hint, t);
 }
 
 /// A question bar as drawn: what it says and its answers, the first on ink.
@@ -139,6 +139,7 @@ fn question(c: *ui.Context, p: *const Palette, q: Question, t: f32, live: bool) 
     s.offset = r.offset;
     s.opacity = r.opacity;
     s.scale = r.scale;
+    s.group = r.group;
     const i = c.open(s, q.key);
     defer c.end();
     if (live) _ = c.interact(i, .{});
@@ -158,7 +159,7 @@ fn question(c: *ui.Context, p: *const Palette, q: Question, t: f32, live: bool) 
 
 fn arriving(t: f32) ui.Style {
     const a = std.math.clamp(t, 0, 1);
-    return .{ .offset = .{ .y = (1 - t) * rise }, .opacity = a, .scale = 0.96 + 0.04 * a };
+    return .{ .offset = .{ .y = (1 - t) * rise }, .opacity = a, .scale = 0.9 + 0.1 * a, .group = true };
 }
 
 fn capsule(p: *const Palette, shadow_alpha: f32, radius: f32, y: f32) ui.Style {
@@ -178,6 +179,7 @@ fn announcement(b: *Browser, c: *ui.Context, p: *const Palette, text: []const u8
     s.offset = a.offset;
     s.opacity = a.opacity;
     s.scale = a.scale;
+    s.group = a.group;
     s.control = b.announced_file != null;
     const i = c.open(s, "kea.announcement");
     defer c.end();
@@ -274,6 +276,7 @@ fn hint(c: *ui.Context, p: *const Palette, text: []const u8, t: f32) void {
         .offset = a.offset,
         .opacity = a.opacity,
         .scale = a.scale,
+        .group = a.group,
     }, "kea.hint");
     defer c.end();
     ui.text(c, text, .{ .size = 11.5, .color = p.ground.alpha(0.92) });

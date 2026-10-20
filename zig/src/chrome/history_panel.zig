@@ -208,7 +208,8 @@ fn line(b: *Browser, c: *ui.Context, p: *const Palette, row: *Row, h: f32) Act {
     defer c.end();
     const it = c.interact(i, .{});
     c.addA11y(i, .row, row.title, row.address, false, true);
-    c.node(i).style.background = p.hover.alpha(motion.quickTo(c, it.id, 0, if (it.hovered) 1 else 0));
+    const hover = motion.quickTo(c, it.id, 0, if (it.hovered) 1 else 0);
+    c.node(i).style.background = p.hover.alpha(hover);
     const icon = b.kea.favicons.icon(row.url);
     const letter = mark.initial(c, row.address);
     mark.mark(c, p, if (icon) |ic| .{ .key = ic.key, .png = ic.png } else null, letter, 16, false);
@@ -217,9 +218,20 @@ fn line(b: *Browser, c: *ui.Context, p: *const Palette, row: *Row, h: f32) Act {
     ui.text(c, row.address, .{ .size = 11.5, .color = p.muted, .truncate_middle = true });
     ui.end(c);
     _ = c.leaf(.{ .min_width = 8, .width = px(8) }, .none, null);
-    if (it.hovered) {
-        if (plate.quick(c, p, "Remove", p.red.alpha(0.75)).clicked) return .{ .forget = row.key };
-    } else ui.text(c, row.clock, .{ .size = 11.5, .color = p.muted, .tabular = true });
+    ui.row(c, .{ .min_width = 56, .align_items = .center, .justify = .end });
+    var forget = false;
+    if (hover > 0.001) {
+        ui.row(c, .{ .absolute = !it.hovered, .width = if (!it.hovered) .fill else .auto, .height = if (!it.hovered) .fill else .auto, .align_items = .center, .justify = .end, .opacity = hover });
+        if (plate.quick(c, p, "Remove", p.red.alpha(0.75)).clicked and it.hovered) forget = true;
+        ui.end(c);
+    }
+    if (1 - hover > 0.001) {
+        ui.row(c, .{ .absolute = it.hovered, .width = if (it.hovered) .fill else .auto, .height = if (it.hovered) .fill else .auto, .align_items = .center, .justify = .end, .opacity = 1 - hover });
+        ui.text(c, row.clock, .{ .size = 11.5, .color = p.muted, .tabular = true });
+        ui.end(c);
+    }
+    ui.end(c);
+    if (forget) return .{ .forget = row.key };
     return if (it.clicked) .{ .go = row.url } else .none;
 }
 

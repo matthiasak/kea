@@ -147,7 +147,7 @@ pub fn sideBar(b: *Browser, c: *ui.Context, p: *const Palette, on_frame: bool, x
     const w = b.prefs.side_width;
     const on_right = b.prefs.side_position == .right;
     const reserve: f32 = if (fullScreen(b)) 0 else metrics.side_lights;
-    const root = c.open(.{ .absolute = true, .offset = .{ .x = x }, .width = px(w), .height = .fill, .clip = true }, "side-bar");
+    const root = c.open(.{ .absolute = true, .offset = .{ .x = x }, .width = px(w), .height = .fill, .clip = true, .motion_blur = true }, "side-bar");
     defer c.end();
     // A link let go of over the column becomes a tab.
     c.acceptDrop(root);
@@ -358,11 +358,11 @@ fn livePill(b: *Browser, c: *ui.Context, page_index: u32) void {
         ui.jump(c, page_id, 12, at.w);
         ui.jump(c, page_id, 13, at.h);
     }
-    const x = motion.glideTo(c, page_id, 10, tx);
-    const y = motion.glideTo(c, page_id, 11, ty);
-    const w = motion.glideTo(c, page_id, 12, at.w);
-    const h = motion.glideTo(c, page_id, 13, at.h);
-    _ = c.leaf(.{ .absolute = true, .offset = .{ .x = x, .y = y }, .width = px(w), .height = px(h), .radius = pill.radius, .background = pill.colour }, .none, "live-pill");
+    const x = motion.liveTo(c, page_id, 10, tx);
+    const y = motion.liveTo(c, page_id, 11, ty);
+    const w = motion.liveTo(c, page_id, 12, at.w);
+    const h = motion.liveTo(c, page_id, 13, at.h);
+    _ = c.leaf(.{ .absolute = true, .offset = .{ .x = x, .y = y }, .width = px(w), .height = px(h), .radius = pill.radius, .background = pill.colour, .motion_blur = true }, .none, "live-pill");
     st.pill_drawn = true;
 }
 

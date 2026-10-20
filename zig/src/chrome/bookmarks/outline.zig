@@ -296,7 +296,5 @@ pub fn siteMark(b: *Browser, c: *ui.Context, p: *const Palette, node: *const Boo
 /// `String((node.host ?? "•").prefix(1)).uppercased()`.
 pub fn letter(c: *ui.Context, u: []const u8) []const u8 {
     const host = if (Parts.parse(u)) |parts| parts.hostName() orelse "" else "";
-    if (host.len == 0) return "•";
-    const n = std.unicode.utf8ByteSequenceLength(host[0]) catch 1;
-    return std.ascii.allocUpperString(c.alloc(), host[0..@min(n, host.len)]) catch host[0..1];
+    return mark.initial(c, host);
 }

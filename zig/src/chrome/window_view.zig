@@ -50,13 +50,20 @@ const slide_id: u64 = std.hash.Wyhash.hash(0, "kea.room.slide");
 const col_id: u64 = std.hash.Wyhash.hash(0, "kea.room.col");
 const strip_id: u64 = std.hash.Wyhash.hash(0, "kea.room.strip");
 const bar_id: u64 = std.hash.Wyhash.hash(0, "kea.room.bar");
+const panel_w_id: u64 = std.hash.Wyhash.hash(0, "kea.room.panel_w");
 
 pub fn view(b: *Browser, c: *ui.Context) void {
     // Kea's controls keep the arrow, as AppKit's plain buttons do.
     c.hand_cursor = false;
     // An extension's popup window: the page and its site, as a small window shows one.
     if (b.ext.popup != null) return @import("../web/little.zig").popupView(b, c);
-    const p = palette.get(c.theme.dark);
+    const is_dark = switch (b.prefs.look) {
+        .light => false,
+        .dark => true,
+        .system => c.theme.dark,
+    };
+    const p = palette.get(is_dark);
+    b.kea.favicons.setDark(is_dark);
     // The strip and the column say where the window is dragged from.
     c.title_bar_height = 0;
     // The bookmarks manager's start and end; its keys are the key monitor's.
@@ -221,7 +228,9 @@ fn drawStageRow(b: *Browser, c: *ui.Context, p: *const Palette, r: Room, roomed:
     side_panels.beside(b, c, p, r, true);
     // The stage's own size, from what is beside it, so the pages are laid
     // out in this frame for this window, never the last one's.
-    const beside: f32 = (if (r.chatShown()) r.chatWidth() else 0) + (if (r.marksShown()) r.marksWidth() else 0);
+    const beside_target: f32 = (if (r.chatShown()) r.chatWidth() else 0) + (if (r.marksShown()) r.marksWidth() else 0);
+    if (b.edge_drag != null or b.let_out == null or (b.column.panel_win_w != 0 and b.column.panel_win_w != r.window_width)) ui.jump(c, panel_w_id, 0, beside_target);
+    const beside: f32 = motion.glideTo(c, panel_w_id, 0, beside_target);
     drawStage(b, c, p, r, .{ .w = @max(0, c.size.w - pad.left - pad.right - beside), .h = @max(0, c.size.h - pad.top - pad.bottom) });
     side_panels.beside(b, c, p, r, false);
 }

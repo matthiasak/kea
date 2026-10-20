@@ -278,7 +278,8 @@ fn keptRow(c: *ui.Context, p: *const Palette, k: Keep, idx: usize) Act {
     defer c.end();
     const it = c.interact(i, .{});
     c.addA11y(i, .row, k.name, "", false, true);
-    c.node(i).style.background = p.hover.alpha(motion.quickTo(c, it.id, 0, if (it.hovered) 1 else 0));
+    const hover = motion.quickTo(c, it.id, 0, if (it.hovered) 1 else 0);
+    c.node(i).style.background = p.hover.alpha(hover);
     ui.column(c, .{ .width = px(18), .align_items = .center });
     ui.icon(c, if (there) "doc" else "doc.badge.ellipsis", .{ .size = 13, .color = if (there) p.muted else p.faint });
     ui.end(c);
@@ -288,9 +289,13 @@ fn keptRow(c: *ui.Context, p: *const Palette, k: Keep, idx: usize) Act {
     ui.text(c, if (k.from.len == 0) ago else c.print("{s} · {s}", .{ k.from, ago }), .{ .size = 11.5, .color = p.muted, .truncate = true });
     ui.end(c);
     _ = c.leaf(.{ .min_width = 8, .width = px(8) }, .none, null);
-    if (it.hovered) {
-        if (there and plate.quick(c, p, "Show in Finder", null).clicked) return .{ .reveal = k.path };
-        if (plate.quick(c, p, "Remove", p.red.alpha(0.75)).clicked) return .{ .forget = k.path };
+    if (hover > 0.001) {
+        ui.row(c, .{ .gap = 12, .align_items = .center, .opacity = hover });
+        const rev = there and plate.quick(c, p, "Show in Finder", null).clicked and it.hovered;
+        const rem = plate.quick(c, p, "Remove", p.red.alpha(0.75)).clicked and it.hovered;
+        ui.end(c);
+        if (rev) return .{ .reveal = k.path };
+        if (rem) return .{ .forget = k.path };
     }
     return if (it.clicked and there) .{ .open = k.path } else .none;
 }

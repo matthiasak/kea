@@ -26,6 +26,10 @@ pub fn layout(window_w: f32, count: usize) Layout {
     return .{ .columns = columns, .width = width, .preview = preview, .height = preview + 39 };
 }
 
+/// When the switcher became visible on each browser (by `Browser` pointer),
+/// so cards stagger in from `opened_at`.
+var opened_at_map: std.AutoHashMapUnmanaged(usize, f64) = .empty;
+
 pub fn view(b: *Browser, c: *ui.Context, p: *const Palette) void {
     const s = &b.switcher;
     if (s.reveal_asked) {
@@ -35,7 +39,15 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette) void {
     if (s.reveal_at) |at| {
         if (c.time >= at) sw.show(b) else c.frameIn(@floatCast(at - c.time));
     }
-    if (!s.visible) return;
+    if (!s.visible) {
+        _ = opened_at_map.remove(@intFromPtr(b));
+        return;
+    }
+    const opened_gop = opened_at_map.getOrPut(std.heap.c_allocator, @intFromPtr(b)) catch null;
+    if (opened_gop) |gop| if (!gop.found_existing) {
+        gop.value_ptr.* = c.time;
+    };
+    const opened_at = if (opened_gop) |gop| gop.value_ptr.* else c.time;
     // 120 ms after the pick settles, the pictures, one every 0.04 s.
     if (s.waited_for != s.selected) {
         s.waited_for = s.selected;
@@ -76,17 +88,17 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette) void {
     _ = c.open(.{ .gap = 8 }, "grid");
     if (s.selected) |sel| if (std.mem.indexOfScalar(u64, s.candidates.items, sel)) |index| {
         const id = c.peekId("highlight");
-        const x = motion.glideTo(c, id, 0, @as(f32, @floatFromInt(index % 5)) * (l.width + 8));
-        const y = motion.glideTo(c, id, 1, @as(f32, @floatFromInt(index / 5)) * (l.height + 8));
-        _ = c.leaf(.{ .absolute = true, .offset = .{ .x = x, .y = y }, .width = px(l.width), .height = px(l.height), .radius = 8, .background = p.faint }, .none, "highlight");
+        const x = motion.liveTo(c, id, 0, @as(f32, @floatFromInt(index % 5)) * (l.width + 8));
+        const y = motion.liveTo(c, id, 1, @as(f32, @floatFromInt(index / 5)) * (l.height + 8));
+        _ = c.leaf(.{ .absolute = true, .offset = .{ .x = x, .y = y }, .width = px(l.width), .height = px(l.height), .radius = 8, .background = p.faint, .motion_blur = true }, .none, "highlight");
     };
     var row: usize = 0;
     while (row * 5 < s.candidates.items.len) : (row += 1) {
         ui.key(c, c.print("row-{d}", .{row}));
         ui.row(c, .{ .gap = 8 });
         const end = @min(row * 5 + 5, s.candidates.items.len);
-        for (s.candidates.items[row * 5 .. end]) |id| if (b.tabById(id)) |t| {
-            const it = card(b, c, p, t, l);
+        for (s.candidates.items[row * 5 .. end], row * 5..) |id, card_idx| if (b.tabById(id)) |t| {
+            const it = card(b, c, p, t, l, card_idx, opened_at);
             if (it.rect) |r| if (s.card_count < s.cards.len) {
                 s.cards[s.card_count] = .{ .id = t.id, .rect = r };
                 s.card_count += 1;
@@ -103,17 +115,37 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette) void {
     if (dismissed) sw.cancel(b);
 }
 
-fn card(b: *Browser, c: *ui.Context, p: *const Palette, t: *Tab, l: Layout) ui.Interaction {
+fn card(b: *Browser, c: *ui.Context, p: *const Palette, t: *Tab, l: Layout, card_idx: usize, opened_at: f64) ui.Interaction {
     const s = &b.switcher;
     const partner = if (s.partnerOf(t.id)) |id| b.tabById(id) else null;
     const caption = if (partner) |q| c.print("{s} · {s}", .{ t.label(), q.label() }) else t.label();
     const side = if (partner == null) l.width - 16 else (l.width - 18) / 2;
     ui.key(c, c.print("card-{d}", .{t.id}));
-    const i = c.open(.{ .width = px(l.width), .height = px(l.height), .padding = .all(8), .gap = 7, .radius = 8, .control = true }, null);
+    const delay = 0.022 * @as(f64, @floatFromInt(card_idx));
+    const due = c.reduce_motion or (c.time - opened_at >= delay);
+    if (!due) c.frameIn(@floatCast(delay - (c.time - opened_at)));
+    const cid = c.peekId(null);
+    const v = ui.springFrom(c, cid, 0, if (c.reduce_motion) 1 else 0, if (due) 1 else 0, motion.bounce);
+    const i = c.open(.{
+        .width = px(l.width),
+        .height = px(l.height),
+        .radius = 8,
+        .control = true,
+    }, null);
     defer c.end();
     const it = c.interact(i, .{});
     const selected = s.selected == t.id;
     c.addA11y(i, .button, c.print("Switch to {s}", .{t.label()}), if (selected) "Selected" else "", selected, true);
+    _ = c.open(.{
+        .width = .fill,
+        .height = .fill,
+        .padding = .all(8),
+        .gap = 7,
+        .scale = 0.86 + 0.14 * v,
+        .offset = .{ .y = 10 * (1 - v) },
+        .opacity = std.math.clamp(v, 0, 1),
+    }, null);
+    defer c.end();
     // A pair: its two pages side by side, as on screen.
     ui.row(c, .{ .width = px(l.width - 16), .height = px(l.preview), .gap = 2, .radius = 5, .clip = true });
     picture(b, c, p, t, side, l.preview);

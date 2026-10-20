@@ -14,6 +14,7 @@ const objc = nanoui.objc;
 const fixtures = [_]struct { []const u8, []const u8 }{
     .{ "hello.html", @embedFile("fixtures/hello.html") },
     .{ "favicon.html", @embedFile("fixtures/favicon.html") },
+    .{ "favicon_dark.html", @embedFile("fixtures/favicon_dark.html") },
     .{ "questions.html", @embedFile("fixtures/questions.html") },
     .{ "links.html", @embedFile("fixtures/links.html") },
     .{ "article.html", @embedFile("fixtures/article.html") },

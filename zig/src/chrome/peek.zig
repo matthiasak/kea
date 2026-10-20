@@ -95,7 +95,7 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette, area: ui.Rect) void 
         if (it.clicked) close = true;
     }
     // The panel arrives at .98 and grows to size.
-    ui.column(c, .{ .absolute = true, .width = .fill, .height = .fill, .scale = 0.98 + 0.02 * v, .scale_anchor = .{ .x = (fx + fw / 2) / @max(1, c.size.w), .y = (fy + fh / 2) / @max(1, c.size.h) } });
+    _ = c.open(.{ .absolute = true, .width = .fill, .height = .fill, .scale = 0.98 + 0.02 * v, .scale_anchor = .{ .x = (fx + fw / 2) / @max(1, c.size.w), .y = (fy + fh / 2) / @max(1, c.size.h) }, .motion_blur = true }, "kea.peek.sheet");
     defer ui.end(c);
     var shadow = card.swiftShadow(0.25, 30, 10);
     shadow.knockout = true;

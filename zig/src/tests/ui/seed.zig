@@ -351,3 +351,82 @@ pub fn seedLogins(b: *app.Browser) void {
     app.vault.freeKept(gpa, b.passwords.saved);
     b.passwords.saved = saved;
 }
+
+pub const icon_fixture_hosts = [_][]const u8{
+    "icon-colour.test",
+    "icon-black.test",
+    "icon-white.test",
+    "icon-16.test",
+};
+
+fn makeRgbaPng(gpa: std.mem.Allocator, side: u32, inset: u32, r: u8, g: u8, b_ch: u8) ?[]u8 {
+    const n = @as(usize, side) * side * 4;
+    const px = gpa.alloc(u8, n) catch return null;
+    defer gpa.free(px);
+    @memset(px, 0);
+    var y: u32 = inset;
+    while (y < side - inset) : (y += 1) {
+        var x: u32 = inset;
+        while (x < side - inset) : (x += 1) {
+            const off = (@as(usize, y) * side + x) * 4;
+            px[off + 0] = r;
+            px[off + 1] = g;
+            px[off + 2] = b_ch;
+            px[off + 3] = 255;
+        }
+    }
+    return @import("nanoui").ui.png.encode(gpa, .{ .bytes = px, .width = side, .height = side }) catch null;
+}
+
+/// Seeds the 4 snapshot icon fixtures (colour, black mono, white mono, 16 px)
+/// through `favicons.square` into `k.favicons`.
+pub fn seedIconFixtures(k: *app.Kea) void {
+    const ca = std.heap.c_allocator;
+    const Favicons = @TypeOf(k.favicons.*);
+    if (Favicons.square(ca, icon_png)) |sq| {
+        k.favicons.adopt(icon_fixture_hosts[0], sq);
+    }
+    if (makeRgbaPng(ca, 64, 12, 0, 0, 0)) |raw| {
+        defer ca.free(raw);
+        if (Favicons.square(ca, raw)) |sq| k.favicons.adopt(icon_fixture_hosts[1], sq);
+    }
+    if (makeRgbaPng(ca, 64, 12, 255, 255, 255)) |raw| {
+        defer ca.free(raw);
+        if (Favicons.square(ca, raw)) |sq| k.favicons.adopt(icon_fixture_hosts[2], sq);
+    }
+    if (makeRgbaPng(ca, 16, 0, 40, 140, 220)) |raw| {
+        defer ca.free(raw);
+        if (Favicons.square(ca, raw)) |sq| k.favicons.adopt(icon_fixture_hosts[3], sq);
+    }
+}
+
+/// Seeds 200 distinct hosts via `Favicons.adopt` and 200 tabs across them.
+pub fn seedColdIcons200(b: *app.Browser) void {
+    const ca = std.heap.c_allocator;
+    const Favicons = @TypeOf(b.kea.favicons.*);
+    const sq_base = Favicons.square(ca, icon_png) orelse icon_png;
+    defer if (sq_base.ptr != icon_png.ptr) ca.free(sq_base);
+    b.kea.prefs.set("glyph", Glyph.icons);
+    var hbuf: [64]u8 = undefined;
+    var ubuf: [256]u8 = undefined;
+    var tbuf: [160]u8 = undefined;
+    for (0..200) |i| {
+        const host = std.fmt.bufPrint(&hbuf, "host-{d:0>3}.kea.test", .{i}) catch continue;
+        const copy = ca.dupe(u8, sq_base) catch continue;
+        b.kea.favicons.adopt(host, copy);
+        const url = std.fmt.bufPrint(&ubuf, "https://{s}/page/{d}", .{ host, i }) catch continue;
+        const title = longTitle(&tbuf, i);
+        if (i == 0 and b.tabs.items.len > 0) {
+            const t0 = b.tabs.items[0];
+            t0.own(&t0.address, url);
+            t0.setTitle(title);
+        } else {
+            const t = b.makeAsleep(url, title, null, b.space_id);
+            b.tabs.append(b.gpa, t) catch {
+                t.destroy();
+                break;
+            };
+        }
+    }
+    b.arrangeGroupedTabs(null);
+}

@@ -89,11 +89,12 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette, area: ui.Rect, opts:
     ui.key(c, "kea.omnibox");
     ui.column(c, .{
         .absolute = true,
-        .offset = .{ .x = area.x, .y = area.y },
+        .offset = .{ .x = area.x, .y = area.y - 10 * (1 - v) },
         .width = px(area.w),
         .height = px(area.h),
-        .scale = 0.97 + 0.03 * v,
+        .scale = 0.94 + 0.06 * v,
         .opacity = std.math.clamp(v, 0, 1),
+        .group = true,
     });
     defer ui.end(c);
     if (st.over) scrim(b, c, p, area);
@@ -113,7 +114,7 @@ fn arrival(c: *ui.Context, st: *State, showing: bool) ?f32 {
     if (showing) {
         // The way out, at 1 while in, so it eases from there.
         _ = ui.tween(c, base_id, salt +% 1, 1, 0, .linear);
-        return ui.springFrom(c, base_id, salt, 0, 1, motion.settle);
+        return ui.springFrom(c, base_id, salt, 0, 1, motion.bounce);
     }
     const v = ui.tween(c, base_id, salt +% 1, 0, motion.quick_duration, motion.quick_curve);
     return if (v <= 0) null else v;
@@ -225,22 +226,14 @@ fn scrim(b: *Browser, c: *ui.Context, p: *const Palette, area: ui.Rect) void {
 /// from .97 to 1.03 and .65 to full, 2.6 s each way, eased; still under
 /// Reduce Motion. Thirty frames a second are plenty for something this slow.
 fn breath(c: *ui.Context, p: *const Palette, w: f32) void {
-    var e: f32 = 1;
-    var scale: f32 = 1;
-    if (!c.reduce_motion) {
-        const phase: f32 = @floatCast(@mod(c.time, 5.2) / 2.6);
-        e = ui.motion.ease(.ease_in_out, if (phase < 1) phase else 2 - phase);
-        scale = 0.97 + 0.06 * e;
-        c.frameIn(1.0 / 30.0);
-    }
     _ = c.leaf(.{
         .absolute = true,
         .width = px(w),
         .height = px(field_height),
         .radius = 26,
         .shadow = .{ .color = p.ink.alpha(0.07), .blur = 2 * 26 },
-        .scale = scale,
-        .opacity = if (c.reduce_motion) 1 else 0.65 + 0.35 * e,
+        .pulse = if (c.reduce_motion) null else .{ .period = 5.2, .scale_amp = 0.03, .alpha_low = 0.65 },
+        .opacity = 1,
     }, .none, null);
 }
 
@@ -288,7 +281,7 @@ fn field(b: *Browser, c: *ui.Context, p: *const Palette, st: *State, x: f32, y: 
     }, null);
     defer c.end();
     const air = c.interact(box, .{});
-    if (b.site_chip) |site| omnibox_list.siteChip(b, c, p, site);
+    omnibox_list.siteChip(b, c, p, b.site_chip);
     _ = c.open(.{ .grow = 1, .height = px(22), .align_items = .center }, "kea.omnibox.text.box");
     defer c.end();
     const buf = &st.field;

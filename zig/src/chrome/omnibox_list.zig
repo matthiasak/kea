@@ -24,15 +24,102 @@ const px = struct {
 pub const Click = union(enum) { lock, offer: usize };
 
 const list_id: u64 = std.hash.Wyhash.hash(0, "kea.omnibox.list");
+const chip_id: u64 = std.hash.Wyhash.hash(0, "kea.omnibox.chip");
+
+fn copyUtf8(dst: []u8, src: []const u8) u8 {
+    var n = @min(src.len, dst.len);
+    while (n < src.len and n > 0 and (src[n] & 0xC0) == 0x80) n -= 1;
+    @memcpy(dst[0..n], src[0..n]);
+    return @intCast(n);
+}
+
+const SavedSite = struct {
+    name_buf: [64]u8 = undefined,
+    name_len: u8 = 0,
+    host_buf: [64]u8 = undefined,
+    host_len: u8 = 0,
+
+    fn set(self: *SavedSite, s: SearchSite) void {
+        self.name_len = copyUtf8(&self.name_buf, s.name);
+        self.host_len = copyUtf8(&self.host_buf, s.host);
+    }
+
+    fn site(self: *const SavedSite) SearchSite {
+        return .{
+            .name = self.name_buf[0..self.name_len],
+            .host = self.host_buf[0..self.host_len],
+            .template = "",
+        };
+    }
+};
+
+const SavedRow = struct {
+    key_buf: [160]u8 = undefined,
+    key_len: u8 = 0,
+    title_buf: [160]u8 = undefined,
+    title_len: u8 = 0,
+    url_buf: [160]u8 = undefined,
+    url_len: u8 = 0,
+    kind: omni.Offer.Kind = .visited,
+    picked: bool = false,
+    landing: bool = false,
+
+    fn set(self: *SavedRow, o: omni.Offer, picked: bool, landing: bool) void {
+        self.key_len = copyUtf8(&self.key_buf, o.key);
+        self.title_len = copyUtf8(&self.title_buf, o.title);
+        self.url_len = copyUtf8(&self.url_buf, o.url);
+        self.kind = o.kind;
+        self.picked = picked;
+        self.landing = landing;
+    }
+
+    fn offer(self: *const SavedRow) omni.Offer {
+        return .{
+            .key = self.key_buf[0..self.key_len],
+            .title = self.title_buf[0..self.title_len],
+            .url = self.url_buf[0..self.url_len],
+            .kind = self.kind,
+        };
+    }
+};
+
+var last_list_browser: ?*const Browser = null;
+var last_rows: [10]SavedRow = undefined;
+var last_rows_len: usize = 0;
+var last_site_offer: SavedSite = .{};
+var last_has_site_offer: bool = false;
+
+var last_chip_browser: ?*const Browser = null;
+var last_chip: SavedSite = .{};
+var last_has_chip: bool = false;
 
 /// The list, its top `y` (the field's 50 and 8 of air below it), `w` wide.
 pub fn list(b: *Browser, c: *ui.Context, p: *const Palette, x: f32, y: f32, w: f32) ?Click {
+    if (last_list_browser != b) {
+        last_list_browser = b;
+        last_rows_len = 0;
+        last_has_site_offer = false;
+    }
     const o = &b.omni;
     const shown = o.offers.len > 0 or o.site_offer != null;
+    if (shown) {
+        if (o.site_offer) |site| {
+            last_site_offer.set(site);
+            last_has_site_offer = true;
+        } else last_has_site_offer = false;
+        const n = @min(o.offers.len, last_rows.len);
+        for (o.offers[0..n], 0..) |offer, i| {
+            last_rows[i].set(offer, o.picked == i, o.picked == null and o.landing == i);
+        }
+        last_rows_len = n;
+    }
     // Its coming and going, briefly (`Motion.quick`), anchored to its top.
-    // ponytail: a leaving list has no rows left to draw, so it simply goes.
     const v = motion.quickTo(c, list_id, 0, if (shown) 1 else 0);
-    if (!shown) return null;
+    if (!shown and (v <= 0.001 or (last_rows_len == 0 and !last_has_site_offer))) {
+        last_rows_len = 0;
+        last_has_site_offer = false;
+        return null;
+    }
     ui.key(c, "kea.omnibox.list");
     ui.column(c, .{
         .absolute = true,
@@ -48,16 +135,27 @@ pub fn list(b: *Browser, c: *ui.Context, p: *const Palette, x: f32, y: f32, w: f
         .opacity = v,
     });
     defer ui.end(c);
+    if (!shown) {
+        if (last_has_site_offer) {
+            ui.key(c, "omni-site-offer");
+            _ = siteOfferRow(b, c, p, last_site_offer.site(), false);
+        }
+        for (last_rows[0..last_rows_len], 0..) |*sr, i| {
+            ui.key(c, c.print("omni-row-{d}", .{i}));
+            _ = row(b, c, p, sr.offer(), sr.picked, sr.landing, false);
+        }
+        return null;
+    }
     var click: ?Click = null;
     if (o.site_offer) |site| {
         ui.key(c, "omni-site-offer");
-        if (siteOfferRow(b, c, p, site).clicked) click = .lock;
+        if (siteOfferRow(b, c, p, site, true).clicked) click = .lock;
     }
     for (o.offers, 0..) |offer, i| {
         ui.key(c, c.print("omni-row-{d}", .{i}));
         const picked = o.picked == i;
         const landing = o.picked == null and o.landing == i;
-        if (row(b, c, p, offer, picked, landing).clicked) click = .{ .offer = i };
+        if (row(b, c, p, offer, picked, landing, true).clicked) click = .{ .offer = i };
     }
     return click;
 }
@@ -66,18 +164,18 @@ const Row = struct { index: u32, it: ui.Interaction };
 
 /// A row's box: 12×9 of air; picked by the arrow keys, its sunset; else
 /// the pointer's quieter grey; else, where Return goes, a fainter sunset.
-fn rowBox(c: *ui.Context, p: *const Palette, picked: bool, landing: bool) Row {
-    const i = c.open(.{ .direction = .row, .gap = 10, .padding = .xy(12, 9), .width = .fill, .radius = 9, .align_items = .center, .control = true }, null);
-    const it = c.interact(i, .{});
-    const h = motion.quickTo(c, it.id, 0, if (it.hovered) 1 else 0);
+fn rowBox(c: *ui.Context, p: *const Palette, picked: bool, landing: bool, live: bool) Row {
+    const i = c.open(.{ .direction = .row, .gap = 10, .padding = .xy(12, 9), .width = .fill, .radius = 9, .align_items = .center, .control = live }, null);
+    const it = if (live) c.interact(i, .{}) else ui.Interaction{ .id = c.node(i).id, .rect = null, .hovered = false, .pressed = false, .clicked = false, .focused = false };
+    const h = motion.quickTo(c, c.node(i).id, 0, if (it.hovered) 1 else 0);
     c.node(i).style.background = if (picked) p.sunset.alpha(0.12) else if (it.hovered or !landing) p.hover.alpha(h) else p.sunset.alpha(0.06);
     return .{ .index = i, .it = it };
 }
 
-fn row(b: *Browser, c: *ui.Context, p: *const Palette, offer: omni.Offer, picked: bool, landing: bool) ui.Interaction {
-    const r = rowBox(c, p, picked, landing);
+fn row(b: *Browser, c: *ui.Context, p: *const Palette, offer: omni.Offer, picked: bool, landing: bool, live: bool) ui.Interaction {
+    const r = rowBox(c, p, picked, landing, live);
     defer c.end();
-    c.addA11y(r.index, .row, offer.key, offer.title, picked, true);
+    if (live) c.addA11y(r.index, .row, offer.key, offer.title, picked, true);
     switch (offer.kind) {
         // The engine's own icon when this Mac has it; the glass until then.
         .search => if (b.kea.favicons.icon(offer.url)) |ic| {
@@ -110,11 +208,11 @@ fn siteIcon(b: *Browser, c: *ui.Context, p: *const Palette, site: SearchSite) vo
 }
 
 /// "Search Reddit", first in the list, with the key that takes it.
-fn siteOfferRow(b: *Browser, c: *ui.Context, p: *const Palette, site: SearchSite) ui.Interaction {
-    const r = rowBox(c, p, false, false);
+fn siteOfferRow(b: *Browser, c: *ui.Context, p: *const Palette, site: SearchSite, live: bool) ui.Interaction {
+    const r = rowBox(c, p, false, false, live);
     defer c.end();
     const label = c.print("Search {s}", .{site.name});
-    c.addA11y(r.index, .row, c.print("{s}, press Tab", .{label}), "", false, true);
+    if (live) c.addA11y(r.index, .row, c.print("{s}, press Tab", .{label}), "", false, true);
     siteIcon(b, c, p, site);
     ui.text(c, label, .{ .size = 13, .color = p.ink, .truncate = true });
     ui.spacer(c);
@@ -123,19 +221,39 @@ fn siteOfferRow(b: *Browser, c: *ui.Context, p: *const Palette, site: SearchSite
 }
 
 /// The site Tab put in the field: its icon and name before what is typed.
-/// It arrives scaled from .9 at its leading edge and fading in, on
-/// `Motion.quick`. ponytail: it leaves at once (the chip is gone with it).
-pub fn siteChip(b: *Browser, c: *ui.Context, p: *const Palette, site: SearchSite) void {
-    const i = c.open(.{ .direction = .row, .gap = 6, .padding = .xy(8, 0), .height = px(22), .radius = 7, .background = p.wash, .align_items = .center }, "omni-site-chip");
+/// It arrives scaled from .9 at its leading edge and fading in, and leaves
+/// the same way, on `Motion.quick`.
+pub fn siteChip(b: *Browser, c: *ui.Context, p: *const Palette, maybe_site: ?SearchSite) void {
+    if (last_chip_browser != b) {
+        last_chip_browser = b;
+        last_has_chip = false;
+    }
+    const shown = maybe_site != null;
+    if (shown) {
+        if (!last_has_chip and c.rects.get(c.peekId("omni-site-chip")) == null) _ = ui.tween(c, chip_id, 0, 0, 0, .linear);
+        last_chip.set(maybe_site.?);
+        last_has_chip = true;
+    }
+    const t = motion.quickTo(c, chip_id, 0, if (shown) 1 else 0);
+    if (!shown and (t <= 0.001 or !last_has_chip)) {
+        last_has_chip = false;
+        return;
+    }
+    const site = if (maybe_site) |s| s else last_chip.site();
+    const i = c.open(.{
+        .direction = .row,
+        .gap = 6,
+        .padding = .xy(8, 0),
+        .height = px(22),
+        .radius = 7,
+        .background = p.wash,
+        .align_items = .center,
+        .scale = 0.9 + 0.1 * t,
+        .scale_anchor = .{ .x = 0, .y = 0.5 },
+        .opacity = t,
+    }, "omni-site-chip");
     defer c.end();
-    // New this frame (not drawn last frame): from nothing, as split_stage's panes.
-    const id = c.node(i).id;
-    if (c.rects.get(id) == null) _ = ui.tween(c, id, 0x6368, 0, 0, .linear);
-    const t = ui.tween(c, id, 0x6368, 1, motion.quick_duration, motion.quick_curve);
-    c.node(i).style.scale = 0.9 + 0.1 * t;
-    c.node(i).style.scale_anchor = .{ .x = 0, .y = 0.5 };
-    c.node(i).style.opacity = t;
-    c.addA11y(i, .image, c.print("Searching {s}", .{site.name}), "", false, false);
+    if (shown) c.addA11y(i, .image, c.print("Searching {s}", .{site.name}), "", false, false);
     siteIcon(b, c, p, site);
     ui.text(c, site.name, .{ .size = 13, .weight = .medium, .color = p.ink });
 }

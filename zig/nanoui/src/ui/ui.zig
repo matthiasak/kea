@@ -160,6 +160,7 @@ test {
     _ = @import("png.zig");
     _ = @import("png_decode.zig");
     _ = @import("images.zig");
+    _ = @import("tests_images.zig");
     _ = @import("icons.zig");
     _ = keys;
     _ = @import("tests_textedit.zig");

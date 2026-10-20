@@ -69,19 +69,25 @@ pub fn section(b: *Browser, c: *ui.Context, p: *const Palette, tabs: []const *Ta
         const known = for (st.last.items) |s| {
             if (s.id == t.id) break true;
         } else false;
-        const v = presence.presenceFrom(c, rid, if (!fresh and !known) 0 else 1, true, if (which == .group) snappy else motion.settle, null) orelse 1;
+        const v = presence.presenceFrom(c, rid, if (!fresh and !known) 0 else 1, true, if (which == .group) snappy else motion.bounce, null) orelse 1;
         const r = tab_drag.carried(b, c, row.it, t, index, tabs.len, step, true);
         const node = c.node(row.index);
         const landing = if (b.carry.landing) |l| l.tab == t.id else false;
         node.style.settle_y = if (r.held or landing) null else motion.glide;
-        node.style.scale = 0.94 + 0.06 * v;
-        node.style.scale_anchor = .{ .x = 0, .y = 0.5 };
+        const arr_scale: f32 = if (which == .group) 0.94 + 0.06 * v else 0.85 + 0.15 * v;
+        node.style.scale *= arr_scale;
+        node.style.scale_anchor = if (v >= 0.999) .{ .x = 0.5, .y = 0.5 } else .{ .x = 0, .y = 0.5 };
+        if (which != .group) node.style.motion_blur = true;
         if (r.held) {
             // Its place stays, empty; the row itself is drawn last, on top.
             node.style.opacity = 0;
             held = .{ .t = t, .slot = row.index, .shift = r.shift };
         } else {
             node.style.opacity = std.math.clamp(v, 0, 1);
+            if (which != .group) {
+                const dir: f32 = if (b.prefs.side_position == .right) 14 else -14;
+                node.style.offset.x += dir * (1 - v);
+            }
             node.style.offset.y = r.shift;
         }
         if (row.it.rect) |rr| {
@@ -177,6 +183,9 @@ pub fn sideRow(b: *Browser, c: *ui.Context, p: *const Palette, t: *Tab, live: bo
     const it = c.interact(i, .{});
     const hovering = interactive and it.hovered;
     const h = motion.quickTo(c, it.id, 0, if (hovering) 1 else 0);
+    const lift = if (c.reduce_motion or !interactive) 0 else motion.liftTo(c, it.id, 6, if (hovering) 1 else 0);
+    const press = if (c.reduce_motion or !interactive) 0 else motion.liftTo(c, it.id, 7, if (it.pressed) 1 else 0);
+    c.node(i).style.scale *= 1 + 0.012 * lift - 0.03 * press;
     const label = if (t.label().len == 0) "New Tab" else t.label();
     c.help(i, t.label());
     c.addA11y(i, .tab, label, if (live) "Selected" else "", live, true);
@@ -195,7 +204,9 @@ pub fn sideRow(b: *Browser, c: *ui.Context, p: *const Palette, t: *Tab, live: bo
         _ = c.leaf(.{ .absolute = true, .width = px(w * fill), .height = .fill, .background = p.ink.alpha(0.055) }, .none, null);
     }
 
-    const colour = if (live) p.ink else p.muted.mix(p.ink.alpha(0.7), h);
+    const base = p.muted.mix(p.ink.alpha(0.7), h);
+    const lv = std.math.clamp(motion.liveTo(c, it.id, 2, if (live) 1 else 0), 0, 1);
+    const colour = base.mix(p.ink, lv);
     if (editing) {
         tab_address.field(b, c, p, t);
         c.node(i).style.offset.x += tab_address.shake(b, c);
@@ -206,7 +217,10 @@ pub fn sideRow(b: *Browser, c: *ui.Context, p: *const Palette, t: *Tab, live: bo
         }
         if (t.shy) ui.icon(c, "eye.slash", .{ .size = 9, .color = colour.alpha(colour.a * 0.7) });
         if (t.recording) {
+            const dot = c.open(.{}, null);
+            c.help(dot, "Recording");
             ui.icon(c, "record.circle", .{ .size = 10, .color = colour.alpha(colour.a * 0.8) });
+            c.end();
         }
         // The title keeps its length under the pointer and fades out beneath
         // the cross, rather than being cut shorter.
@@ -225,7 +239,7 @@ pub fn sideRow(b: *Browser, c: *ui.Context, p: *const Palette, t: *Tab, live: bo
             .align_items = .center,
             .justify = .center,
             .opacity = motion.quickTo(c, it.id, 3, if (hovering and !speaker) 0 else 1),
-            .offset = .{ .x = -23 * motion.quickTo(c, it.id, 2, if (hovering and speaker) 1 else 0) },
+            .offset = .{ .x = -23 * motion.quickTo(c, it.id, 5, if (hovering and speaker) 1 else 0) },
         }, null);
         if (t.loading) ring.ring(c, 10) else if (controls.speaker(c, p, t.muted).clicked and interactive) t.toggleMute();
         c.end();
@@ -241,8 +255,7 @@ pub fn sideRow(b: *Browser, c: *ui.Context, p: *const Palette, t: *Tab, live: bo
 }
 
 fn iconOf(b: *Browser, t: *Tab) ?mark.Icon {
-    const ic = b.kea.favicons.icon(t.url()) orelse return null;
-    return .{ .key = ic.key, .png = ic.png };
+    return b.kea.favicons.icon(t.url());
 }
 
 /// `KeepLine`: a hairline with Clear at its end under the pointer, which

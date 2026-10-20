@@ -10,6 +10,17 @@ const objc = nanoui.objc;
 const ui = nanoui.ui;
 const Surface = nanoui.Surface;
 const page_view = @import("page_view.zig");
+
+const CATransform3D = extern struct {
+    m11: f64, m12: f64, m13: f64, m14: f64,
+    m21: f64, m22: f64, m23: f64, m24: f64,
+    m31: f64, m32: f64, m33: f64, m34: f64,
+    m41: f64, m42: f64, m43: f64, m44: f64,
+};
+extern "c" const CATransform3DIdentity: CATransform3D;
+extern "c" fn CATransform3DMakeScale(sx: f64, sy: f64, sz: f64) CATransform3D;
+extern "c" fn CATransform3DMakeTranslation(tx: f64, ty: f64, tz: f64) CATransform3D;
+extern "c" fn CATransform3DConcat(a: CATransform3D, b: CATransform3D) CATransform3D;
 pub const PaneSlot = struct {
     webview: ?objc.Object = null,
     last_rect: ui.Rect = .{},
@@ -115,7 +126,8 @@ pub const StageHost = struct {
         while (self.slots.items.len < pages.len) self.slots.append(self.gpa, .{}) catch return;
         for (self.slots.items, pages, alphas, 0..) |*slot, page, alpha, i| {
             slot.alpha = alpha;
-            if (slot.webview != page) {
+            const old = slot.webview;
+            if (old != page) {
                 const unpaid = if (page) |wv| page_view.unpainted(wv) else false;
                 const init_alpha: f32 = if (unpaid) 0 else alpha;
                 slot.* = .{ .webview = page, .corner_radius = self.card_radius, .alpha = alpha, .applied_alpha = init_alpha, .held = unpaid };
@@ -127,6 +139,7 @@ pub const StageHost = struct {
                     objc.msg(void, wv, "setAlphaValue:", .{@as(f64, init_alpha)});
                     if (i < self.last_hole_count) _ = slot.place(wv, self.last_holes[0..self.last_hole_count], i, self.surface.reduce_motion);
                     applyCornerRadius(wv, self.card_radius);
+                    if (old != null and self.surface.visible()) animateSwitch(wv, self.surface.reduce_motion);
                 }
             } else if (page) |wv| if (slot.corner_radius != self.card_radius) {
                 slot.corner_radius = self.card_radius;
@@ -224,6 +237,31 @@ fn fadeIn(wv: objc.Object, alpha: f32) void {
     var f: Fade = .{ .wv = wv, .alpha = alpha };
     var block = objc.Block(Fade, &.{objc.Object}).init(&f, runFade);
     objc.msg(void, objc.class("NSAnimationContext"), "runAnimationGroup:", .{@as(*anyopaque, @ptrCast(&block))});
+}
+
+fn animateSwitch(wv: objc.Object, reduce_motion: bool) void {
+    const pool = objc.Pool.push();
+    defer pool.pop();
+    const layer = objc.msg(?objc.Object, wv, "layer", .{}) orelse return;
+    const timing = objc.msg(objc.Object, objc.class("CAMediaTimingFunction"), "functionWithControlPoints::::", .{ @as(f32, 0.2), @as(f32, 0.9), @as(f32, 0.3), @as(f32, 1.0) });
+    const dur: f64 = if (reduce_motion) 0.12 else 0.22;
+    const op = objc.msg(objc.Object, objc.class("CABasicAnimation"), "animationWithKeyPath:", .{objc.nsString("opacity")});
+    objc.msg(void, op, "setFromValue:", .{objc.msg(objc.Object, objc.class("NSNumber"), "numberWithDouble:", .{@as(f64, 0)})});
+    objc.msg(void, op, "setToValue:", .{objc.msg(objc.Object, objc.class("NSNumber"), "numberWithDouble:", .{@as(f64, 1)})});
+    objc.msg(void, op, "setDuration:", .{dur});
+    objc.msg(void, op, "setTimingFunction:", .{timing});
+    objc.msg(void, layer, "addAnimation:forKey:", .{ op, objc.nsString("kea.page.opacity") });
+    if (reduce_motion) return;
+    const bounds = objc.msg(objc.CGRect, wv, "bounds", .{});
+    const w = bounds.size.width;
+    const h = bounds.size.height;
+    const from_tf = CATransform3DConcat(CATransform3DMakeScale(0.985, 0.985, 1), CATransform3DMakeTranslation(w * 0.0075, h * 0.0075, 0));
+    const tr = objc.msg(objc.Object, objc.class("CABasicAnimation"), "animationWithKeyPath:", .{objc.nsString("transform")});
+    objc.msg(void, tr, "setFromValue:", .{objc.msg(objc.Object, objc.class("NSValue"), "valueWithCATransform3D:", .{from_tf})});
+    objc.msg(void, tr, "setToValue:", .{objc.msg(objc.Object, objc.class("NSValue"), "valueWithCATransform3D:", .{CATransform3DIdentity})});
+    objc.msg(void, tr, "setDuration:", .{dur});
+    objc.msg(void, tr, "setTimingFunction:", .{timing});
+    objc.msg(void, layer, "addAnimation:forKey:", .{ tr, objc.nsString("kea.page.transform") });
 }
 
 fn rectsEq(a: ui.Rect, b: ui.Rect) bool {

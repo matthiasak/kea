@@ -271,7 +271,7 @@ fn drawRun(b: *Browser, c: *ui.Context, p: *const Palette, list: []const Item, e
 
     // The live grey: one box, sliding from the tab you left to the one you
     // picked (`matchedGeometryEffect(id: "live")`). Drawn first, under all.
-    const live_box = c.open(.{ .absolute = true, .radius = 9, .clip = true, .opacity = 0 }, null);
+    const live_box = c.open(.{ .absolute = true, .radius = 9, .clip = true, .opacity = 0, .motion_blur = true }, null);
     const live_fill = c.leaf(.{ .height = .fill }, .none, null);
     c.end();
 
@@ -321,7 +321,7 @@ fn drawRun(b: *Browser, c: *ui.Context, p: *const Palette, list: []const Item, e
                 }
                 const shown_w = ui.spring(c, pid, 1, w, spring);
                 const x = ui.spring(c, pid, 0, target_x, spring);
-                const v = presence.presenceFrom(c, pid, if (!fresh and !known) 0 else 1, true, motion.settle, null) orelse 1;
+                const v = presence.presenceFrom(c, pid, if (!fresh and !known) 0 else 1, true, motion.bounce, null) orelse 1;
                 // A pair wears its own grey, on the half with the keys.
                 const live = t.id == b.active_id and split_tab_item.partner(b, t) == null;
                 const step = w + metrics.tab_gap;
@@ -349,7 +349,9 @@ fn drawRun(b: *Browser, c: *ui.Context, p: *const Palette, list: []const Item, e
                 const placed = split_tab_item.stripItem(b, c, p, t, .{ .live = live, .each = each, .width = shown_w, .place = .{
                     .offset = .{ .x = x - flow_x },
                     .opacity = std.math.clamp(v, 0, 1),
-                    .scale = 0.9 + 0.1 * v,
+                    .scale = 0.6 + 0.4 * v,
+                    .arrived = v >= 0.999,
+                    .motion_blur = true,
                 } });
                 const d = placed.drawn;
                 const r = tab_drag.carried(b, c, d.it, t, ti.index, ti.count, step, false);
@@ -390,8 +392,8 @@ fn liveGround(b: *Browser, c: *ui.Context, p: *const Palette, box: u32, fill: u3
     }
     // The glide follows the pill even while it is carried, so it is where
     // the pill is when it takes over again.
-    const gx = motion.glideTo(c, live_id, 0, at.x);
-    const gw = motion.glideTo(c, live_id, 1, at.w);
+    const gx = motion.liveTo(c, live_id, 0, at.x);
+    const gw = motion.liveTo(c, live_id, 1, at.w);
     if (b.carry.hand) |h| if (h.tab == tab.id and h.held) return;
     // Landing, it follows the pill exactly; else it glides.
     const carried = if (b.carry.landing) |l| l.tab == tab.id else false;
@@ -533,24 +535,23 @@ fn page(b: *Browser, c: *ui.Context, p: *const Palette, index: usize, y: f32) vo
 /// pointer is in the strip.
 fn plus(b: *Browser, c: *ui.Context, p: *const Palette, nearby: bool) void {
     const t = motion.settleTo(c, plus_id, 0, if (nearby) 1 else 0);
-    const i = c.open(.{
-        .padding = .xy(7, 6),
-        .radius = 9,
-        .align_items = .center,
-        .justify = .center,
-        .opacity = std.math.clamp(t, 0, 1),
-        .scale = 0.7 + 0.3 * t,
-        .scale_anchor = .{ .x = 0, .y = 0.5 },
-        .control = nearby,
-    }, "kea.strip.plus");
+    const i = c.open(.{ .padding = .xy(7, 6), .radius = 9, .align_items = .center, .justify = .center, .opacity = std.math.clamp(t, 0, 1), .scale = 0.7 + 0.3 * t, .scale_anchor = if (t >= 0.999) .{ .x = 0.5, .y = 0.5 } else .{ .x = 0, .y = 0.5 }, .control = nearby }, "kea.strip.plus");
     defer c.end();
+    const id = c.node(i).id;
+    var hovered = false;
+    var pressed = false;
     if (nearby) {
         const it = c.interact(i, .{});
+        hovered = it.hovered;
+        pressed = it.pressed;
         c.help(i, "New Tab   ⌘T");
         c.addA11y(i, .button, "New Tab", "", false, true);
         if (it.hovered) c.node(i).style.background = p.hover;
         if (it.clicked) b.newTab();
     }
+    const lift = if (c.reduce_motion) 0 else motion.liftTo(c, id, 6, if (hovered) 1 else 0);
+    const press = if (c.reduce_motion) 0 else motion.liftTo(c, id, 7, if (pressed) 1 else 0);
+    c.node(i).style.scale *= 1 + 0.08 * lift - 0.10 * press;
     ui.icon(c, "plus", .{ .size = 10, .weight = .medium, .frame = 15, .color = p.muted });
 }
 

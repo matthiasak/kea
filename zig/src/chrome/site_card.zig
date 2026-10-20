@@ -15,6 +15,7 @@ const Tab = @import("../web/tab.zig").Tab;
 const Palette = @import("../design/palette.zig").Palette;
 const menu = @import("../design/menu.zig");
 const card = @import("../design/card.zig");
+const motion = @import("../design/motion.zig");
 const overlays = @import("overlays.zig");
 const controls = @import("controls.zig");
 const config = @import("../web/config.zig");
@@ -252,8 +253,7 @@ fn panelView(p: *Panel, c: *ui.Context) void {
     defer c.end();
     b.site_card.rect = null;
     if (c.rects.get(c.node(box).id)) |r| b.site_card.panel_size = .{ .w = r.w, .h = r.h };
-    if (b.site_card.deeper) if (safety(t, b.site_card.certified)) |s| return security(b, c, t, s, dark);
-    front(b, c, pal, t, dark);
+    steps(b, c, pal, t, dark);
 }
 
 // MARK: the page
@@ -423,9 +423,25 @@ pub fn overlay(b: *Browser, c: *ui.Context, p: *const Palette) void {
     st.rect = c.rects.get(c.peekId(overlays.key));
     if (!overlays.begin(c, &b.overlay, anchor, style, .{ .gap = 12 })) return;
     defer ui.end(c);
-    // ponytail: the step in swaps at once; Swift fades it on Motion.quick.
-    if (st.deeper) if (safety(t, st.certified)) |s| return security(b, c, t, s, dark);
+    steps(b, c, p, t, dark);
+}
+
+const step_id: u64 = std.hash.Wyhash.hash(0, "kea.site_card.step");
+
+fn steps(b: *Browser, c: *ui.Context, p: *const Palette, t: *Tab, dark: bool) void {
+    const sf = safety(t, b.site_card.certified);
+    const deeper = b.site_card.deeper and sf != null;
+    const v = motion.quickTo(c, step_id, 0, if (deeper) 1 else 0);
+    if (v <= 0.001) return front(b, c, p, t, dark);
+    if (v >= 0.999 and sf != null) return security(b, c, t, sf.?, dark);
+    _ = c.open(.{ .width = .fill, .absolute = deeper, .opacity = 1 - v }, "kea.site_card.front");
     front(b, c, p, t, dark);
+    c.end();
+    if (sf) |s| {
+        _ = c.open(.{ .width = .fill, .absolute = !deeper, .opacity = v }, "kea.site_card.sec");
+        security(b, c, t, s, dark);
+        c.end();
+    }
 }
 
 fn front(b: *Browser, c: *ui.Context, p: *const Palette, t: *Tab, dark: bool) void {

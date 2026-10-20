@@ -323,12 +323,7 @@ pub const Tab = struct {
             const host = p.hostName() orelse "";
             break :blk if (std.mem.startsWith(u8, host, "www.")) host[4..] else host;
         };
-        if (word.len == 0) return "•";
-        const n = std.unicode.utf8ByteSequenceLength(word[0]) catch 1;
-        if (n > word.len or n > buf.len) return "•";
-        @memcpy(buf[0..n], word[0..n]);
-        if (n == 1) buf[0] = std.ascii.toUpper(buf[0]);
-        return buf[0..n];
+        return @import("../chrome/mark.zig").initialBuf(buf, word);
     }
 
     /// Replaces an owned optional string with a copy of `s`.

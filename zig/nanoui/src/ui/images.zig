@@ -80,6 +80,8 @@ pub const Images = struct {
     generation: u64 = 0,
     /// Emptied during a frame: its earlier pictures must be painted again.
     reset_during_frame: bool = false,
+    decodes_left: u32 = 6,
+    wants_frame: bool = false,
 
     pub fn deinit(im: *Images) void {
         if (im.pixels.len > 0) im.gpa.free(im.pixels);
@@ -93,6 +95,8 @@ pub const Images = struct {
     /// instance is emitted when the atlas is filling up.
     pub fn beginPaint(im: *Images) void {
         im.frame +%= 1;
+        im.decodes_left = 6;
+        im.wants_frame = false;
         if (im.shelf_y + im.shelf_h > size * 3 / 4) im.repackLive();
     }
 
@@ -145,6 +149,13 @@ pub const Images = struct {
         if (im.entries.getPtr(sk)) |ke| {
             ke.last_frame = im.frame;
             return ke.entry;
+        }
+        if (!im.decoded.contains(sk)) {
+            if (im.decodes_left == 0) {
+                im.wants_frame = true;
+                return null;
+            }
+            im.decodes_left -= 1;
         }
         const d = im.getDecoded(sk, bytes) orelse {
             im.entries.put(im.gpa, sk, .{ .entry = null, .last_frame = im.frame }) catch {};

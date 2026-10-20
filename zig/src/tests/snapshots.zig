@@ -22,6 +22,8 @@ const states = [_]State{
     .{ .name = "p3-strip", .opts = .{ .sidebar = false, .tabs = 3 } },
     .{ .name = "p4-strip-12-tabs", .opts = .{ .sidebar = false, .tabs = 11 } },
     .{ .name = "p4-column-pins-groups", .opts = .{ .sidebar = true, .tabs = 7 }, .setup = pinsAndGroups },
+    .{ .name = "p4-strip-icons", .opts = .{ .sidebar = false, .tabs = 3 }, .setup = stripIcons },
+    .{ .name = "p4-column-pins-icons", .opts = .{ .sidebar = true, .tabs = 7 }, .setup = columnPinsIcons },
     .{ .name = "p6-site-card", .opts = .{ .sidebar = false, .tabs = 2 }, .setup = siteCard },
     .{ .name = "p6-omnibox-list", .opts = .{ .sidebar = false, .tabs = 2 }, .setup = omniboxList },
     .{ .name = "p6-site-chip", .opts = .{ .sidebar = false, .tabs = 2 }, .setup = siteChip },
@@ -126,6 +128,33 @@ fn pinsAndGroups(f: *Fixture) void {
     b.editing_group_id = null;
 }
 
+fn stripIcons(f: *Fixture) void {
+    const seed = @import("ui/seed.zig");
+    seed.seedIconFixtures(f.kea);
+    f.browser.prefs.set("glyph", seed.Glyph.icons);
+    var ubuf: [128]u8 = undefined;
+    for (f.browser.tabs.items, 0..) |t, i| {
+        const host = seed.icon_fixture_hosts[i % seed.icon_fixture_hosts.len];
+        const u = std.fmt.bufPrint(&ubuf, "https://{s}/Tab%20{d}", .{ host, i + 1 }) catch continue;
+        t.own(&t.address, u);
+        if (i == 0) t.setTitle("Tab 1");
+    }
+}
+
+fn columnPinsIcons(f: *Fixture) void {
+    const seed = @import("ui/seed.zig");
+    seed.seedIconFixtures(f.kea);
+    f.browser.prefs.set("glyph", seed.Glyph.icons);
+    var ubuf: [128]u8 = undefined;
+    for (f.browser.tabs.items, 0..) |t, i| {
+        const host = seed.icon_fixture_hosts[i % seed.icon_fixture_hosts.len];
+        const u = std.fmt.bufPrint(&ubuf, "https://{s}/Tab%20{d}", .{ host, i + 1 }) catch continue;
+        t.own(&t.address, u);
+        if (i == 0) t.setTitle("Tab 1");
+    }
+    pinsAndGroups(f);
+}
+
 /// The tab in front on an https page, its address edited: the card under it.
 fn siteCard(f: *Fixture) void {
     const b = f.browser;
@@ -164,6 +193,7 @@ const Sidecar = struct {
     cards: bool,
     holes: []const nanoui.ui.Rect,
     card: ?nanoui.ui.Rect = null,
+    icons: []const nanoui.ui.Rect = &.{},
 };
 
 const RefLights = struct {
@@ -379,12 +409,20 @@ pub fn main(init: std.process.Init) !void {
 
             const pw: u32 = @intFromFloat(@round(opts.width * opts.scale));
             const ph: u32 = @intFromFloat(@round(opts.height * opts.scale));
+            var icon_rects: std.ArrayList(nanoui.ui.Rect) = .empty;
+            defer icon_rects.deinit(gpa);
+            for (f.tester.ctx.nodes.items) |n| {
+                if (n.content == .image and n.rect.w > 0 and n.rect.w <= 40 and n.rect.h > 0 and n.rect.h <= 40) {
+                    try icon_rects.append(gpa, n.rect);
+                }
+            }
             const sidecar = try @import("kea").json.encode(gpa, Sidecar{
                 .pixels = .{ pw, ph },
                 .points = .{ @intFromFloat(@round(opts.width)), @intFromFloat(@round(opts.height)) },
                 .cards = f.browser.prefs.sidebar and !f.browser.folded,
                 .holes = f.holes(),
                 .card = f.browser.site_card.rect,
+                .icons = icon_rects.items,
             });
             defer gpa.free(sidecar);
             const jpath = try std.fmt.allocPrint(gpa, "{s}/{s}-{s}.json", .{ dir, s.name, look });
