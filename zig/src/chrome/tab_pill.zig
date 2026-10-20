@@ -133,7 +133,7 @@ pub fn pill(b: *Browser, c: *ui.Context, p: *const Palette, tab: *Tab, o: Option
         const rest: ?ui.Color = if (is_pin) p.wash.alpha(0.55) else null;
         c.node(i).style.background = if (rest) |r| r.mix(p.hover, h) else p.hover.alpha(h);
     }
-    const colour = if (o.live) p.ink else p.muted.mix(p.ink, h);
+    const colour = if (o.live) p.ink else p.muted.mix(p.ink.alpha(0.7), h);
     var d: Drawn = .{ .it = it, .index = i };
     if (edit) {
         tab_address.field(b, c, p, tab);

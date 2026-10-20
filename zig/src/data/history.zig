@@ -155,11 +155,12 @@ pub const History = struct {
     }
 
     fn setTitle(self: *History, e: *Entry, title: []const u8) !void {
+        const low: ?[]u8 = if (e.text != null) try url_mod.lower(self.gpa, title) else null;
+        errdefer if (low) |l| self.gpa.free(l);
         try self.replace(&e.visit.title, title);
         if (e.text) |*t| {
-            const low = try url_mod.lower(self.gpa, title);
             self.gpa.free(t.title);
-            t.title = low;
+            t.title = low.?;
         }
     }
 
@@ -169,7 +170,11 @@ pub const History = struct {
         self.recordAt(page, title, json.now()) catch {};
     }
 
-    fn recordAt(self: *History, raw: []const u8, title: []const u8, now: json.SwiftDate) !void {
+    fn recordAt(self: *History, raw_in: []const u8, title_in: []const u8, now: json.SwiftDate) !void {
+        const raw = try self.dupe(raw_in);
+        defer self.gpa.free(raw);
+        const title = try self.dupe(title_in);
+        defer self.gpa.free(title);
         self.ensureIndexed();
         if (!text_mod.isWeb(raw)) return;
         const page = try kept(self.gpa, raw) orelse return;
@@ -213,7 +218,11 @@ pub const History = struct {
         self.takeVisit(raw, title, count, last) catch {};
     }
 
-    fn takeVisit(self: *History, raw: []const u8, title: []const u8, count: i64, last: json.SwiftDate) !void {
+    fn takeVisit(self: *History, raw_in: []const u8, title_in: []const u8, count: i64, last: json.SwiftDate) !void {
+        const raw = try self.dupe(raw_in);
+        defer self.gpa.free(raw);
+        const title = try self.dupe(title_in);
+        defer self.gpa.free(title);
         self.ensureIndexed();
         if (!text_mod.isWeb(raw)) return;
         const page = try kept(self.gpa, raw) orelse return;
@@ -459,6 +468,41 @@ pub const History = struct {
     }
 };
 
+
+test "take and record handle aliased entry slices without use-after-free" {
+    const Temp = @import("../tests/temp.zig").Temp;
+    const gpa = std.testing.allocator;
+    var t = try Temp.init(gpa);
+    defer t.deinit(gpa);
+    var store = try Store.init(gpa, t.root, t.suite);
+    defer {
+        store.disk.drain();
+        store.deinit();
+    }
+    // Seed a legacy unindexed history file where ensureIndexed() -> rehomeCredits()
+    // drops the bare-origin credit and merges into the www front door.
+    const seed_json =
+        \\[{"url":"https://news.site/","key":"https://news.site/","title":"","count":2,"last":780000000},
+        \\ {"url":"https://www.news.site/story","key":"https://www.news.site/story","title":"Old Title","count":3,"last":781000000}]
+    ;
+    store.write(file_name, try gpa.dupe(u8, seed_json), true);
+    var h: History = undefined;
+    h.init(gpa, &store);
+    defer h.deinit();
+    try std.testing.expect(!h.indexed);
+    const now = json.now();
+    // Borrow slices directly from the unindexed entries before take() runs ensureIndexed() / replace().
+    const credit = h.visits.get("https://news.site/").?.visit;
+    h.take(credit.url, credit.title, 4, now);
+    const rehomed = h.visits.get("https://news.site/") orelse return error.MissingCreditAfterTake;
+    try std.testing.expectEqual(@as(i64, 4), rehomed.visit.count);
+    try std.testing.expectEqualStrings("https://news.site/", rehomed.visit.url);
+    const story = h.visits.get("https://www.news.site/story").?.visit;
+    h.record(story.url, story.title);
+    const after = h.visits.get("https://www.news.site/story").?.visit;
+    try std.testing.expectEqualStrings("Old Title", after.title);
+    try std.testing.expectEqual(@as(i64, 4), after.count);
+}
 test {
     std.testing.refAllDecls(@This());
     std.testing.refAllDecls(History);

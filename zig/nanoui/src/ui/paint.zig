@@ -12,6 +12,7 @@ const none = ctx_mod.none;
 
 pub fn paint(c: *Context, out: *std.ArrayList(metal.Instance)) void {
     out.clearRetainingCapacity();
+    if (out.capacity < 4096) out.ensureTotalCapacity(c.gpa, 4096) catch {};
     c.scrollbars.clearRetainingCapacity();
     c.text.images.beginPaint();
     paintNode(c, out, 0, types.Rect.infinite, 1, false);
@@ -26,7 +27,7 @@ fn push(c: *Context, out: *std.ArrayList(metal.Instance), inst: metal.Instance) 
 }
 
 fn paintNode(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, clip: types.Rect, opacity_in: f32, selectable_in: bool) void {
-    const n = c.node(index).*;
+    const n = c.node(index);
     const st = n.style;
     const selectable = (selectable_in or st.selectable) and !st.control;
     const opacity = opacity_in * st.opacity;
@@ -67,7 +68,7 @@ fn paintNode(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, clip:
             .clip = clip4,
         });
         switch (n.content) {
-            .text => |t| paintText(c, out, index, n, t, clip4, opacity, selectable),
+            .text => |*t| paintText(c, out, index, n, t, clip4, opacity, selectable),
             .icon => |ic| if (c.text.atlas.symbol(ic.name, ic.size, @intFromEnum(ic.weight), 0)) |sp| {
                 // Centered in its box, which may be larger (a fixed frame).
                 const inner = r.inset(st.padding);
@@ -109,7 +110,7 @@ fn paintNode(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, clip:
     while (child != none) : (child = c.node(child).next) paintNode(c, out, child, child_clip, opacity, selectable);
     if ((st.clip or st.scroll or st.scroll_x) and st.radius > 0) roundClip(out.items[first..], r, visible, st.radius);
 
-    if (st.scroll or st.scroll_x) @import("scroll.zig").paintScrollbars(c, out, n, visible, opacity);
+    if (st.scroll or st.scroll_x) @import("scroll.zig").paintScrollbars(c, out, n.*, visible, opacity);
     if (st.scale != 1) scaleItems(out.items[start..], r, st.scale, st.scale_anchor, clip4);
 }
 
@@ -134,7 +135,7 @@ fn scaleItems(items: []metal.Instance, box: types.Rect, s: f32, anchor: types.Po
     }
 }
 
-fn paintText(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, n: ctx_mod.Node, t: ctx_mod.Content.Text, clip4: [4]f32, opacity: f32, selectable: bool) void {
+fn paintText(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, n: *const ctx_mod.Node, t: *const ctx_mod.Content.Text, clip4: [4]f32, opacity: f32, selectable: bool) void {
     const sel: ?Sel = if (selectable) .{ .id = n.id, .index = index, .x0 = n.rect.x, .x1 = n.rect.x + n.rect.w } else null;
     const inner = n.rect.inset(n.style.padding);
     const f = c.text.font(t.style);
@@ -155,19 +156,22 @@ fn paintText(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, n: ct
 const Sel = struct { id: u64, index: u32, x0: f32, x1: f32 };
 
 /// `right` is the box's right edge, where a fade (`TextStyle.fade`) ends.
-fn textRun(c: *Context, out: *std.ArrayList(metal.Instance), t: ctx_mod.Content.Text, start: usize, end: usize, x: f32, y: f32, f: text_mod.Font, lh: f32, clip4: [4]f32, opacity: f32, sel: ?Sel, right: f32) void {
+fn textRun(c: *Context, out: *std.ArrayList(metal.Instance), t: *const ctx_mod.Content.Text, start: usize, end: usize, x: f32, y: f32, f: text_mod.Font, lh: f32, clip4: [4]f32, opacity: f32, sel: ?Sel, right: f32) void {
     const style = t.style;
     // Cull lines wholly above or below the clip before shaping them; a
     // selectable one still counts for where the pointer is.
     if (y > clip4[3] or y + lh < clip4[1] or x > clip4[2]) {
         if (sel) |s| if (y + lh <= c.input.mouse.y) {
             c.selection.below = .{ .id = s.id, .at = end };
-            if (!c.selection.next_order.contains(s.id)) c.selection.next_order.put(c.gpa, s.id, @intCast(c.selection.next_order.count())) catch {};
+            const count: u32 = @intCast(c.selection.next_order.count());
+            if (c.selection.next_order.getOrPut(c.gpa, s.id) catch null) |g| if (!g.found_existing) {
+                g.value_ptr.* = count;
+            };
         };
         return;
     }
     const styled = t.spans.len > 0 and rich.styled(t.spans);
-    const lay = if (styled) rich.layout(c.text, t.str[start..end], style, t.spans, start) else c.text.layout(t.str[start..end], style);
+    const lay = t.cut_lay orelse if (styled) rich.layout(c.text, t.str[start..end], style, t.spans, start) else c.text.layout(t.str[start..end], style);
     if (lay.glyphs.len == 0 or x + lay.width < clip4[0]) return;
     const scale = c.scale;
     // The line's extra height (its leading) goes half above, half below.
@@ -223,7 +227,7 @@ fn xAt(lay: text_mod.Layout, at: usize) f32 {
 
 /// What spans draw besides their glyphs: backgrounds (inline code, marks)
 /// behind the text, underlines (links) and lines through.
-fn decorations(c: *Context, out: *std.ArrayList(metal.Instance), t: ctx_mod.Content.Text, lay: text_mod.Layout, start: usize, end: usize, x: f32, baseline: f32, f: text_mod.Font, clip4: [4]f32, opacity: f32) void {
+fn decorations(c: *Context, out: *std.ArrayList(metal.Instance), t: *const ctx_mod.Content.Text, lay: text_mod.Layout, start: usize, end: usize, x: f32, baseline: f32, f: text_mod.Font, clip4: [4]f32, opacity: f32) void {
     for (t.spans) |sp| {
         if (sp.end <= start or sp.start >= end) continue;
         if (sp.background == null and !sp.underline and !sp.strike) continue;

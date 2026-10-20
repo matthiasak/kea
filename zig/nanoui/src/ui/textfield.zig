@@ -18,7 +18,9 @@ pub const TextBuffer = struct {
     want_caret: ?usize = null,
     /// The selection (anchor, caret) the next frame applies, as `want_caret`.
     want_selection: ?[2]usize = null,
-
+    /// The box id this buffer was last built under, so focus, caret and undo
+    /// survive when a parent container is added or removed around the field.
+    last_id: u64 = 0,
     const gpa = std.heap.c_allocator;
 
     pub fn deinit(b: *TextBuffer) void {
@@ -245,6 +247,7 @@ pub fn textField(c: *Context, buffer: *TextBuffer, opts: Options) Result {
         .clip = true,
     }, null);
     defer c.end();
+    rehome(c, buffer, c.node(i).id);
     const it = c.interact(i, .{ .focusable = true });
     c.addA11y(i, .text_field, opts.placeholder, buffer.text(), it.focused, true);
     if (it.hovered) {
@@ -402,6 +405,15 @@ fn byteOfCodepoint(s: []const u8, n: usize) usize {
     var k: usize = 0;
     while (i < s.len and k < n) : (k += 1) i += utf8.seqLen(s[i]);
     return @min(i, s.len);
+}
+
+/// Carries focus and edit state across when a field's ancestor path changes.
+pub fn rehome(c: *Context, buffer: *TextBuffer, id: u64) void {
+    if (buffer.last_id != 0 and buffer.last_id != id and c.focus == buffer.last_id) {
+        c.focus = id;
+        if (c.edits.fetchRemove(buffer.last_id)) |kv| c.edits.put(c.gpa, id, kv.value) catch {};
+    }
+    buffer.last_id = id;
 }
 
 /// The editing state of field `id`, with what the app asked of it since

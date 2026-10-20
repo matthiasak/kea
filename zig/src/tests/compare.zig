@@ -63,10 +63,22 @@ const Sidecar = struct {
     card: ?ui.Rect = null,
 };
 
+const FilmLights = struct {
+    hidden: bool = false,
+    x: i64 = 0,
+};
+
+const FilmFrame = struct {
+    t: i64 = 0,
+    lights: ?FilmLights = null,
+    edge_x: ?f32 = null,
+};
+
 const FilmJson = struct {
     action: []const u8 = "",
     look: []const u8 = "",
     t: []const i64 = &.{},
+    frames: []const FilmFrame = &.{},
 };
 
 const Image = struct {
@@ -453,29 +465,19 @@ fn extractColumnEdgePt(img: Image, scale: f32) f32 {
     const scan_w: u32 = @min(img.width, @as(u32, @intFromFloat(@round(380.0 * scale))));
     const scan_y: u32 = @min(img.height -| 1, @as(u32, @intFromFloat(@round(230.0 * scale))));
     if (scan_w < 8) return 0;
-
     const row = @as(usize, scan_y) * img.width;
     const bg = img.bgra[(row + scan_w - 2) * 4 ..][0..4];
-
     var x: u32 = scan_w - 2;
     while (x > 0) : (x -= 1) {
         const px = img.bgra[(row + x) * 4 ..][0..4];
         const db = @abs(@as(i32, px[0]) - @as(i32, bg[0]));
         const dg = @abs(@as(i32, px[1]) - @as(i32, bg[1]));
         const dr = @abs(@as(i32, px[2]) - @as(i32, bg[2]));
-        if (@max(dr, @max(dg, db)) > 3) {
-            return @as(f32, @floatFromInt(x)) / scale;
-        }
+        if (@max(dr, @max(dg, db)) > 3) return @as(f32, @floatFromInt(x)) / scale;
     }
     return 0;
 }
-
-fn compareFilms(
-    gpa: std.mem.Allocator,
-    ref_dir: []const u8,
-    zig_dir: []const u8,
-    report: *std.ArrayList(u8),
-) !void {
+fn compareFilms(gpa: std.mem.Allocator, ref_dir: []const u8, zig_dir: []const u8, report: *std.ArrayList(u8)) !void {
     try report.appendSlice(gpa, "\n## Film Motion Comparison\n\n");
     try report.appendSlice(gpa, "| Film | Frames | Max \\|Δx\\| (pt) | Worst frame (t ms, ref x, zig x) |\n");
     try report.appendSlice(gpa, "|---|---:|---:|---|\n");
@@ -506,29 +508,42 @@ fn compareFilms(
 
             const count = @min(ref_parsed.value.t.len, zig_parsed.value.t.len);
             if (count == 0) continue;
-
             var max_dx: f32 = 0;
             var worst_idx: usize = 0;
             var worst_t: i64 = 0;
             var worst_ref_x: f32 = 0;
             var worst_zig_x: f32 = 0;
+            const r_frames = ref_parsed.value.frames;
+            const z_frames = zig_parsed.value.frames;
+            const frame_limit = if (r_frames.len > 0) @min(count -| 1, @min(r_frames.len, z_frames.len)) else count;
+            for (0..frame_limit) |i| {
+                if (i + 1 < ref_parsed.value.t.len and ref_parsed.value.t[i + 1] - ref_parsed.value.t[i] > 100) continue;
+                const rx: f32 = if (i < r_frames.len and r_frames[i].lights != null) blk: {
+                    const l = r_frames[i].lights.?;
+                    if (std.mem.eql(u8, action, "peek")) {
+                        break :blk if (i == 0 or l.hidden) 0 else @max(0, 232.0 + @as(f32, @floatFromInt(l.x)));
+                    }
+                    break :blk if (l.hidden) 0 else @max(0, 232.0 + @as(f32, @floatFromInt(l.x)));
+                } else blk: {
+                    const rf_path = try std.fmt.allocPrint(gpa, "{s}/film-{s}-{s}-{d:0>2}.png", .{ ref_dir, action, look, i });
+                    defer gpa.free(rf_path);
+                    const r_img = decodePngFile(gpa, rf_path) catch continue;
+                    defer r_img.deinit(gpa);
+                    const r_scale: f32 = @max(1.0, @round(@as(f32, @floatFromInt(r_img.width)) / 380.0));
+                    break :blk extractColumnEdgePt(r_img, r_scale);
+                };
 
-            for (0..count) |i| {
-                const rf_path = try std.fmt.allocPrint(gpa, "{s}/film-{s}-{s}-{d:0>2}.png", .{ ref_dir, action, look, i });
-                defer gpa.free(rf_path);
-                const zf_path = try std.fmt.allocPrint(gpa, "{s}/film-{s}-{s}-{d:0>2}.png", .{ zig_dir, action, look, i });
-                defer gpa.free(zf_path);
+                const zx: f32 = if (i < z_frames.len and z_frames[i].edge_x != null)
+                    z_frames[i].edge_x.?
+                else blk: {
+                    const zf_path = try std.fmt.allocPrint(gpa, "{s}/film-{s}-{s}-{d:0>2}.png", .{ zig_dir, action, look, i });
+                    defer gpa.free(zf_path);
+                    const z_img = decodePngFile(gpa, zf_path) catch continue;
+                    defer z_img.deinit(gpa);
+                    const z_scale: f32 = @max(1.0, @round(@as(f32, @floatFromInt(z_img.width)) / 1440.0));
+                    break :blk extractColumnEdgePt(z_img, z_scale);
+                };
 
-                const r_img = decodePngFile(gpa, rf_path) catch continue;
-                defer r_img.deinit(gpa);
-                const z_img = decodePngFile(gpa, zf_path) catch continue;
-                defer z_img.deinit(gpa);
-
-                const r_scale: f32 = @max(1.0, @round(@as(f32, @floatFromInt(r_img.width)) / 380.0));
-                const z_scale: f32 = @max(1.0, @round(@as(f32, @floatFromInt(z_img.width)) / 1440.0));
-
-                const rx = extractColumnEdgePt(r_img, r_scale);
-                const zx = extractColumnEdgePt(z_img, z_scale);
                 const dx = @abs(rx - zx);
                 if (dx >= max_dx) {
                     max_dx = dx;

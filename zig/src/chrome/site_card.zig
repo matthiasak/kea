@@ -22,7 +22,7 @@ const float = @import("../web/float.zig");
 const Parts = @import("../data/url.zig").Parts;
 const dispatch = @import("../sys/dispatch.zig");
 const cg = @import("../sys/cg.zig");
-
+const palette = @import("../design/palette.zig");
 const px = struct {
     fn v(n: f32) ui.Length {
         return .{ .px = n };
@@ -46,8 +46,10 @@ pub const State = struct {
     sound: bool = false,
     /// Don't Float Videos Here.
     ground: bool = false,
-    /// Where the card was last laid out, window points.
+    /// Where the card was last laid out in the browser window, or null when
+    /// the native child NSPanel is up; `panel_size` is the panel's fitted size.
     rect: ?ui.Rect = null,
+    panel_size: ?ui.Size = null,
 };
 
 /// A press on the card is only a click: the address being edited under
@@ -100,6 +102,7 @@ fn show(b: *Browser, t: *Tab, draft: u64) void {
     b.overlay = .{ .site_card = t.id };
     b.overlay_anchor = b.tab_field_rect;
     certify(t);
+    openPanel(b, t);
 }
 
 fn shown(b: *const Browser) bool {
@@ -108,6 +111,7 @@ fn shown(b: *const Browser) bool {
 }
 
 fn hide(b: *Browser) void {
+    closePanel(b);
     if (shown(b)) b.overlay = null;
 }
 
@@ -122,6 +126,134 @@ pub fn resign(b: *Browser) void {
 fn close(b: *Browser) void {
     hide(b);
     b.cancelTabEdit();
+}
+
+// ponytail: the site card uses a separate native child NSPanel backed by NSVisualEffectView
+// (material = .popover, blendingMode = .behindWindow, continuous corner radius 14) so it can
+// extend outside a narrow browser window and float above the WKWebView stage hole with real
+// macOS vibrancy; headless/hidden test runs fall back to the in-window overlay pass.
+const Panel = struct {
+    tab_serial: u64,
+    window: *nanoui.Window,
+    glass: objc.Object,
+};
+
+var live_panel: ?*Panel = null;
+
+extern "c" const kCACornerCurveContinuous: objc.Object;
+
+fn panelBrowser(p: *const Panel) ?*Browser {
+    const t = Tab.alive(p.tab_serial) orelse return null;
+    const b = t.browser orelse return null;
+    return if (b.site_card.tab == t.id and shown(b)) b else null;
+}
+
+fn openPanel(b: *Browser, t: *Tab) void {
+    closePanel(null);
+    if (b.kea.opts.hidden or b.kea.opts.root != null) return;
+    const parent = b.window orelse return;
+    const app = b.kea.ui_app orelse return;
+    const p = std.heap.c_allocator.create(Panel) catch return;
+    p.* = .{ .tab_serial = t.serial, .window = undefined, .glass = undefined };
+    p.window = app.newWindow(.{
+        .width = 260,
+        .height = 200,
+        .resizable = false,
+        .title_bar = .hidden,
+        .visible = false,
+        .non_activating = true,
+        .kind = .panel,
+        .on_close = .{ .ctx = p, .func = panelClosed },
+        .content = .{ .view = ui.View.init(p, panelView) },
+    }) catch return std.heap.c_allocator.destroy(p);
+    const pool = objc.Pool.push();
+    defer pool.pop();
+    const ns = p.window.nswindow;
+    const s = p.window.surface.?;
+    const bounds = objc.msg(objc.CGRect, s.nsview, "bounds", .{});
+    const glass = objc.msg(objc.Object, objc.alloc("NSVisualEffectView"), "initWithFrame:", .{bounds});
+    objc.msg(void, glass, "setMaterial:", .{@as(objc.NSInteger, 6)}); // .popover
+    objc.msg(void, glass, "setBlendingMode:", .{@as(objc.NSInteger, 0)}); // .behindWindow
+    objc.msg(void, glass, "setState:", .{@as(objc.NSInteger, 1)}); // .active
+    objc.msg(void, glass, "setWantsLayer:", .{objc.YES});
+    if (objc.msg(?objc.Object, glass, "layer", .{})) |layer| {
+        objc.msg(void, layer, "setCornerRadius:", .{@as(f64, 14)});
+        objc.msg(void, layer, "setCornerCurve:", .{kCACornerCurveContinuous});
+        objc.msg(void, layer, "setMasksToBounds:", .{objc.YES});
+    }
+    s.attachBackdrop(glass);
+    objc.release(glass);
+    p.glass = glass;
+    objc.msg(void, ns, "setStyleMask:", .{@as(objc.NSUInteger, 1 << 7)}); // borderless nonactivatingPanel
+    objc.msg(void, ns, "setOpaque:", .{objc.NO});
+    objc.msg(void, ns, "setBackgroundColor:", .{objc.msg(objc.Object, objc.class("NSColor"), "clearColor", .{})});
+    objc.msg(void, ns, "setHasShadow:", .{objc.YES});
+    objc.msg(void, ns, "setBecomesKeyOnlyIfNeeded:", .{objc.YES});
+    objc.msg(void, ns, "setHidesOnDeactivate:", .{objc.YES});
+    live_panel = p;
+    b.site_card.rect = null;
+    s.frame();
+    placePanel(p, b);
+    objc.msg(void, parent.nswindow, "addChildWindow:ordered:", .{ ns, @as(objc.NSInteger, 1) });
+}
+
+fn closePanel(for_b: ?*Browser) void {
+    const p = live_panel orelse return;
+    if (for_b) |b| if (panelBrowser(p)) |owner| if (owner != b) return;
+    live_panel = null;
+    p.tab_serial = 0;
+    const pool = objc.Pool.push();
+    defer pool.pop();
+    const ns = p.window.nswindow;
+    if (objc.msg(?objc.Object, ns, "parentWindow", .{})) |pw| objc.msg(void, pw, "removeChildWindow:", .{ns});
+    objc.msg(void, ns, "orderOut:", .{@as(?objc.Object, null)});
+    objc.dispatchMain(p, closePanelLater);
+}
+
+fn closePanelLater(ctx: ?*anyopaque) callconv(.c) void {
+    const p: *Panel = @ptrCast(@alignCast(ctx orelse return));
+    p.window.close();
+}
+
+fn panelClosed(ctx: *anyopaque, _: *nanoui.Window) void {
+    const p: *Panel = @ptrCast(@alignCast(ctx));
+    if (live_panel == p) live_panel = null;
+    std.heap.c_allocator.destroy(p);
+}
+
+fn placePanel(p: *Panel, b: *Browser) void {
+    const parent = b.window orelse return;
+    const ps = parent.surface orelse return;
+    const sz = b.site_card.panel_size orelse return;
+    const f = b.tab_field_rect;
+    const in_win = objc.msg(objc.CGRect, ps.nsview, "convertRect:toView:", .{
+        objc.CGRect{ .origin = .{ .x = f.x, .y = f.y }, .size = .{ .width = f.w, .height = f.h } }, @as(?objc.Object, null),
+    });
+    const spot = objc.msg(objc.CGRect, parent.nswindow, "convertRectToScreen:", .{in_win});
+    var x = spot.origin.x - 12;
+    var y = spot.origin.y - 12 - sz.h;
+    if (objc.msg(?objc.Object, parent.nswindow, "screen", .{})) |scr| {
+        const vf = objc.msg(objc.CGRect, scr, "visibleFrame", .{});
+        x = @min(@max(x, vf.origin.x + 8), vf.origin.x + vf.size.width - sz.w - 8);
+        if (y < vf.origin.y + 8) y = @min(spot.origin.y + spot.size.height + 12, vf.origin.y + vf.size.height - sz.h - 8);
+    }
+    objc.msg(void, p.window.nswindow, "setFrame:display:", .{
+        objc.CGRect{ .origin = .{ .x = x, .y = y }, .size = .{ .width = sz.w, .height = sz.h } }, objc.YES,
+    });
+}
+
+fn panelView(p: *Panel, c: *ui.Context) void {
+    c.hand_cursor = false;
+    const b = panelBrowser(p) orelse return;
+    const t = b.tabById(b.site_card.tab) orelse return;
+    const dark = c.theme.dark;
+    const pal = palette.get(dark);
+    const box = c.open(.{ .radius = 14, .border = menu.edge(dark), .border_width = 0.5, .padding = .{ .top = menu.pad, .bottom = menu.pad }, .min_width = 180 }, "kea.site_card.panel");
+    defer c.end();
+    b.site_card.rect = null;
+    if (c.rects.get(c.node(box).id)) |r| b.site_card.panel_size = .{ .w = r.w, .h = r.h };
+    if (b.site_card.deeper) if (safety(t, b.site_card.certified)) |s| return security(b, c, t, s, dark);
+    front(b, c, pal, t, dark);
 }
 
 // MARK: the page
@@ -259,7 +391,14 @@ fn showCertificate(t: *Tab) void {
 pub fn overlay(b: *Browser, c: *ui.Context, p: *const Palette) void {
     const st = &b.site_card;
     const t = b.tabById(st.tab) orelse {
-        b.overlay = null;
+        hide(b);
+        return;
+    };
+    if (live_panel) |lp| if (panelBrowser(lp) == b) {
+        st.rect = null;
+        if (c.input.pressed and !b.tab_field_rect.contains(c.input.mouse)) return hide(b);
+        if (lp.window.surface) |s| s.frame();
+        if (live_panel == lp) placePanel(lp, b);
         return;
     };
     // It never takes the keys: the address stays in the tab being edited,

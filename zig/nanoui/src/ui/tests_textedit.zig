@@ -262,6 +262,44 @@ test "Tab and Shift+Tab cycle through three fields in order" {
     try testing.expectEqualStrings("beta", t.ctx.focused_text.?.text);
 }
 
+const WrappedField = struct {
+    buf: ui.TextBuffer = .{},
+    wrapped: bool = false,
+    fn view(s: *WrappedField, cx: *ui.Context) void {
+        ui.column(cx, .{ .padding = .all(12) });
+        defer ui.end(cx);
+        if (s.wrapped) ui.row(cx, .{});
+        _ = ui.textField(cx, &s.buf, .{ .placeholder = "Name" });
+        if (s.wrapped) ui.end(cx);
+    }
+};
+
+test "focused textField keeps focus, caret, and undo when wrapped in a row" {
+    var s: WrappedField = .{};
+    defer s.buf.deinit();
+    var t: ui.Tester = undefined;
+    try t.init(testing.allocator, .init(&s, WrappedField.view), .{});
+    defer t.deinit();
+    try t.clickText("Name");
+    t.typeText("hello");
+    t.key(.left);
+    t.key(.left);
+    try testing.expectEqual(@as(usize, 3), t.ctx.focused_text.?.caret);
+
+    // Wrap the field in an extra ui.row on the next frame.
+    s.wrapped = true;
+    t.frame();
+    try testing.expect(t.ctx.focused_text != null);
+    try testing.expectEqual(@as(usize, 3), t.ctx.focused_text.?.caret);
+
+    // Typing continues at the preserved caret position, and undo still works.
+    t.typeText("X");
+    try testing.expectEqualStrings("helXlo", s.buf.text());
+    try testing.expectEqual(@as(usize, 4), t.ctx.focused_text.?.caret);
+    try testing.expect(t.shortcut(.{ .key = 'z', .cmd = true }));
+    try testing.expectEqualStrings("hello", s.buf.text());
+}
+
 test {
     _ = @import("textedit.zig");
     _ = @import("scroll.zig");

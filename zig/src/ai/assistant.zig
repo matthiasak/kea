@@ -57,8 +57,6 @@ pub const Assistant = struct {
     compactor: ?*runs.Compact = null,
     compact_run: u64 = 0,
     naming: std.ArrayList(Uuid) = .empty,
-    last_piece_redraw: f64 = 0,
-    pending_redraw: bool = false,
     sugg_arena: ?std.heap.ArenaAllocator = null,
     sugg_hash: u64 = std.math.maxInt(u64),
     sugg_cached: []const ubi.Suggestion = &.{},
@@ -139,15 +137,6 @@ pub const Assistant = struct {
     /// The window drawn again, as a `@Published` change does: the
     /// browser's, and the chat's own when it is popped out.
     pub fn changed(self: *Assistant) void {
-        if (self.live != null) {
-            const now = @import("nanoui").ui.clock.now();
-            if (now - self.last_piece_redraw < 1.0 / 60.0) {
-                self.pending_redraw = true;
-                return;
-            }
-            self.last_piece_redraw = now;
-        }
-        self.pending_redraw = false;
         const b = self.browser orelse return;
         b.redraw();
         if (b.chat.window) |w| w.redraw();
@@ -210,7 +199,6 @@ pub const Assistant = struct {
         self.chat_arena.deinit();
         self.chat_arena = next;
         self.chat = c;
-        self.last_piece_redraw = 0;
         self.changed();
     }
 
@@ -220,7 +208,6 @@ pub const Assistant = struct {
         self.chat_arena.deinit();
         self.chat_arena = next;
         self.chat = copy;
-        self.last_piece_redraw = 0;
         self.changed();
     }
 
@@ -348,7 +335,6 @@ pub const Assistant = struct {
             }
         }.f);
         self.clearLive();
-        self.last_piece_redraw = 0;
         self.changed();
         self.keep();
         if (failed != null or reads.len == 0) return;

@@ -101,6 +101,7 @@ pub fn textArea(c: *Context, buffer: *tf.TextBuffer, opts: AreaOptions) tf.Resul
         .clip = true,
     }, null);
     defer c.end();
+    tf.rehome(c, buffer, c.node(i).id);
     const it = c.interact(i, .{ .focusable = true });
     c.addA11y(i, .text_field, opts.placeholder, buffer.text(), it.focused, true);
     if (it.hovered) {

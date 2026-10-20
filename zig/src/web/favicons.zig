@@ -63,6 +63,7 @@ pub const Favicons = struct {
 
     /// The icon for a page's site, as `Mark` shows it, or null.
     pub fn icon(self: *Favicons, page: []const u8) ?Icon {
+        if (std.mem.startsWith(u8, page, "data:") or std.mem.startsWith(u8, page, "about:")) return null;
         var buf: [300]u8 = undefined;
         const k = self.cached(site(&buf, page) orelse return null) orelse return null;
         return .{ .key = k.name, .png = k.png };
@@ -160,6 +161,7 @@ pub const Favicons = struct {
         const wv = tab.web orelse return;
         const kea = self.kea orelse return;
         const page = tab.url();
+        if (std.mem.startsWith(u8, page, "data:") or std.mem.startsWith(u8, page, "about:")) return;
         const p = Parts.parse(page) orelse return;
         // ponytail: `kea-test` counts as the web only under the e2e scheme handler.
         const test_scheme = kea.opts.scheme_handler != null and p.schemeIs("kea-test");

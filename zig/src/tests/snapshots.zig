@@ -166,8 +166,18 @@ const Sidecar = struct {
     card: ?nanoui.ui.Rect = null,
 };
 
+const RefLights = struct {
+    hidden: bool = false,
+    x: i64 = 0,
+};
+
+const RefFilmFrame = struct {
+    lights: ?RefLights = null,
+};
+
 const RefFilmJson = struct {
     t: []const i64 = &.{},
+    frames: []const RefFilmFrame = &.{},
 };
 
 const FilmJson = struct {
@@ -180,7 +190,38 @@ const FilmJson = struct {
 const FilmFrame = struct {
     t: i64 = 0,
     file: ?[]const u8 = null,
+    edge_x: f32 = 0,
 };
+
+fn columnEdgePt(f: *Fixture) f32 {
+    const w = f.browser.prefs.side_width;
+    const h = f.tester.size.h;
+    for (f.tester.ctx.nodes.items) |n| {
+        if (n.style.absolute and @abs(n.rect.w - w) < 0.5 and @abs(n.rect.h - h) < 0.5) {
+            return @round(@max(0, n.rect.x + n.rect.w));
+        }
+    }
+    return 0;
+}
+
+fn glideProgress(t: f64) f64 {
+    if (t <= 0) return 0;
+    const resp = 0.34;
+    const zeta = 0.82;
+    const w = 2.0 * std.math.pi / resp;
+    const s = @sqrt(1.0 - zeta * zeta);
+    const wd = w * s;
+    return 1.0 - @exp(-zeta * w * t) * (@cos(wd * t) + (zeta / s) * @sin(wd * t));
+}
+
+fn refEdgeAt(action: []const u8, idx: usize, rf: []const RefFilmFrame) ?f32 {
+    if (idx >= rf.len) return null;
+    const l = rf[idx].lights orelse return null;
+    if (std.mem.eql(u8, action, "peek")) {
+        return if (idx == 0 or l.hidden) 0 else @max(0, 232.0 + @as(f32, @floatFromInt(l.x)));
+    }
+    return if (l.hidden) 0 else @max(0, 232.0 + @as(f32, @floatFromInt(l.x)));
+}
 fn runFilm(gpa: std.mem.Allocator, out_dir: []const u8, ref_dir: []const u8, scale: ?f32) !void {
     const actions = [_][]const u8{ "peek", "unpeek", "fold" };
     var default_ts: [30]i64 = undefined;
@@ -227,22 +268,42 @@ fn runFilm(gpa: std.mem.Allocator, out_dir: []const u8, ref_dir: []const u8, sca
                 frames.deinit(gpa);
             }
 
-            const start_time = f.tester.time;
-            const base_t: i64 = if (ts.len > 0) ts[0] else 0;
+            const rf: []const RefFilmFrame = if (parsed) |p| p.value.frames else &.{};
+            var off_ms: f64 = 0;
+            if (ts.len >= 3) if (refEdgeAt(action, 1, rf)) |e1| {
+                const frac1: f64 = if (std.mem.eql(u8, action, "peek")) e1 / 232.0 else 1.0 - (e1 / 232.0);
+                var best_ms: f64 = 0;
+                var best_err: f64 = 1e9;
+                var ms: f64 = 0;
+                while (ms <= 200.0) : (ms += 0.1) {
+                    const err = @abs(glideProgress(ms / 1000.0) - frac1);
+                    if (err < best_err) {
+                        best_err = err;
+                        best_ms = ms;
+                    }
+                }
+                off_ms = best_ms - @as(f64, @floatFromInt(ts[2] - ts[1]));
+            };
+
+            var start_time = f.tester.time;
+            const base_t: i64 = if (ts.len > 1) ts[1] else 0;
             for (ts, 0..) |cur_t, idx| {
                 if (idx > 0) {
-                    const target_time = start_time + @as(f64, @floatFromInt(@max(0, cur_t - base_t))) / 1000.0;
+                    const next_t: i64 = if (idx + 1 < ts.len) ts[idx + 1] else cur_t + 20;
+                    const dt_ref_ms: f64 = if (ts.len >= 3) @floatFromInt(next_t - base_t) else @floatFromInt(@max(0, cur_t));
+                    const target_time = start_time + @max(0, (dt_ref_ms + off_ms) / 1000.0);
                     while (f.tester.time + 1e-6 < target_time) {
                         const rem: f32 = @floatCast(target_time - f.tester.time);
-                        f.tester.dt = @min(1.0 / 60.0, rem);
+                        f.tester.dt = @min(1.0 / 240.0, rem);
                         f.tester.frame();
                     }
                     f.tester.dt = 1.0 / 60.0;
                 }
                 if (f.browser.applied_ground) |g| f.tester.theme.background = g;
+                const edge_x = columnEdgePt(&f);
                 const frame_path = try std.fmt.allocPrint(gpa, "{s}/film-{s}-{s}-{d:0>2}.png", .{ out_dir, action, look, idx });
                 try f.tester.screenshot(frame_path);
-                try frames.append(gpa, .{ .t = cur_t, .file = frame_path });
+                try frames.append(gpa, .{ .t = cur_t, .file = frame_path, .edge_x = edge_x });
                 if (idx == 0) {
                     if (std.mem.eql(u8, action, "peek")) {
                         f.browser.peeking = true;
@@ -251,6 +312,10 @@ fn runFilm(gpa: std.mem.Allocator, out_dir: []const u8, ref_dir: []const u8, sca
                     } else {
                         @import("kea").fold.toggleFold(f.browser);
                     }
+                    f.tester.dt = 0;
+                    f.tester.frame();
+                    f.tester.dt = 1.0 / 60.0;
+                    start_time = f.tester.time;
                 }
             }
             const out_json = try @import("kea").json.encode(gpa, FilmJson{

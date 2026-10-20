@@ -77,14 +77,55 @@ fn hasLetter(s: []const u8) bool {
 
 const Set = std.StringHashMapUnmanaged(void);
 
+const Cache = struct {
+    email: regex.Regex,
+    place: regex.Regex,
+    phone: regex.Regex,
+
+    fn deinit(c: *Cache) void {
+        c.email.deinit();
+        c.place.deinit();
+        c.phone.deinit();
+        std.heap.c_allocator.destroy(c);
+    }
+};
+
+var regex_cache: ?*Cache = null;
+
+// ponytail: compiled regex singletons live for the process lifetime; deinit only if patterns become dynamic.
+fn cachedRegexes() ?*const Cache {
+    if (@atomicLoad(?*Cache, &regex_cache, .acquire)) |c| return c;
+    const email = regex.Regex.init(email_pattern) orelse return null;
+    errdefer email.deinit();
+    const place = regex.Regex.init(place_pattern) orelse {
+        email.deinit();
+        return null;
+    };
+    const phone = regex.Regex.init(phone_pattern) orelse {
+        place.deinit();
+        email.deinit();
+        return null;
+    };
+    const fresh = std.heap.c_allocator.create(Cache) catch {
+        phone.deinit();
+        place.deinit();
+        email.deinit();
+        return null;
+    };
+    fresh.* = .{ .email = email, .place = place, .phone = phone };
+    if (@cmpxchgStrong(?*Cache, &regex_cache, null, fresh, .acq_rel, .acquire)) |existing| {
+        fresh.deinit();
+        return existing;
+    }
+    return fresh;
+}
+
 /// The strays, in the order the answer has them, each once; on `a`.
 pub fn strays(a: std.mem.Allocator, answer: []const u8, r: Read) ![]const []const u8 {
-    const email_re = regex.Regex.init(email_pattern) orelse return &.{};
-    defer email_re.deinit();
-    const place_re = regex.Regex.init(place_pattern) orelse return &.{};
-    defer place_re.deinit();
-    const phone_re = regex.Regex.init(phone_pattern) orelse return &.{};
-    defer phone_re.deinit();
+    const re = cachedRegexes() orelse return &.{};
+    const email_re = re.email;
+    const place_re = re.place;
+    const phone_re = re.phone;
     const said = try normalized(a, sse.prefix(answer, 12_000));
     const page = try normalized(a, try std.mem.concat(a, u8, &.{ r.text, "\n", r.title }));
     var emails: Set = .empty;

@@ -49,6 +49,7 @@ pub const Sample = struct {
     gpu_ms: f64,
     nodes: usize,
     allocs: usize,
+    mutated: bool = false,
 };
 
 pub const Metric = struct {
@@ -91,6 +92,10 @@ pub const Harness = struct {
     }
 
     pub fn stepFrame(h: *Harness) Sample {
+        return h.stepFrameMut(false);
+    }
+
+    pub fn stepFrameMut(h: *Harness, mutated: bool) Sample {
         const t = &h.f.tester;
         const a0 = @atomicLoad(usize, &allocations, .monotonic);
         t.frame();
@@ -102,6 +107,7 @@ pub const Harness = struct {
             .gpu_ms = timing.gpu_ms,
             .nodes = t.ctx.nodes.items.len,
             .allocs = a1 - a0,
+            .mutated = mutated,
         };
     }
 
@@ -124,13 +130,17 @@ pub fn summarize(name: []const u8, cold_exempt: bool, cold: Sample, samples: []c
     var gpu: [steady_steps]f64 = undefined;
     var total_allocs: usize = 0;
     var max_allocs: usize = 0;
+    var steady_n: usize = 0;
     var max_nodes: usize = cold.nodes;
     const n = @min(samples.len, steady_steps);
     for (samples[0..n], 0..) |s, i| {
         cpu[i] = s.cpu_ms;
         gpu[i] = s.gpu_ms;
-        total_allocs += s.allocs;
-        max_allocs = @max(max_allocs, s.allocs);
+        if (!s.mutated) {
+            total_allocs += s.allocs;
+            max_allocs = @max(max_allocs, s.allocs);
+            steady_n += 1;
+        }
         max_nodes = @max(max_nodes, s.nodes);
     }
     std.mem.sort(f64, cpu[0..n], {}, comptime std.sort.asc(f64));
@@ -146,7 +156,7 @@ pub fn summarize(name: []const u8, cold_exempt: bool, cold: Sample, samples: []c
         .gpu_p50 = percentile(gpu[0..n], 0.50),
         .gpu_p90 = percentile(gpu[0..n], 0.90),
         .nodes = max_nodes,
-        .steady_allocs = if (n > 0) @as(f64, @floatFromInt(total_allocs)) / @as(f64, @floatFromInt(n)) else 0,
+        .steady_allocs = if (steady_n > 0) @as(f64, @floatFromInt(total_allocs)) / @as(f64, @floatFromInt(steady_n)) else 0,
         .max_allocs = max_allocs,
     };
 }

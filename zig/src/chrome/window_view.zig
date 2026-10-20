@@ -47,6 +47,7 @@ const px = struct {
 }.v;
 
 const slide_id: u64 = std.hash.Wyhash.hash(0, "kea.room.slide");
+const col_id: u64 = std.hash.Wyhash.hash(0, "kea.room.col");
 const strip_id: u64 = std.hash.Wyhash.hash(0, "kea.room.strip");
 const bar_id: u64 = std.hash.Wyhash.hash(0, "kea.room.bar");
 
@@ -86,9 +87,11 @@ pub fn view(b: *Browser, c: *ui.Context) void {
     // The column, from the window's top: the lights sit in its own corner.
     // Placed by its own side, so a column leaving the right goes out on the right.
     const right = r.sideOnRight();
-    if (r.sidebar() or slide.w > chrome.w + 0.5) {
+    const col_target: f32 = if (r.sidebar()) b.prefs.side_width else 0;
+    const col_w = if (swapping) swapTo(c, col_id, 0, col_target) else motion.glideTo(c, col_id, b.room.still, col_target);
+    if (r.sidebar() or col_w > 0.5) {
         const on_right = b.prefs.side_position == .right;
-        const x = if (on_right) c.size.w - slide.w else slide.w - b.prefs.side_width;
+        const x = if (on_right) c.size.w - col_w else col_w - b.prefs.side_width;
         side_bar.sideBar(b, c, p, r.cards(), x);
     }
     drawStrip(b, c, p, !b.prefs.sidebar and !r.folded and !r.fullscreen, swapping);

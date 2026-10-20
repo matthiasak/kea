@@ -267,6 +267,7 @@ pub fn items(a: std.mem.Allocator, kea: *Kea, b: *Browser, top: Top) ![]const Me
             try m.line();
             try m.command("app.settings", .{});
             try m.command("app.welcome", .{});
+            // ponytail: Passkeys require AuthenticationServices / signed app entitlements; Extensions require WKWebExtensionController on macOS 15.4+.
             try m.command("app.passwords", .{});
             try m.line();
             try m.role(.hide);
@@ -295,6 +296,7 @@ pub fn items(a: std.mem.Allocator, kea: *Kea, b: *Browser, top: Top) ![]const Me
             try m.command("file.print", .{ .disabled = blank });
         },
         .edit => {
+            // ponytail: .undo and .redo route through the responder chain (NanoUIView.undo:/redo: on s.ctx when a nanoui text field has focus, falling back to WKWebView when a page has focus).
             for ([_]nanoui.menu.Role{ .undo, .redo }) |r| try m.role(r);
             try m.line();
             for ([_]nanoui.menu.Role{ .cut, .copy, .paste, .select_all }) |r| try m.role(r);

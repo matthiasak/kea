@@ -6,8 +6,8 @@ const types = @import("types.zig");
 const ctx_mod = @import("context.zig");
 const Context = ctx_mod.Context;
 const none = ctx_mod.none;
-const rich = @import("text.zig").rich;
-const truncate = @import("truncate.zig");
+const text = @import("text.zig");
+const rich = text.rich;
 
 fn main(d: types.Direction, s: types.Size) f32 {
     return if (d == .row) s.w else s.h;
@@ -41,6 +41,10 @@ pub fn measure(c: *Context, index: u32, avail_w: f32) types.Size {
     var flexible = false;
     switch (n.content) {
         .text => |*t| {
+            if (!c.text_warmed) {
+                text.warmCaches(c.text);
+                c.text_warmed = true;
+            }
             const lh = c.text.lineHeight(t.style);
             if (t.style.wrap) {
                 flexible = true;
@@ -125,8 +129,8 @@ pub fn arrange(c: *Context, index: u32, rect_in: types.Rect) void {
     rect.x += st.offset.x;
     rect.y += dy;
     n.rect = rect;
-    if (n.content == .text and n.content.text.style.cuts()) truncate.fit(c, index, rect.w);
-    if (n.content == .text and n.content.text.style.max_lines > 0) truncate.fitLines(c, index, rect.w);
+    if (n.content == .text and n.content.text.style.cuts()) text.fit(c, index, rect.w);
+    if (n.content == .text and n.content.text.style.max_lines > 0) text.fitLines(c, index, rect.w);
     if (n.first_child == none) return;
 
     const dir = st.direction;
@@ -310,4 +314,27 @@ test "centered column" {
     try std.testing.expectEqual(@as(f32, 55), c.node(a).rect.y);
     try std.testing.expectEqual(@as(f32, 60), c.node(b).rect.x);
     try std.testing.expectEqual(@as(f32, 105), c.node(b).rect.y);
+}
+
+test "truncate and max_lines share string and width without cache collision" {
+    const ui = @import("ui.zig");
+    const View = struct {
+        label_idx: u32 = 0,
+        wrap_idx: u32 = 0,
+        fn build(s: *@This(), c: *Context) void {
+            ui.column(c, .{ .width = .{ .px = 120 } });
+            defer ui.end(c);
+            s.label_idx = @intCast(c.nodes.items.len);
+            ui.text(c, "First line", .{ .size = 13, .truncate = true });
+            s.wrap_idx = @intCast(c.nodes.items.len);
+            ui.text(c, "First line\nSecond line dropped", .{ .size = 13, .wrap = true, .max_lines = 1 });
+        }
+    };
+    var v: View = .{};
+    var t: ui.Tester = undefined;
+    try t.init(std.testing.allocator, .init(&v, View.build), .{});
+    defer t.deinit();
+    t.frame();
+    try std.testing.expectEqualStrings("First line", t.ctx.node(v.label_idx).content.text.str);
+    try std.testing.expect(std.mem.endsWith(u8, t.ctx.node(v.wrap_idx).content.text.str, "…"));
 }

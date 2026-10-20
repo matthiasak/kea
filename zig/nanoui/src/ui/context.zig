@@ -45,6 +45,7 @@ pub const Content = union(enum) {
         lines: []const text.Line = &.{},
         /// Colored byte ranges, sorted; the rest is drawn in `color`.
         spans: []const types.Span = &.{},
+        cut_lay: ?text.Layout = null,
     };
 };
 
@@ -236,6 +237,8 @@ pub const Context = struct {
     reduce_motion: bool = false,
     /// Horizontal offsets of `scroll_x` boxes, by id.
     scroll_x: std.AutoHashMapUnmanaged(u64, f32) = .empty,
+    truncates: std.AutoHashMapUnmanaged(u64, text.Cut) = .empty,
+    text_warmed: bool = false,
 
     pub fn init(gpa: std.mem.Allocator, ts: *text.TextSystem) Context {
         return .{ .gpa = gpa, .arena = .init(gpa), .text = ts };
@@ -267,6 +270,7 @@ pub const Context = struct {
         c.scroll_x.deinit(c.gpa);
         c.helps.deinit(c.gpa);
         c.drop_targets.deinit(c.gpa);
+        c.truncates.deinit(c.gpa);
     }
 
     /// Memory that lives until the end of the frame, for formatted text.
@@ -285,6 +289,7 @@ pub const Context = struct {
 
     /// Starts building a frame: the root fills the window.
     pub fn begin(c: *Context) void {
+        if (c.frame == 0 and c.nodes.capacity == 0) c.warmMaps();
         if (c.input.key == .tab and c.focus == 0 and c.last_focusable_ids.items.len > 0) {
             hooks.focusCycle(c, c.input.shift);
             c.input.key = null;
@@ -353,8 +358,38 @@ pub const Context = struct {
                 }
             }
             for (stale[0..n]) |k| _ = c.anims.remove(k);
-            c.motion.prune(c.frame);
         }
+        c.motion.prune(c.frame);
+        if (c.text_warmed) text.retainLayouts(c.text);
+    }
+
+    fn warmMaps(c: *Context) void {
+        c.nodes.ensureTotalCapacity(c.gpa, 4096) catch {};
+        c.stack.ensureTotalCapacity(c.gpa, 128) catch {};
+        c.rects.ensureTotalCapacity(c.gpa, 4096) catch {};
+        c.hits.ensureTotalCapacity(c.gpa, 1024) catch {};
+        c.next_hits.ensureTotalCapacity(c.gpa, 1024) catch {};
+        c.a11y_items.ensureTotalCapacity(c.gpa, 1024) catch {};
+        c.helps.ensureTotalCapacity(c.gpa, 1024) catch {};
+        c.motion.entries.ensureTotalCapacity(c.gpa, 4096) catch {};
+        c.anims.ensureTotalCapacity(c.gpa, 512) catch {};
+        c.scroll.ensureTotalCapacity(c.gpa, 64) catch {};
+        c.scroll_x.ensureTotalCapacity(c.gpa, 32) catch {};
+        c.overscroll.ensureTotalCapacity(c.gpa, 64) catch {};
+        c.scrollbars.ensureTotalCapacity(c.gpa, 64) catch {};
+        c.scroll_max.ensureTotalCapacity(c.gpa, 64) catch {};
+        c.scroll_follow.ensureTotalCapacity(c.gpa, 64) catch {};
+        c.scroll_seen.ensureTotalCapacity(c.gpa, 64) catch {};
+        c.scroll_cap.ensureTotalCapacity(c.gpa, 64) catch {};
+        c.scroll_moved.ensureTotalCapacity(c.gpa, 64) catch {};
+        c.hot_path.ensureTotalCapacity(c.gpa, 64) catch {};
+        c.focusable_ids.ensureTotalCapacity(c.gpa, 64) catch {};
+        c.last_focusable_ids.ensureTotalCapacity(c.gpa, 64) catch {};
+        c.drop_targets.ensureTotalCapacity(c.gpa, 64) catch {};
+        c.selection.order.ensureTotalCapacity(c.gpa, 1024) catch {};
+        c.selection.next_order.ensureTotalCapacity(c.gpa, 1024) catch {};
+        c.selection.lines.ensureTotalCapacity(c.gpa, 1024) catch {};
+        c.truncates.ensureTotalCapacity(c.gpa, 4096) catch {};
     }
 
     fn childId(c: *Context, key: ?[]const u8) u64 {

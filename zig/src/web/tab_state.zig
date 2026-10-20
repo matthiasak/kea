@@ -260,10 +260,14 @@ pub fn resetZoom(t: *Tab) void {
 
 // MARK: reading, pictures, what was typed
 
-/// `scrolled(to:of:)`: in hundredths, and only when that changes.
+/// `scrolled(to:of:)`: throttled to >= 0.5 % changes while `shows_reading` is on.
 pub fn scrolled(t: *Tab, y: f64, ceiling: f64) void {
-    const fraction: f32 = if (ceiling > 0) @floatCast(@round(@min(1, @max(0, y / ceiling)) * 100) / 100) else 0;
-    if (fraction == t.reading) return;
+    const raw: f32 = if (ceiling > 0) @floatCast(@min(1, @max(0, y / ceiling))) else 0;
+    const shows = if (t.browser) |b| b.prefs.shows_reading else false;
+    const fraction: f32 = if (shows) @round(raw * 1000) / 1000 else @round(raw * 100) / 100;
+    const prev_reading = t.reading;
+    if (fraction == prev_reading) return;
+    if (shows and @abs(fraction - prev_reading) < 0.005 and fraction != 0 and fraction != 1) return;
     t.reading = fraction;
     t.changed(.state);
 }

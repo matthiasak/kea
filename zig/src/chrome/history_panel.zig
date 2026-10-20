@@ -23,7 +23,6 @@ const px = struct {
     }
 }.v;
 
-const max_rows = 300;
 const Row = struct { key: []const u8, url: []const u8, title: []const u8, address: []const u8, last: json.SwiftDate, clock: []const u8 = "" };
 const Day = struct { name: []const u8, rows: []Row };
 /// `Browser.recall`: the hunt (`recallHunt`), the mode, and the list as
@@ -40,7 +39,6 @@ pub const State = struct {
     arena: ?std.heap.ArenaAllocator = null,
     days: []Day = &.{},
     count: usize = 0,
-    truncated: bool = false,
     built_generation: u64 = 0,
     built_hunt: []const u8 = "",
     pub fn deinit(st: *State) void {
@@ -84,27 +82,25 @@ fn refresh(b: *Browser) void {
     const arena = st.arena.?.allocator();
     st.days = &.{};
     st.count = 0;
-    st.truncated = false;
     st.built_generation = b.kea.history.generation;
     st.built_hunt = arena.dupe(u8, st.hunt.text()) catch "";
     const traces = b.kea.history.everything(arena, st.hunt.text(), std.math.maxInt(usize)) catch return;
     st.count = traces.len;
-    st.truncated = traces.len > max_rows;
-    const shown = traces[0..@min(traces.len, max_rows)];
     var days: std.ArrayList(Day) = .empty;
     var rows: std.ArrayList(Row) = .empty;
     var start: json.SwiftDate = std.math.inf(f64);
-    for (shown) |t| {
+    for (traces) |t| {
         if (t.last < start) {
             if (rows.items.len > 0) days.items[days.items.len - 1].rows = rows.toOwnedSlice(arena) catch &.{};
             start = when.startOfDay(t.last);
             days.append(arena, .{ .name = when.day(arena, start), .rows = &.{} }) catch return;
         }
+        const addr = address.withoutWWW(t.address);
         rows.append(arena, .{
-            .key = arena.dupe(u8, t.key) catch return,
-            .url = arena.dupe(u8, t.url) catch return,
-            .title = arena.dupe(u8, if (t.title.len == 0) address.withoutWWW(t.address) else t.title) catch return,
-            .address = arena.dupe(u8, address.withoutWWW(t.address)) catch return,
+            .key = t.key,
+            .url = t.url,
+            .title = if (t.title.len == 0) addr else t.title,
+            .address = addr,
             .last = t.last,
         }) catch return;
     }
@@ -201,11 +197,6 @@ fn list(b: *Browser, c: *ui.Context, p: *const Palette) Act {
         y += card_h;
     }
     if (skipped_days > 0) _ = c.leaf(.{ .width = .fill, .height = px(skipped_days) }, .none, null);
-    if (st.truncated) {
-        ui.column(c, .{ .width = .fill, .padding = .{ .top = 10, .bottom = 4 }, .align_items = .center });
-        ui.text(c, "Showing first 300 matches", .{ .size = 11.5, .color = p.muted });
-        ui.end(c);
-    }
     return act;
 }
 

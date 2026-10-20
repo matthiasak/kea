@@ -80,7 +80,10 @@ pub const Selection = struct {
 /// notes where the pointer is, draws the highlight, gathers the text.
 pub fn line(c: anytype, out: *std.ArrayList(gpu.Instance), id: u64, index: u32, str: []const u8, start: usize, end: usize, lay: text_mod.Layout, x: f32, y: f32, lh: f32, bx: f32, bx_end: f32, clip4: [4]f32) void {
     const s = &c.selection;
-    if (!s.next_order.contains(id)) s.next_order.put(c.gpa, id, @intCast(s.next_order.count())) catch {};
+    const count: u32 = @intCast(s.next_order.count());
+    if (s.next_order.getOrPut(c.gpa, id) catch null) |g| if (!g.found_existing) {
+        g.value_ptr.* = count;
+    };
     // Where the pointer finds the line: a little past its box's sides.
     const area: types.Rect = .{ .x = bx - 6, .y = y, .w = bx_end - bx + 12, .h = lh };
     // Under a box drawn over it, the line is not there for the pointer
@@ -142,10 +145,14 @@ pub fn beginPaint(c: anytype) void {
     s.below = null;
     s.next_order.clearRetainingCapacity();
     s.cover = null;
-    if (c.hot != 0) for (c.nodes.items, 0..) |n, i| if (n.id == c.hot) {
-        s.cover = @intCast(i);
-        break;
-    };
+    if (c.hot != 0) {
+        if (c.hot_index < c.nodes.items.len and c.nodes.items[c.hot_index].id == c.hot) {
+            s.cover = c.hot_index;
+        } else for (c.nodes.items, 0..) |n, i| if (n.id == c.hot) {
+            s.cover = @intCast(i);
+            break;
+        };
+    }
 }
 
 /// After paint: a press starts a selection (or clears it), a drag moves

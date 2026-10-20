@@ -201,10 +201,6 @@ fn chatColumn(b: *Browser, c: *ui.Context, p: *const Palette, a: *Assistant, st:
         st.seen_live = live;
         c.setScroll(c.node(sc).id, .y, std.math.floatMax(f32));
     }
-    if (a.pending_redraw) {
-        a.pending_redraw = false;
-        c.frameIn(1.0 / 60.0);
-    }
     if (a.chat.turns.len > 8) virtualConversation(b, c, p, a, st, todo, z, c.node(sc).id) else turns.conversation(b, c, p, a, st, todo, z);
     c.end();
     composer.view(b, c, p, a, st, todo);

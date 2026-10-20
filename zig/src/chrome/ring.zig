@@ -8,8 +8,8 @@ const cg = @import("../sys/cg.zig");
 const palette = @import("../design/palette.zig");
 const motion = @import("../design/motion.zig");
 
-const turn_seconds: f32 = 0.75;
-const turns: u32 = 64;
+const turn_seconds: f32 = 0.85;
+const turns: u32 = 48;
 
 const Picture = struct {
     size: f32,
@@ -126,7 +126,7 @@ pub fn turnAt(time: f64) u32 {
 /// `Ring(size:)`: turning once every 0.75 s, a frame asked for each turn.
 pub fn ring(c: *ui.Context, size: f32) void {
     show(c, .{ .size = size, .scale = c.scale, .dark = c.theme.dark, .kind = .turn, .step = turnAt(c.time) });
-    c.frameIn(@max(1.0 / 60.0, turn_seconds / @as(f32, @floatFromInt(turns))));
+    c.frameIn(turn_seconds / @as(f32, @floatFromInt(turns)));
 }
 
 /// The download door's progress: `fraction` done, easing over 0.2 s.

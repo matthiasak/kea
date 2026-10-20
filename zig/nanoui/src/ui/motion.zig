@@ -42,7 +42,8 @@ pub const State = struct {
 
     /// Forgets values not asked for in 120 frames.
     pub fn prune(s: *State, frame: u64) void {
-        var stale: [64]u64 = undefined;
+        if (s.entries.count() <= 1024 and frame % 64 != 0) return;
+        var stale: [1024]u64 = undefined;
         var n: usize = 0;
         var it = s.entries.iterator();
         while (it.next()) |e| {
