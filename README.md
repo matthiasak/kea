@@ -2,7 +2,7 @@
   <img src="Icon/kea.gif" width="440" alt="A pixel-art kea in flight">
 </p>
 
-<h1 align="center">Kea</h1>
+<h1 align="center">🦜 Kea 🦜</h1>
 
 <p align="center">
   <b>A small, cheeky Mac browser with nothing in the way.</b><br>
