@@ -65,3 +65,40 @@ test "decode budget limits to 6 decodes per frame and requests next frame" {
     try testing.expectEqual(@as(usize, 7), t.ctx.text.images.entries.count());
     try testing.expect(!t.ctx.text.images.wants_frame);
 }
+
+test "sink uploads survive render after pre-sink pixels allocation" {
+    if (@import("build_options").portable or @import("builtin").os.tag != .macos) return;
+    const gpa = testing.allocator;
+    const raw = try gpa.alloc(u8, 16 * 16 * 4);
+    defer gpa.free(raw);
+    @memset(raw, 220);
+    const png = try ui.png.encode(gpa, .{ .bytes = raw, .width = 16, .height = 16 });
+    defer gpa.free(png);
+
+    var s: BudgetState = .{ .bytes = png };
+    var t: ui.Tester = undefined;
+    // Frame 1 runs with sink == null, allocating im.pixels and decoding 6 of 7 icons.
+    try t.init(gpa, ui.View.init(&s, BudgetState.view), .{ .width = 200, .height = 200, .scale = 2, .dark = true });
+    defer t.deinit();
+    // Sync the first 6 icons into images_texture, then attach the direct GPU sink for icon.6.
+    t.renderer.syncImages(&t.text.images);
+    t.text.images.sink = .{ .ctx = &t.renderer, .upload = @TypeOf(t.renderer).uploadImage };
+    t.frame();
+    const px = try t.render(gpa);
+    defer px.deinit(gpa);
+    const k6 = images.Images.key("icon.6");
+    const e6 = t.ctx.text.images.entries.get(.{ .key = k6, .side = 30 }).?.entry.?;
+    var r6: ?ui.Rect = null;
+    for (t.ctx.nodes.items) |n| switch (n.content) {
+        .image => |im| if (im.key == k6) {
+            r6 = n.rect;
+        },
+        else => {},
+    };
+    try testing.expect(e6.uv[0] > 0);
+    const rect = r6.?;
+    const cx: usize = @intFromFloat(@round((rect.x + rect.w * 0.5) * 2));
+    const cy: usize = @intFromFloat(@round((rect.y + rect.h * 0.5) * 2));
+    const idx = (cy * px.width + cx) * 4;
+    try testing.expect(px.bytes[idx] > 180 and px.bytes[idx + 1] > 180 and px.bytes[idx + 2] > 180);
+}
