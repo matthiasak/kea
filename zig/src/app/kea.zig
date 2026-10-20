@@ -34,6 +34,8 @@ pub const Options = struct {
     headless: bool = false,
     /// WKURLSchemeHandler registered for "kea-test" on every configuration (e2e).
     scheme_handler: ?objc.Object = null,
+    /// A test run weighed and timed: hidden pages slowed as the shipped app slows them.
+    measuring: bool = false,
 };
 
 pub const Kea = struct {

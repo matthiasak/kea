@@ -105,7 +105,7 @@ pub fn configuration(kea: *Kea, shy: bool, data_store: ?objc.Object) objc.Object
     objc.msg(void, prefs, "setJavaScriptCanOpenWindowsAutomatically:", .{objc.NO});
     objc.msg(void, config, "setMediaTypesRequiringUserActionForPlayback:", .{playback(&kea.store)});
     // A test run's hidden pages keep running (WKInactiveSchedulingPolicyNone).
-    if (kea.opts.root != null and objc.msg(objc.BOOL, prefs, "respondsToSelector:", .{objc.sel("setInactiveSchedulingPolicy:")}))
+    if (kea.opts.root != null and !kea.opts.measuring and objc.msg(objc.BOOL, prefs, "respondsToSelector:", .{objc.sel("setInactiveSchedulingPolicy:")}))
         objc.msg(void, prefs, "setInactiveSchedulingPolicy:", .{@as(objc.NSInteger, 2)});
     // A test run's pretend camera and microphone (see ext/capture_watch.zig).
     if (kea.ext != null) @import("../ext/capture.zig").mockDevices(kea, prefs);

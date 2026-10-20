@@ -121,10 +121,12 @@ pub const Disk = struct {
     }
 };
 
-/// `path`'s parent folders, then `<path>.tmp` renamed over `path`.
+var tmp_seq: std.atomic.Value(u32) = .init(0);
+
+/// `path`'s parent folders, then `<path>.<pid>.<n>.tmp` renamed over `path`.
 fn writeAtomic(gpa: std.mem.Allocator, path: [:0]const u8, bytes: []const u8) void {
     if (std.fs.path.dirname(path)) |dir| makePath(gpa, dir);
-    const tmp = std.fmt.allocPrintSentinel(gpa, "{s}.tmp", .{path}, 0) catch return;
+    const tmp = std.fmt.allocPrintSentinel(gpa, "{s}.{d}.{d}.tmp", .{ path, std.c.getpid(), tmp_seq.fetchAdd(1, .monotonic) }, 0) catch return;
     defer gpa.free(tmp);
     const f = c.fopen(tmp, "wb") orelse return;
     const wrote = bytes.len == 0 or c.fwrite(bytes.ptr, 1, bytes.len, f) == bytes.len;

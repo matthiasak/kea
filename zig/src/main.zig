@@ -13,6 +13,7 @@ pub fn main(init: std.process.Init) !void {
     // Closing the last window keeps the app, as Safari and Chrome do (#327).
     const app = try nanoui.App.create(init, .{ .name = kea.app_name, .quit_on_last_window_closed = false });
     defer app.destroy();
+    refuseBesideKea();
     const k = try kea.Kea.create(app.gpa, app, .{});
     defer k.destroy();
     links.watchForTrouble(k);
@@ -55,6 +56,35 @@ fn onActive(ctx: ?*anyopaque, active: bool) void {
     if (active and k.sync.started) k.sync.syncNow();
 }
 
+extern "c" fn exit(code: c_int) noreturn;
+
+fn refuseBesideKea() void {
+    const objc = nanoui.objc;
+    const pool = objc.Pool.push();
+    defer pool.pop();
+    const running = objc.msg(objc.Object, objc.class("NSRunningApplication"), "runningApplicationsWithBundleIdentifier:", .{objc.nsString("app.kea.browser")});
+    const count = objc.msg(objc.NSUInteger, running, "count", .{});
+    const my_pid = std.c.getpid();
+    var other = false;
+    for (0..count) |i| {
+        const entry = objc.msg(objc.Object, running, "objectAtIndex:", .{i});
+        if (objc.msg(c_int, entry, "processIdentifier", .{}) != my_pid) {
+            other = true;
+            break;
+        }
+    }
+    if (!other) return;
+    const nsapp = objc.msg(objc.Object, objc.class("NSApplication"), "sharedApplication", .{});
+    objc.msg(void, nsapp, "activateIgnoringOtherApps:", .{objc.YES});
+    const alert = objc.new("NSAlert");
+    defer objc.release(alert);
+    objc.msg(void, alert, "setMessageText:", .{objc.nsString("Kea is open")});
+    objc.msg(void, alert, "setInformativeText:", .{objc.nsString("KeaZig and Kea share your tabs, history and settings. Quit Kea, then open KeaZig again.")});
+    _ = objc.msg(objc.Object, alert, "addButtonWithTitle:", .{objc.nsString("Quit KeaZig")});
+    _ = objc.msg(objc.NSInteger, alert, "runModal", .{});
+    exit(0);
+}
+
 test {
     _ = @import("ext/controller.zig");
     _ = @import("ext/controller_updates.zig");
@@ -69,7 +99,6 @@ test {
     _ = @import("data/disk.zig");
     _ = @import("data/store.zig");
     _ = @import("data/prefs.zig");
-    _ = @import("data/kea_import.zig");
     _ = @import("data/history.zig");
     _ = @import("data/url.zig");
     _ = @import("data/registrable.zig");

@@ -25,7 +25,7 @@ pub const all = [_]ScenarioDef{
     .{ .id = "S11", .name = "Mock-stream a 4 KB answer at 30 chunks/s", .run = s11MockStream },
     .{ .id = "S12", .name = "Loading tab with a ring (slow loopback reply)", .run = s12LoadingRing },
     .{ .id = "S13", .name = "Idle blank tab for 3 s", .run = s13IdleBlank },
-};
+} ++ @import("smooth_more.zig").all;
 
 fn s1SidebarToggle(_: *Harness, b: *app.Browser, s: *ui.Surface, fl: *ui.FrameLog) ![3]SpanMark {
     b.prefs.set("sidebar", false);

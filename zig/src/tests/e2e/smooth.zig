@@ -193,6 +193,15 @@ fn checkGates(rep: *ScenarioReport) void {
         }
     }.add;
 
+    if (std.mem.eql(u8, rep.id, "S14")) {
+        if (s.frames > 10) {
+            rep.passed = false;
+            sep(&fbs, &first);
+            fbs.print("surface frames {d} > 10", .{s.frames}) catch {};
+        }
+        rep.fail_len = fbs.end;
+        return;
+    }
     if (s.frames == 0) {
         rep.passed = false;
         sep(&fbs, &first);
@@ -285,6 +294,11 @@ fn writeAndPrintReport(gpa: std.mem.Allocator, env_tmp: ?[]const u8, reports: []
         if (std.mem.eql(u8, r.id, "S12") or std.mem.eql(u8, r.id, "S13")) {
             try w.print("\n- **{s} extra:** {d:.1} fps, {d:.2}% CPU, {d} steady allocations", .{
                 r.id, r.extra.fps, r.extra.cpu_pct, r.extra.allocs,
+            });
+        }
+        if (std.mem.eql(u8, r.id, "S14")) {
+            try w.print("\n- **S14 extra:** {d} surface frames, {d:.2}% CPU", .{
+                r.summary.frames, r.extra.cpu_pct,
             });
         }
     }

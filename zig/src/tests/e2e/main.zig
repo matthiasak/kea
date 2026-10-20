@@ -14,7 +14,7 @@ pub const Case = struct {
     run: *const fn (*Harness) anyerror!void,
 };
 
-const cases = @import("smoke.zig").cases ++ @import("windows.zig").cases ++ @import("favicons.zig").cases ++ @import("web.zig").cases ++ @import("links.zig").cases ++ @import("downloads.zig").cases ++ @import("page_features.zig").cases ++ @import("page_b.zig").cases ++ @import("side_panels.zig").cases ++ @import("peek_switch.zig").cases ++ @import("split.zig").cases ++ @import("find_bar.zig").cases ++ @import("menus.zig").cases ++ @import("chat.zig").cases ++ @import("passwords.zig").cases ++ @import("extensions.zig").cases ++ @import("quality.zig").cases;
+const cases = @import("smoke.zig").cases ++ @import("windows.zig").cases ++ @import("favicons.zig").cases ++ @import("web.zig").cases ++ @import("links.zig").cases ++ @import("downloads.zig").cases ++ @import("page_features.zig").cases ++ @import("page_b.zig").cases ++ @import("side_panels.zig").cases ++ @import("peek_switch.zig").cases ++ @import("split.zig").cases ++ @import("find_bar.zig").cases ++ @import("menus.zig").cases ++ @import("chat.zig").cases ++ @import("passwords.zig").cases ++ @import("extensions.zig").cases ++ @import("quality.zig").cases ++ @import("webkit_metrics.zig").cases;
 
 pub const Harness = struct {
     gpa: std.mem.Allocator,
@@ -28,11 +28,16 @@ pub const Harness = struct {
 
     /// Opens the case's KeaZig: one hidden window with one browser.
     pub fn start(h: *Harness) !*app.Browser {
+        return h.startWith(.{});
+    }
+
+    pub fn startWith(h: *Harness, opts: struct { measuring: bool = false }) !*app.Browser {
         const k = try app.Kea.create(h.gpa, ui_app, .{
             .root = h.temp.root,
             .suite = h.temp.suite,
             .hidden = true,
             .scheme_handler = h.handler,
+            .measuring = opts.measuring,
         });
         h.kea = k;
         // As if launched before: the Welcome isn't what a case is about.

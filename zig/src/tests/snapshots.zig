@@ -210,7 +210,7 @@ fn columnEdgePt(f: *Fixture) f32 {
 
 fn glideProgress(t: f64) f64 {
     if (t <= 0) return 0;
-    const g = @import("../design/motion.zig").glide;
+    const g = @import("kea").motion.glide;
     const resp: f64 = g.response;
     const zeta: f64 = g.damping;
     const w = 2.0 * std.math.pi / resp;

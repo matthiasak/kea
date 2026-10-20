@@ -19,6 +19,7 @@ const fixtures = [_]struct { []const u8, []const u8 }{
     .{ "article.html", @embedFile("fixtures/article.html") },
     .{ "float.html", @embedFile("fixtures/float.html") },
     .{ "login.html", @embedFile("fixtures/login.html") },
+    .{ "long.html", @embedFile("fixtures/long.html") },
 };
 
 /// Tasks `/slow` still owes a finish; a stopped task leaves the list.
