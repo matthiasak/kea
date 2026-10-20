@@ -21,12 +21,12 @@ pub const Entry = struct {
     draw: *const fn (*Browser, *ui.Context, *const Palette) void,
 };
 
-/// The rail, in Swift's order: the pages that exist. Extensions (P13)
-/// adds its line in place.
+/// The rail, in Swift's order.
 pub const pages = [_]Entry{
     .{ .page = .general, .title = "General", .icon = "macwindow", .draw = @import("general.zig").view },
     .{ .page = .tabs, .title = "Tabs", .icon = "rectangle.split.3x1", .draw = @import("tabs.zig").view },
     .{ .page = .shortcuts, .title = "Shortcuts", .icon = "keyboard", .draw = @import("shortcuts.zig").view },
+    .{ .page = .extensions, .title = "Extensions", .icon = "puzzlepiece.extension", .draw = @import("../../ext/ui.zig").view },
     .{ .page = .passwords, .title = "Passwords", .icon = "key", .draw = @import("../../passwords/settings_page.zig").view },
     .{ .page = .downloads, .title = "Downloads", .icon = "arrow.down.circle", .draw = @import("downloads.zig").view },
     .{ .page = .privacy, .title = "Privacy", .icon = "hand.raised", .draw = @import("privacy.zig").view },
@@ -43,12 +43,14 @@ pub const State = struct {
     about: @import("about.zig").State = .{},
     sync: @import("../../sync/settings_page.zig").State = .{},
     ai: @import("ai.zig").State = .{},
+    extensions: @import("../../ext/ui.zig").State = .{},
 
     pub fn deinit(s: *State, gpa: std.mem.Allocator) void {
         s.general.deinit(gpa);
         s.shortcuts.deinit();
         s.sync.deinit();
         s.ai.deinit(gpa);
+        s.extensions.deinit();
     }
 
     /// As the panel appears or has gone: what it holds begins afresh (`@State`).

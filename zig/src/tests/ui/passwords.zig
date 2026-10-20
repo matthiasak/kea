@@ -81,10 +81,10 @@ test "Settings Passwords page renders its rows" {
     var f: Fixture = undefined;
     try f.init(gpa, .{});
     defer f.deinit();
-    // In Swift's rail order: after Shortcuts, before Downloads.
+    // In Swift's rail order: after Extensions, before Downloads.
     const pages = app.settings.pages;
     for (pages, 0..) |e, i| if (e.page == .passwords) {
-        try t.expectEqual(app.settings.Page.shortcuts, pages[i - 1].page);
+        try t.expectEqual(app.settings.Page.extensions, pages[i - 1].page);
         try t.expectEqual(app.settings.Page.downloads, pages[i + 1].page);
     };
     app.settings.open(f.browser, .passwords);

@@ -59,8 +59,20 @@ fn dockNewWindow(kea: *Kea, _: *nanoui.menu.Item) void {
 /// The oldest window's when `record` is null; otherwise another window's,
 /// from `windows.json`, ⇧⌘T or new (`Browser(record:)` then `Browsers.open`).
 pub fn open(kea: *Kea, record: ?*const WindowRecord, frame: ?CGRect) !*Browser {
+    return openAs(kea, record, frame, null);
+}
+
+/// An extension's popup window (windows.create "popup", extension `id`):
+/// small, its page and its site, no strip, tabs or address (Windows.swift:168).
+pub fn openPopup(kea: *Kea, record: *const WindowRecord, frame: ?CGRect, id: []const u8) !*Browser {
+    return openAs(kea, record, frame, id);
+}
+
+fn openAs(kea: *Kea, record: ?*const WindowRecord, frame: ?CGRect, popup: ?[]const u8) !*Browser {
     const b = try Browser.create(kea, record);
     errdefer b.destroy();
+    // Tied before extensions hear of the window (#408).
+    if (popup) |id| b.ext.popup = try kea.gpa.dupe(u8, id);
     try kea.browsers.append(kea.gpa, b);
     errdefer _ = kea.browsers.pop();
     if (kea.opts.headless) return b;
@@ -71,15 +83,15 @@ pub fn open(kea: *Kea, record: ?*const WindowRecord, frame: ?CGRect) !*Browser {
     const beside: ?*nanoui.Window = if (front_b) |f| f.window else null;
     // A new window from one in full screen: in full screen of its own, sized
     // as a window for when it leaves it.
-    const full = !first and frame == null and beside != null and beside.?.isFullScreen();
-    const size = if (first or full or beside == null) default_size else objc.msg(CGRect, beside.?.nswindow, "frame", .{}).size;
+    const full = popup == null and !first and frame == null and beside != null and beside.?.isFullScreen();
+    const size: objc.CGSize = if (popup != null) .{ .width = 480, .height = 600 } else if (first or full or beside == null) default_size else objc.msg(CGRect, beside.?.nswindow, "frame", .{}).size;
     const off: ?f64 = if (kea.opts.hidden) -20000 else null;
     const win = try app.newWindow(.{
         .title = app_name,
         .width = size.width,
         .height = size.height,
-        .min_width = min_size.width,
-        .min_height = min_size.height,
+        .min_width = if (popup != null) 200 else min_size.width,
+        .min_height = if (popup != null) 150 else min_size.height,
         .title_bar = .hidden,
         .visible = false,
         .x = off,
@@ -97,7 +109,7 @@ pub fn open(kea: *Kea, record: ?*const WindowRecord, frame: ?CGRect) !*Browser {
     objc.msg(void, ns, "setMovableByWindowBackground:", .{objc.NO});
     if (frame) |f| {
         objc.msg(void, ns, "setFrame:display:", .{ f, objc.NO });
-    } else if (!first and !full) if (beside) |f| {
+    } else if (!first and !full and popup == null) if (beside) |f| {
         // Down and to the right of the window in front, as new windows go.
         const fr = objc.msg(CGRect, f.nswindow, "frame", .{});
         const from: objc.CGPoint = .{ .x = fr.origin.x, .y = fr.origin.y + fr.size.height };
@@ -159,13 +171,15 @@ fn comeForward(kea: *Kea) void {
     if (kea.ui_app) |a| objc.msg(void, a.nsapp, "activateIgnoringOtherApps:", .{objc.YES});
 }
 
-/// The window in front, or the newest that isn't `except`.
+/// The window in front, or the newest that isn't `except` nor an
+/// extension's popup.
 fn front(kea: *Kea, except: ?*Browser) ?*Browser {
     if (kea.windows.front) |f| if (f != except) return f;
     var i = kea.browsers.items.len;
     while (i > 0) {
         i -= 1;
-        if (kea.browsers.items[i] != except) return kea.browsers.items[i];
+        const b = kea.browsers.items[i];
+        if (b != except and b.ext.popup == null) return b;
     }
     return null;
 }
@@ -207,7 +221,9 @@ fn shouldClose(ctx: *anyopaque, w: *nanoui.Window) bool {
     const b: *Browser = @ptrCast(@alignCast(ctx));
     const kea = b.kea;
     if (kea.windows.quitting) return true;
-    for (kea.browsers.items) |o| if (o != b and !o.shut and o.window != null) return true;
+    // An extension's popup goes; it never counts as the last window.
+    if (b.ext.popup != null) return true;
+    for (kea.browsers.items) |o| if (o != b and !o.shut and o.window != null and o.ext.popup == null) return true;
     b.shut = true;
     b.flushSession();
     save(kea, true);
@@ -221,7 +237,8 @@ fn onClose(ctx: *anyopaque, _: *nanoui.Window) void {
     const b: *Browser = @ptrCast(@alignCast(ctx));
     const kea = b.kea;
     const quitting = kea.windows.quitting;
-    if (!quitting) remember(kea, b);
+    // An extension's popup isn't one ⇧⌘T brings back.
+    if (!quitting and b.ext.popup == null) remember(kea, b);
     b.unbindWindow();
     const was_primary = kea.browsers.items.len > 0 and kea.browsers.items[0] == b;
     for (kea.browsers.items, 0..) |item, i| if (item == b) {
@@ -298,14 +315,17 @@ fn recordOf(arena: std.mem.Allocator, b: *Browser, rows: bool) !WindowRecord {
 }
 
 /// `windows.json`: the oldest window's frame and space first, then every
-/// other window whole.
+/// other window whole — but an extension's popups, which never come back.
 pub fn save(kea: *Kea, now: bool) void {
     if (kea.browsers.items.len == 0) return;
     var arena: std.heap.ArenaAllocator = .init(kea.gpa);
     defer arena.deinit();
-    const records = arena.allocator().alloc(WindowRecord, kea.browsers.items.len) catch return;
-    for (kea.browsers.items, records, 0..) |b, *r, i| r.* = recordOf(arena.allocator(), b, i > 0) catch return;
-    windows_file.write(&kea.store, records, now);
+    var records: std.ArrayList(WindowRecord) = .empty;
+    for (kea.browsers.items, 0..) |b, i| {
+        if (i > 0 and b.ext.popup != null) continue;
+        records.append(arena.allocator(), recordOf(arena.allocator(), b, i > 0) catch return) catch return;
+    }
+    windows_file.write(&kea.store, records.items, now);
 }
 
 /// Soon, not now: a window being dragged moves many times a second.

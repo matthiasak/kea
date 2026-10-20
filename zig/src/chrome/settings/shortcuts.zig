@@ -19,11 +19,14 @@ const controls = @import("../controls.zig");
 const plate = @import("../controls_plate.zig");
 const tab_menu = @import("../tab_menu.zig");
 const frame = @import("frame.zig");
+const ext_commands = @import("../../ext/commands.zig");
 
 pub const State = struct {
     hunt: ui.TextBuffer = .{},
-    /// The command whose key is being typed, and the monitor taking it.
+    /// The command whose key is being typed (its id kept in `listening_id`),
+    /// and the monitor taking it.
     listening: ?[]const u8 = null,
+    listening_id: [160]u8 = undefined,
     monitor: ?objc.Object = null,
     /// Why that key won't do, until `note_until` (`json.now()`).
     note: ?[]const u8 = null,
@@ -93,7 +96,7 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette) void {
             ui.end(c);
         }
     }
-    // ponytail: extension commands (#189) join with Extensions (P13).
+    if (b.kea.ext) |e| extensionCommands(b, c, p, e, words);
     if (store.anyChanged() and s.hunt.text().len == 0) {
         if (controls.pill(c, p, "Reset All to Defaults", .{}).clicked) store.resetAll();
     }
@@ -110,9 +113,16 @@ const Pick = struct {
     }
 };
 
-/// The line's menu: Clear Shortcut, Reset to Default.
+/// The line's menu: Clear Shortcut, Reset to Default. Past Kea's own
+/// commands, `n` counts the extensions' (`extensionCommands`).
 fn menu(arena: std.mem.Allocator, b: *Browser, n: u64) anyerror![]const MenuItem {
-    const id = commands.all[@intCast(n)].id;
+    const id = if (n < commands.all.len) commands.all[@intCast(n)].id else blk: {
+        const e = b.kea.ext orelse return &.{};
+        const list = try ext_commands.list(e, arena);
+        const at: usize = @intCast(n - commands.all.len);
+        if (at >= list.len) return &.{};
+        break :blk list[at].id;
+    };
     const store = &b.kea.shortcuts;
     const clear = try arena.create(Pick);
     clear.* = .{ .b = b, .id = id, .reset = false };
@@ -124,14 +134,61 @@ fn menu(arena: std.mem.Allocator, b: *Browser, n: u64) anyerror![]const MenuItem
     return out;
 }
 
+/// The commands extensions bring, with the keys their manifests ask for
+/// unless you gave them others (ShortcutsPage.swift:62-91).
+fn extensionCommands(b: *Browser, c: *ui.Context, p: *const Palette, e: *@import("../../ext/controller.zig").Extensions, words: []const u8) void {
+    const store = &b.kea.shortcuts;
+    const list = ext_commands.list(e, c.alloc()) catch return;
+    const bare = std.mem.replaceOwned(u8, c.alloc(), words, " ", "") catch return;
+    var first = true;
+    for (list, 0..) |item, n| {
+        const key = if (store.effective(item.id)) |k| c.print("{f}", .{k}) else "";
+        const finds = std.ascii.findIgnoreCase;
+        if (words.len > 0 and finds(item.title, words) == null and finds(item.extension_name, words) == null and finds(key, bare) == null) continue;
+        if (first) {
+            ui.key(c, "extensions");
+            ui.column(c, .{ .gap = 6, .width = .fill });
+            plate.caption(c, p, "Extensions");
+            plate.cardBox(c, p);
+        } else frame.rule(c, p);
+        first = false;
+        ui.key(c, item.id);
+        const row = c.open(.{ .width = .fill }, null);
+        if (c.interact(row, .{}).right_clicked) tab_menu.later(b, c.input.mouse, commands.all.len + n, menu);
+        plate.line(c, p, item.title, item.extension_name);
+        keyBox(b, c, p, item.id);
+        ui.end(c);
+        c.end();
+    }
+    if (!first) {
+        ui.end(c);
+        ui.end(c);
+    }
+}
+
 // MARK: KeyBox
+
+/// The command, Kea's or an extension's, that has `kc` (other than `id`):
+/// its title in `buf`.
+fn usedBy(b: *Browser, kc: KeyCombo, id: []const u8, buf: []u8) ?[]const u8 {
+    const store = &b.kea.shortcuts;
+    if (store.owner(kc, id)) |other| return other.title;
+    const e = b.kea.ext orelse return null;
+    const other = ext_commands.owner(e, kc, id) orelse return null;
+    defer store.gpa.free(other.id);
+    defer store.gpa.free(other.title);
+    const n = @min(buf.len, other.title.len);
+    @memcpy(buf[0..n], other.title[0..n]);
+    return buf[0..n];
+}
 
 fn label(b: *Browser, c: *ui.Context, id: []const u8) []const u8 {
     const s = &b.settings.shortcuts;
     const store = &b.kea.shortcuts;
     const mine = s.listening != null and std.mem.eql(u8, s.listening.?, id);
     if (mine) {
-        if (s.taking) |t| if (store.owner(t, id)) |other| return c.print("Used by {s} — press again", .{other.title});
+        var buf: [160]u8 = undefined;
+        if (s.taking) |t| if (usedBy(b, t, id, &buf)) |other| return c.print("Used by {s} — press again", .{other});
         if (s.note) |n| return n;
         return "Type a shortcut";
     }
@@ -160,7 +217,10 @@ fn keyBox(b: *Browser, c: *ui.Context, p: *const Palette, id: []const u8) void {
 
 fn listen(s: *State, id: []const u8) void {
     stop(s);
-    s.listening = id;
+    // An extension command's id lives only as long as this frame's list.
+    const n = @min(id.len, s.listening_id.len);
+    @memcpy(s.listening_id[0..n], id[0..n]);
+    s.listening = s.listening_id[0..n];
     browserOf(s).kea.shortcuts.recording = true;
     s.monitor = appkit.addLocalMonitor(appkit.mask.key_down, s, take);
 }
@@ -190,7 +250,8 @@ pub fn take(s: *State, event: objc.Object) ?objc.Object {
     // An extension's command takes a key as its manifest would.
     const ext = std.mem.startsWith(u8, id, "ext:");
     if (ext and (kc.key.len != 1 or shortcuts.isBrowserOnly(kc))) return say(s, "Not for an extension");
-    const other = store.owner(kc, id);
+    var title_buf: [160]u8 = undefined;
+    const other = usedBy(b, kc, id, &title_buf);
     if (other != null and !(if (s.taking) |t| t.eql(kc) else false)) {
         @memcpy(s.taking_key[0..kc.key.len], kc.key);
         s.taking = kc;
@@ -200,8 +261,8 @@ pub fn take(s: *State, event: objc.Object) ?objc.Object {
     store.assign(kc, id);
     stop(s);
     if (other) |o| {
-        var said: [160]u8 = undefined;
-        b.announce(std.fmt.bufPrint(&said, "{f} moved from {s}", .{ kc, o.title }) catch return null);
+        var said: [200]u8 = undefined;
+        b.announce(std.fmt.bufPrint(&said, "{f} moved from {s}", .{ kc, o }) catch return null);
     }
     return null;
 }

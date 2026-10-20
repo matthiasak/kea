@@ -199,7 +199,30 @@ fn view(self: *Little, c: *ui.Context) void {
     // Drawn first inside `newWindow`, before it is filled in.
     if (std.mem.indexOfScalar(*Little, open.items, self) == null) return;
     const p = palette.get(c.theme.dark);
-    applyGround(self, p.ground);
+    applyGround(self.window.nswindow, &self.applied, p.ground);
+    if (body(c, p, self.tab, true)) objc.dispatchMain(self, keepSoon);
+}
+
+/// `ExtensionPopupView`: an extension's popup window (windows.create with
+/// type "popup") shows its tab in front as the small window shows a page,
+/// the site over it and no Open in KeaZig.
+pub fn popupView(b: *Browser, c: *ui.Context) void {
+    const p = palette.get(c.theme.dark);
+    c.title_bar_height = 0;
+    if (b.window) |w| applyGround(w.nswindow, &b.applied_ground, p.ground);
+    const tab = b.activeTab() orelse {
+        b.stage.count = 0;
+        return;
+    };
+    // The one page on its stage (`Browser.syncStageHost`).
+    b.stage.panes[0] = .{ .tab = tab.id };
+    b.stage.count = 1;
+    _ = body(c, p, tab, false);
+}
+
+/// `LittleView`: the page, and the line over it — the site, and Open in
+/// KeaZig when there is somewhere to keep it; true when that is pressed.
+fn body(c: *ui.Context, p: *const palette.Palette, tab: *Tab, keeps: bool) bool {
     ui.column(c, .{ .width = .fill, .height = .fill });
     defer ui.end(c);
     ui.row(c, .{ .width = .fill, .height = px(34), .padding = .xy(10, 0), .gap = 10, .align_items = .center });
@@ -207,24 +230,27 @@ fn view(self: *Little, c: *ui.Context) void {
     _ = c.leaf(.{ .width = px(64) }, .none, null);
     ui.spacer(c);
     var buf: [300]u8 = undefined;
-    ui.text(c, site(&buf, self.tab), .{ .size = 12.5, .weight = .medium, .color = p.muted, .truncate = true });
+    ui.text(c, site(&buf, tab), .{ .size = 12.5, .weight = .medium, .color = p.muted, .truncate = true });
     ui.spacer(c);
-    if (controls.pill(c, p, "Open in " ++ app_name, .{ .help = "Open in " ++ app_name ++ "   ⌘O" }).clicked)
-        objc.dispatchMain(self, keepSoon);
+    const kept = if (keeps) controls.pill(c, p, "Open in " ++ app_name, .{ .help = "Open in " ++ app_name ++ "   ⌘O" }).clicked else blk: {
+        _ = c.leaf(.{ .width = px(64) }, .none, null);
+        break :blk false;
+    };
     ui.end(c);
     const page = c.open(.{ .width = .fill, .grow = 1 }, "kea.little.page");
     c.addStageHoleNode(page);
     // A page that never came says so, with Try again, as in a tab.
-    page_layers.draw(c, p, self.tab);
+    page_layers.draw(c, p, tab);
     c.end();
+    return kept;
 }
 
 /// The window's ground: hosted, its root is left unpainted.
-fn applyGround(self: *Little, g: ui.Color) void {
-    if (self.applied) |a| if (std.meta.eql(a, g)) return;
-    self.applied = g;
+fn applyGround(window: objc.Object, applied: *?ui.Color, g: ui.Color) void {
+    if (applied.*) |a| if (std.meta.eql(a, g)) return;
+    applied.* = g;
     const color = objc.msg(objc.Object, objc.class("NSColor"), "colorWithSRGBRed:green:blue:alpha:", .{ @as(f64, g.r), @as(f64, g.g), @as(f64, g.b), @as(f64, g.a) });
-    objc.msg(void, self.window.nswindow, "setBackgroundColor:", .{color});
+    objc.msg(void, window, "setBackgroundColor:", .{color});
 }
 
 /// After the frame: keeping closes the window the frame is drawing.

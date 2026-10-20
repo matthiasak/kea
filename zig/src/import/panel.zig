@@ -3,8 +3,6 @@
 //! of it — a sheet (`chrome/sheet.zig`, `bringing_in`). What each browser
 //! holds is counted as the sheet opens, off the main thread and from its
 //! files alone: nothing prompts until Bring them in is pressed.
-// ponytail: no Extensions line (and no `bringingExtensions` opening) until
-// P13's extensions can install from the store.
 const std = @import("std");
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
@@ -25,6 +23,13 @@ const Session = bring.Session;
 
 pub fn view(b: *Browser, c: *ui.Context, p: *const Palette) void {
     const s = bring.panel(b) orelse return;
+    // Opened for the extensions: off a browser with none fresh, to the first with some.
+    if (s.for_extensions) if (s.pick) |at| if (bring.fresh(s, c.alloc(), at).len == 0) {
+        for (0..s.found.len) |i| if (bring.fresh(s, c.alloc(), i).len > 0) {
+            s.pick = i;
+            break;
+        };
+    };
     var pl = plate.plate(c, p, "Bring things over", 580);
     if (pl.closed) sheet.close(b, .bringing);
     // As tall as it needs to be, and scrolling past what the window can hold.
@@ -56,6 +61,7 @@ fn content(b: *Browser, c: *ui.Context, p: *const Palette, s: *Session) void {
             if (row(c, p, src.name(), detail(c, b, s, i), s.pick == i) and !s.bringing) {
                 s.pick = i;
                 s.replace_bookmarks = false;
+                s.for_extensions = false;
                 s.brought = false;
             }
         }
@@ -164,6 +170,13 @@ fn options(b: *Browser, c: *ui.Context, p: *const Palette, s: *Session, i: usize
             ui.end(c);
         }
     };
+    const fresh = bring.fresh(s, a, i);
+    if (fresh.len > 0) {
+        plate.rule(c, p, 14);
+        plate.line(c, p, "Extensions", c.print("{d} found — installed fresh from the Chrome Web Store, you say yes to each one", .{fresh.len}));
+        _ = controls.switch_(c, p, &s.wants_extensions, "Extensions");
+        ui.end(c);
+    }
 }
 
 /// A kind's switch; off and out of reach when there is none of it.
@@ -306,7 +319,7 @@ fn foot(b: *Browser, c: *ui.Context, p: *const Palette, s: *Session) void {
         }
     } else if (s.pick) |i| {
         const pv = s.preview(i);
-        const can = s.wants_passwords or s.wants_bookmarks or s.wants_history or (s.wants_arc and pv != null and pv.?.arc != null);
+        const can = s.wants_passwords or s.wants_bookmarks or s.wants_history or (s.wants_extensions and bring.fresh(s, c.alloc(), i).len > 0) or (s.wants_arc and pv != null and pv.?.arc != null);
         if (pill(c, p, if (s.bringing) "Bringing…" else "Bring them in", true, !s.bringing and can)) bring.bring(s);
         if (s.bringing) ring.ring(c, 10);
     }

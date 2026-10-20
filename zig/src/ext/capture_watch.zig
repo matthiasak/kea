@@ -95,6 +95,8 @@ var watched: std.AutoArrayHashMapUnmanaged(usize, Watched) = .empty;
 pub var recordings: std.ArrayList(Recording) = .empty;
 /// Bumped whenever `recordings` changes (the pill redraws).
 pub var generation: u64 = 0;
+/// `RecordingIndicator.update`: the pill settles (web/recording_pill.zig).
+pub var on_change: ?*const fn () void = null;
 
 const keys = [_][:0]const u8{ "cameraCaptureState", "microphoneCaptureState", "_displayCaptureState" };
 
@@ -259,6 +261,7 @@ pub fn changed() void {
     recordings = now;
     generation +%= 1;
     marks();
+    if (on_change) |f| f();
 }
 
 /// `RecordingIndicator.update(_:pages:)`: a tab whose page is capturing for

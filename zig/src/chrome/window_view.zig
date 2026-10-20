@@ -34,6 +34,7 @@ const omnibox = @import("omnibox.zig");
 const peek = @import("peek.zig");
 const tab_switcher_view = @import("tab_switcher_view.zig");
 const sheet = @import("sheet.zig");
+const slot_view = @import("../ext/slot_view.zig");
 const welcome = @import("welcome.zig");
 
 const px = struct {
@@ -45,6 +46,8 @@ const px = struct {
 const slide_id: u64 = std.hash.Wyhash.hash(0, "kea.room.slide");
 
 pub fn view(b: *Browser, c: *ui.Context) void {
+    // An extension's popup window: the page and its site, as a small window shows one.
+    if (b.ext.popup != null) return @import("../web/little.zig").popupView(b, c);
     const p = palette.get(c.theme.dark);
     // The strip and the column say where the window is dragged from.
     c.title_bar_height = 0;
@@ -193,11 +196,13 @@ fn drawBookmarksBar(b: *Browser, c: *ui.Context, p: *const Palette, r: Room) voi
 fn drawOverlay(b: *Browser, c: *ui.Context, p: *const Palette) void {
     if (b.overlay) |o| if (o == .site_card) return site_card.overlay(b, c, p);
     const marks = if (b.overlay) |o| o == .bookmarks_dropdown or o == .bookmark_card else false;
-    const place: overlays.Place = if (marks) bookmark_door.place(b) else .{};
+    const extensions = if (b.overlay) |o| o == .extension_menu else false;
+    const place: overlays.Place = if (marks) bookmark_door.place(b) else if (extensions) slot_view.place(b) else .{};
     if (!overlays.begin(c, &b.overlay, b.overlay_anchor, .{ .background = p.ground, .radius = 14, .border = p.hairline, .clip = true }, place)) return;
     switch (b.overlay.?) {
         .space_icons => spaces_view.iconsPopover(b, c, p),
         .bookmarks_dropdown, .bookmark_card => bookmark_door.overlay(b, c, p),
+        .extension_menu => slot_view.menu(b, c, p),
         else => {},
     }
     ui.end(c);

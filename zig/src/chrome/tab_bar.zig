@@ -208,13 +208,14 @@ pub fn tabBar(b: *Browser, c: *ui.Context, p: *const Palette) void {
 
     plus(b, c, p, nearby);
     ui.spacer(c);
-    // The download door, back, forward, reload, and the bookmarks, at the
-    // far end. The extensions' door arrives with P13.
+    // The download door, the extensions, back, forward, reload, and the
+    // bookmarks, at the far end.
     const doors = c.open(.{ .direction = .row, .gap = metrics.tab_gap, .align_items = .center }, null);
     st.doors_node = c.node(doors).id;
     if (c.rects.get(st.doors_node)) |r| st.doors = r.w;
     // Only while a download is running, and a moment after.
     @import("fetch_door.zig").door(b, c, p, "strip");
+    @import("../ext/slot_view.zig").slot(b, c, p, null);
     if (!prefs.navigation_left) {
         ui.row(c, .{ .padding = .{ .right = 8 } });
         helm(b, c, p);

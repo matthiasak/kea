@@ -569,7 +569,7 @@ pub const Browser = struct {
             pages[i] = if (t.floating) null else t.web;
         }
         // The page's corners are the card's (`Page(corner: cards ? cardRadius : 0)`).
-        sh.setPanes(pages[0..panes.len], alphas[0..panes.len], self.prefs.sidebar);
+        sh.setPanes(pages[0..panes.len], alphas[0..panes.len], self.prefs.sidebar and self.ext.popup == null);
     }
 
     /// The page with the keys (`active`).

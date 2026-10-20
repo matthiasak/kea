@@ -131,6 +131,11 @@ pub const Kea = struct {
         // Failing that, the browser opens without extensions.
         if (@import("../ext/ext.zig").available() and !opts.headless)
             self.ext = @import("../ext/controller.zig").Extensions.create(self) catch null;
+        // Its popups and the recording pill are KeaZig's own windows.
+        if (self.ext) |e| {
+            @import("../ext/popup.zig").install(e);
+            @import("../web/recording_pill.zig").install();
+        }
         // Hidden runs get no Dock icon and never take focus.
         if (opts.hidden) if (ui_app) |a| {
             _ = objc.msg(objc.BOOL, a.nsapp, "setActivationPolicy:", .{@as(objc.NSInteger, 2)});
@@ -156,6 +161,9 @@ pub const Kea = struct {
         self.links.deinit(self.gpa);
         // The small windows' pages are tabs of no window's: they go first.
         @import("../web/little.zig").closeAll(self);
+        // An extension's popup and the recording pill, while the controller is here.
+        @import("../ext/popup.zig").closeFor(self);
+        @import("../web/recording_pill.zig").closeFor(self);
         if (self.marks_window) |m| {
             self.marks_window = null;
             m.close();

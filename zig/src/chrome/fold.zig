@@ -81,8 +81,10 @@ fn onRight(b: *const Browser) bool {
     return b.prefs.sidebar and b.prefs.side_position == .right;
 }
 
-/// A popover opened from the column, still open: it holds the column out.
+/// A popover opened from the column, still open — an extension's popup
+/// too, or it is left hanging from nothing: it holds the column out.
 fn holding(b: *const Browser) bool {
+    if (@import("../ext/popup.zig").up() != null) return true;
     const o = b.overlay orelse return false;
     return o == .bookmarks_dropdown or o == .bookmark_card or o == .extension_menu;
 }

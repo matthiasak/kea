@@ -24,4 +24,5 @@ test {
     _ = @import("import_arc.zig");
     _ = @import("import.zig");
     _ = @import("passwords.zig");
+    _ = @import("extensions.zig");
 }

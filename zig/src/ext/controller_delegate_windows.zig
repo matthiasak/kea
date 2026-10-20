@@ -84,16 +84,14 @@ pub fn openNewWindow(d: objc.Object, _: Sel, _: C, configuration: objc.Object, c
     };
 
     const record: WindowRecord = .{ .id = Uuid.random(), .space = if (front) |f| f.space_id else Uuid.first };
-    const fresh = browsers.open(self.kea, &record, frame) catch return reply.fail("The window couldn't be opened.");
-    if (popup) {
-        // The key it is listed under, else WebKit's own id.
-        var key: []const u8 = own_id;
-        for (self.contexts.keys(), self.contexts.values()) |k, v| if (v == context) {
-            key = k;
-            break;
-        };
-        fresh.ext.popup = self.gpa.dupe(u8, key) catch null;
-    }
+    // The key it is listed under, else WebKit's own id.
+    var key: []const u8 = own_id;
+    for (self.contexts.keys(), self.contexts.values()) |k, v| if (v == context) {
+        key = k;
+        break;
+    };
+    const made = if (popup) browsers.openPopup(self.kea, &record, frame, key) else browsers.open(self.kea, &record, frame);
+    const fresh = made catch return reply.fail("The window couldn't be opened.");
     for (0..n) |i| _ = fresh.open(absolute(at(urls, i)), .{ .foreground = i == 0, .at_end = true });
     // The empty tab a new window starts with goes once there are pages.
     if (n > 0) {

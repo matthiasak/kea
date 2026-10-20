@@ -103,6 +103,17 @@ pub fn take(b: *Browser, event: objc.Object) bool {
     if (window) |w| if (objc.msg(?objc.Object, w, "sheetParent", .{}) != null) return false;
     // A small window's keys are its own (web/little.zig has its monitor).
     if (little.owning(window) != null) return false;
+    // An extension's popup window: ⌘W closes it, not a tab of the window
+    // menus act on; every other key is its page's.
+    if (browsers.browserFor(b.kea, window)) |pw| if (pw.ext.popup != null) {
+        const pool = objc.Pool.push();
+        defer pool.pop();
+        const chars = objc.msg(?objc.Object, event, "charactersIgnoringModifiers", .{});
+        const w_key = if (chars) |s| std.mem.eql(u8, objc.fromNSString(objc.msg(objc.Object, s, "lowercaseString", .{})), "w") else false;
+        if (!w_key or objc.msg(objc.NSUInteger, event, "modifierFlags", .{}) & held != command) return false;
+        if (pw.window) |w| objc.msg(void, w.nswindow, "performClose:", .{@as(?objc.Object, null)});
+        return true;
+    };
     // A key being typed into Settings › Shortcuts is for the box.
     if (b.kea.shortcuts.recording) return false;
     const pool = objc.Pool.push();

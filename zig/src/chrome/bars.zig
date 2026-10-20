@@ -3,8 +3,9 @@
 //! shows a file just saved in the Finder — a page asking for the camera,
 //! the microphone, where you are or to send notifications (`captureAsking`,
 //! answering the decision WebKit is holding), the offer to keep a password
-//! a page just sent (`keepAsking`), and the hint while the pointer is
-//! picking things to hide (`veiling`).
+//! a page just sent (`keepAsking`), the offer to add the Chrome Web Store
+//! page's extension (`StoreOffer`, ext/ui.zig), and the hint while the
+//! pointer is picking things to hide (`veiling`).
 const std = @import("std");
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
@@ -21,6 +22,8 @@ const id_said: u64 = std.hash.Wyhash.hash(0, "kea.bar.announcement");
 const id_ask: u64 = std.hash.Wyhash.hash(0, "kea.bar.asking");
 const id_veil: u64 = std.hash.Wyhash.hash(0, "kea.bar.veiling");
 const id_keep: u64 = std.hash.Wyhash.hash(0, "kea.bar.keep-asking");
+const id_store: u64 = std.hash.Wyhash.hash(0, "kea.bar.store-offer");
+const ext_ui = @import("../ext/ui.zig");
 
 /// `move(edge: .bottom)`: how far below its place a bar starts and ends.
 const rise: f32 = 60;
@@ -66,6 +69,7 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette) void {
     }
     if (b.asking) |asking| if (presence.presence(c, id_ask, true, motion.settle, null)) |t| captureAsking(b, c, p, asking, t);
     if (b.passwords.offering) |offer| if (presence.presence(c, id_keep, true, motion.settle, null)) |t| keepAsking(b, c, p, offer, t);
+    if (ext_ui.offered(b)) |id| if (presence.presence(c, id_store, true, motion.settle, null)) |t| ext_ui.storeOffer(b, c, p, id, t);
     if (presence.presence(c, id_veil, b.veiling, motion.settle, null)) |t| hint(c, p, veil_hint, t);
 }
 

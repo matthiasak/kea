@@ -82,7 +82,7 @@ pub fn setPopupRequest(self: *Extensions, url: []const u8, id: []const u8, ancho
     self.del.popup_request = .{ .url = u, .id = i, .anchor = a };
 }
 
-fn clearPopupRequest(self: *Extensions) void {
+pub fn clearPopupRequest(self: *Extensions) void {
     if (self.del.popup_request) |r| {
         self.gpa.free(r.url);
         self.gpa.free(r.id);

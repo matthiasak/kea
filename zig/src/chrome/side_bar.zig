@@ -341,12 +341,20 @@ fn newTabRow(b: *Browser, c: *ui.Context, p: *const Palette, interactive: bool) 
     if (interactive and it.clicked) b.newTab();
 }
 
-/// `SideFoot`: the space's door, bookmarks, downloads; never wider than the column.
+/// `SideFoot`: the space's door, the extensions, bookmarks, downloads;
+/// never wider than the column — the pinned extensions that don't fit give
+/// way, from the last, and are still in the puzzle's list.
 fn foot(b: *Browser, c: *ui.Context, p: *const Palette) void {
     _ = c.open(.{ .absolute = true, .offset = .{ .y = c.size.h - foot_height }, .direction = .row, .gap = 2, .width = .fill, .height = px(26), .padding = .xy(10, 0), .align_items = .center }, "side-foot");
     defer c.end();
     if (b.prefs.uses_spaces) spaces_view.spaceDot(b, c, p);
+    const fetching = @import("fetch_door.zig");
+    // Every door is 26 points, with 2 between them: the puzzle and bookmarks stay.
+    const door: f32 = 26 + 2;
+    const kept: f32 = 2 + @as(f32, if (b.prefs.uses_spaces) 1 else 0) + @as(f32, if (fetching.shows(b)) 1 else 0);
+    const free = b.prefs.side_width - 2 * 10 + 2 - kept * door;
+    @import("../ext/slot_view.zig").slot(b, c, p, @as(usize, @intFromFloat(@max(0, @floor(free / door)))));
     @import("bookmarks/door.zig").door(b, c, p, .trailing);
     // Only while a download is running, and a moment after.
-    @import("fetch_door.zig").door(b, c, p, "foot");
+    fetching.door(b, c, p, "foot");
 }

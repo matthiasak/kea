@@ -37,6 +37,7 @@ pub fn setting(c: *ans.Call, name: []const u8) ans.Error!Value {
     c.owner.setSettings(c.id, .{ .object = mine });
     // `owner.objectWillChange.send()`: Settings › Extensions draws again.
     c.owner.actions_changed +%= 1;
+    for (c.owner.kea.browsers.items) |b| b.redraw();
     return .null;
 }
 

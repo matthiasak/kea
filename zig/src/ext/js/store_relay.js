@@ -63,7 +63,7 @@
     var id = pageID();
     var installed = !!id && state.installed.indexOf(id) >= 0;
     var busy = !!id && state.busy === id;
-    label(ours, installed ? 'Added to Kea' : (busy ? 'Adding…' : 'Add to Kea'));
+    label(ours, installed ? 'Added to KeaZig' : (busy ? 'Adding…' : 'Add to KeaZig'));
     ours.disabled = installed || busy;
   }
 

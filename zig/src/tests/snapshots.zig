@@ -52,6 +52,8 @@ const states = [_]State{
     .{ .name = "p10-keep-asking", .opts = .{ .sidebar = false, .tabs = 2 }, .setup = @import("snapshots_passwords.zig").keepAsking },
     .{ .name = "p10-settings-passwords", .opts = .{ .sidebar = true, .tabs = 2 }, .setup = settingsOn(.passwords) },
     .{ .name = "p11-import", .opts = .{ .sidebar = true, .tabs = 2 }, .setup = @import("snapshots_import.zig").sheet },
+    .{ .name = "p13-extensions-settings", .opts = .{ .sidebar = true, .tabs = 2 }, .setup = @import("snapshots_ext.zig").settings },
+    .{ .name = "p13-slot", .opts = .{ .sidebar = false, .tabs = 2 }, .setup = @import("snapshots_ext.zig").slot },
 };
 
 /// Settings open on `page`.

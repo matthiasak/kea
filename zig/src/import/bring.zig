@@ -26,6 +26,9 @@ pub const State = struct {
     welcome: ?*Session = null,
     /// A file being brought in (`fileImport`), its card in the corner.
     file: ?*takers.FileImport = null,
+    /// Settings › Extensions asked for the sheet on the extensions alone
+    /// (`bringingExtensions`): read once as the sheet's session begins.
+    extensions: bool = false,
 };
 
 /// The window going: its imports let go of it, and finish on their own.
@@ -66,6 +69,10 @@ pub const Session = struct {
     wants_bookmarks: bool = true,
     wants_history: bool = true,
     wants_arc: bool = true,
+    wants_extensions: bool = false,
+    /// Opened for the extensions: the first browser counted with some is
+    /// picked, until you pick one yourself.
+    for_extensions: bool = false,
     replace_bookmarks: bool = false,
     bringing: bool = false,
     /// The bring's parts still to come (`DispatchGroup`).
@@ -123,6 +130,14 @@ pub fn panel(b: *Browser) ?*Session {
     if (b.importing.panel) |s| return s;
     const s = create(b, false) orelse return null;
     s.wanted = s.alloc().dupe(u8, b.bringing_in orelse "") catch "";
+    if (b.importing.extensions) {
+        b.importing.extensions = false;
+        s.for_extensions = true;
+        s.wants_extensions = true;
+        s.wants_passwords = false;
+        s.wants_bookmarks = false;
+        s.wants_history = false;
+    }
     b.importing.panel = s;
     s.pending += 1;
     sources.look(heap, s.base, s, lookDone) catch {
@@ -281,6 +296,7 @@ pub fn bring(s: *Session) void {
     }
     if (s.wants_history and !none(pv, "places")) places(s, in);
     if (s.wants_arc) if (pv) |c| if (c.arc != null) arcs(s, b, src, profile);
+    if (s.wants_extensions) extensions(s, b, i);
     landed(s);
 }
 
@@ -380,6 +396,53 @@ fn arcs(s: *Session, b: *Browser, src: sources.Source, profile: ?[]const u8) voi
     else
         std.fmt.allocPrint(a, "{s}, {s}, {s}", .{ counted(a, t.spaces, "new space"), counted(a, t.pins, "pin"), counted(a, t.tabs, "pinned tab") }) catch "" };
 }
+
+/// `fresh(source)`: the store extensions it has that aren't here already
+/// (on `a`); none below macOS 15.4.
+pub fn fresh(s: *Session, a: std.mem.Allocator, i: usize) []const []const u8 {
+    const b = s.browser orelse return &.{};
+    const e = b.kea.ext orelse return &.{};
+    const pv = s.preview(i) orelse return &.{};
+    var out: std.ArrayList([]const u8) = .empty;
+    for (pv.preview.extensions) |id| if (e.row(id) == null) out.append(a, id) catch {};
+    return out.items;
+}
+
+/// Each from the store, fresh and checked, one question at a time.
+fn extensions(s: *Session, b: *Browser, i: usize) void {
+    const ids = fresh(s, s.alloc(), i);
+    if (ids.len == 0) return;
+    const e = b.kea.ext orelse return;
+    s.said[3] = .{ .ok = true, .text = if (ids.len == 1) "1 extension to confirm" else std.fmt.allocPrint(s.alloc(), "{s} extensions to confirm", .{number(s.alloc(), ids.len)}) catch "" };
+    const chain = heap.create(Chain) catch return;
+    chain.* = .{ .serial = e.serial };
+    for (ids) |id| chain.ids.append(heap, heap.dupe(u8, id) catch continue) catch {};
+    chain.step();
+}
+
+/// `for id in extensions { await install(id:) }`.
+const Chain = struct {
+    serial: u64,
+    ids: std.ArrayList([]u8) = .empty,
+    next: usize = 0,
+
+    fn step(self: *Chain) void {
+        const e = @import("../ext/controller.zig").alive(self.serial);
+        if (e == null or self.next >= self.ids.items.len) {
+            for (self.ids.items) |id| heap.free(id);
+            self.ids.deinit(heap);
+            return heap.destroy(self);
+        }
+        const id = self.ids.items[self.next];
+        self.next += 1;
+        e.?.installId(id, true, self, done);
+    }
+
+    fn done(p: *anyopaque) void {
+        const self: *Chain = @ptrCast(@alignCast(p));
+        self.step();
+    }
+};
 
 /// One part of the bring has landed; the last says what came in.
 fn landed(s: *Session) void {
