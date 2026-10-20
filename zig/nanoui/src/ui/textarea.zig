@@ -22,6 +22,8 @@ pub const AreaOptions = struct {
     bare: bool = true,
     selection_color: ?types.Color = null,
     caret_color: ?types.Color = null,
+    /// The typed text's color (the theme's text when null).
+    color: ?types.Color = null,
 };
 
 /// A visual line: bytes [start, end) of the text, without its newline.
@@ -207,9 +209,9 @@ pub fn textArea(c: *Context, buffer: *tf.TextBuffer, opts: AreaOptions) tf.Resul
     } else for (lines, 0..) |l, n| {
         const y = @as(f32, @floatFromInt(n)) * lh - e.scroll_y;
         if (y + lh < 0 or y > view_h or l.end == l.start) continue;
-        _ = c.leaf(.{ .absolute = true, .offset = .{ .y = y } }, .{ .text = .{ .str = s[l.start..l.end], .style = style, .color = th.text } }, null);
+        _ = c.leaf(.{ .absolute = true, .offset = .{ .y = y } }, .{ .text = .{ .str = s[l.start..l.end], .style = style, .color = opts.color orelse th.text } }, null);
     }
-    if (focused) if (e.marked) |m| spanRects(c, s, style, lines, m[0], m[1], lh, e.scroll_y, th.text, true);
+    if (focused) if (e.marked) |m| spanRects(c, s, style, lines, m[0], m[1], lh, e.scroll_y, opts.color orelse th.text, true);
     if (focused and hi == lo)
         _ = c.leaf(.{ .absolute = true, .width = .{ .px = 1.5 }, .height = .{ .px = lh }, .background = opts.caret_color orelse th.accent, .offset = .{ .x = caret_x, .y = caret_y - e.scroll_y } }, .none, null);
     if (focused) {

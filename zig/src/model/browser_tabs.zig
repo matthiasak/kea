@@ -208,15 +208,15 @@ pub fn newShyTab(self: *Browser) void {
 pub fn duplicate(self: *Browser) void {
     const a = self.tabById(self.active_id) orelse return;
     if (a.isBlank()) return;
-    var buf: [2048]u8 = undefined;
-    const url = buf[0..a.url().len];
-    @memcpy(url, a.url());
+    // A copy: opening may rewrite the tab's own address storage.
+    const url = self.gpa.dupe(u8, a.url()) catch return;
+    defer self.gpa.free(url);
     _ = self.open(url, .{ .foreground = true, .from = a });
 }
 
 /// A link from another app: a blank tab takes it, otherwise a tab of its own.
 pub fn arrive(self: *Browser, url: []const u8) void {
-    if (self.tabById(self.active_id)) |a| if (a.isBlank() and self.omni.typed.items.len == 0) {
+    if (self.tabById(self.active_id)) |a| if (a.isBlank() and self.omni.typed.items.len == 0 and !a.floating) {
         a.go(url);
         self.setEditing(false);
         return self.redraw();
@@ -225,10 +225,11 @@ pub fn arrive(self: *Browser, url: []const u8) void {
 }
 
 /// A bookmark: into the tab you are on — into a new one with ⌘ held
-/// (`apart`; Swift reads the current event's modifiers).
+/// (`apart`; Swift reads the current event's modifiers), or when the one
+/// you are on is busy playing in the float.
 pub fn visit(self: *Browser, url: []const u8, apart: bool) void {
     const a = self.tabById(self.active_id);
-    if (a != null and !apart) {
+    if (a != null and !apart and !a.?.floating) {
         a.?.go(url);
         self.setEditing(false);
         self.setTyped("");

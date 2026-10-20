@@ -236,7 +236,7 @@ pub fn shim(gpa: A, folder: []const u8) ![]u8 {
             try events(a, t, &found);
         }
         // An empty one is marked: there is nothing to run in it.
-        const empty = valid and std.mem.trim(u8, text.?, " \t\n\r\x0b\x0c").len == 0;
+        const empty = valid and blank(text.?);
         try scripts.append(a, try std.mem.concat(a, u8, &.{ if (empty) "-" else "", e.path[root.len..] }));
     }
     sortUnique(&found);
@@ -270,12 +270,65 @@ pub fn events(a: A, text: []const u8, found: *std.ArrayList([]const u8)) !void {
         while (k < text.len and std.ascii.isAlphabetic(text[k])) k += 1;
         // "on", a capital, then at least one more letter.
         if (k - g2 < 4 or text[g2] != 'o' or text[g2 + 1] != 'n' or !std.ascii.isUpper(text[g2 + 2])) continue;
-        // \b: what follows is not a word character (ponytail: any non-ASCII
-        // byte counts as one, as a letter would).
-        if (k < text.len and (std.ascii.isDigit(text[k]) or text[k] == '_' or text[k] >= 0x80)) continue;
+        // \b: what follows is not a word character.
+        if (k < text.len and isWordAt(text, k)) continue;
         try found.append(a, try std.mem.concat(a, u8, &.{ text[g1..j], ".", text[g2..k] }));
         i = k - 1;
     }
+}
+
+extern fn CFCharacterSetGetPredefined(set: isize) *const anyopaque;
+extern fn CFCharacterSetIsLongCharacterMember(set: *const anyopaque, char: u32) u8;
+const cf_whitespace_and_newline = 3;
+const cf_decimal_digit = 4;
+const cf_letter = 5;
+
+fn inSet(set: isize, cp: u21) bool {
+    return CFCharacterSetIsLongCharacterMember(CFCharacterSetGetPredefined(set), cp) != 0;
+}
+
+/// The code point at `text[k]`, or null where the UTF-8 is broken.
+fn codePointAt(text: []const u8, k: usize) ?struct { cp: u21, len: usize } {
+    const n = std.unicode.utf8ByteSequenceLength(text[k]) catch return null;
+    if (k + n > text.len) return null;
+    return .{ .cp = std.unicode.utf8Decode(text[k .. k + n]) catch return null, .len = n };
+}
+
+/// ICU's word character, as `\b` reads it (NSRegularExpression): a letter
+/// or mark in any script, a decimal digit, connector punctuation, ZWNJ/ZWJ.
+fn isWordAt(text: []const u8, k: usize) bool {
+    const at = codePointAt(text, k) orelse return false;
+    return switch (at.cp) {
+        '_', 0x200c, 0x200d, 0x203f, 0x2040, 0x2054, 0xfe33, 0xfe34, 0xfe4d...0xfe4f, 0xff3f => true,
+        else => inSet(cf_letter, at.cp) or inSet(cf_decimal_digit, at.cp),
+    };
+}
+
+/// Nothing but white space and new lines, in Unicode's sense
+/// (`trimmingCharacters(in: .whitespacesAndNewlines).isEmpty`).
+fn blank(text: []const u8) bool {
+    var k: usize = 0;
+    while (k < text.len) {
+        const at = codePointAt(text, k) orelse return false;
+        if (!inSet(cf_whitespace_and_newline, at.cp)) return false;
+        k += at.len;
+    }
+    return true;
+}
+
+test "word characters and blanks are Unicode's" {
+    try std.testing.expect(isWordAt("é", 0));
+    try std.testing.expect(isWordAt("٣", 0));
+    try std.testing.expect(!isWordAt("→", 0));
+    try std.testing.expect(!isWordAt(" ", 0));
+    try std.testing.expect(blank(" \u{3000}\u{a0}\n\u{2028}"));
+    try std.testing.expect(!blank(" x "));
+    var found: std.ArrayList([]const u8) = .empty;
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    try events(arena.allocator(), "chrome.tabs.onUpdated→x chrome.tabs.onMovedé", &found);
+    try std.testing.expectEqual(@as(usize, 1), found.items.len);
+    try std.testing.expectEqualStrings("tabs.onUpdated", found.items[0]);
 }
 
 fn lessThan(_: void, x: []const u8, y: []const u8) bool {

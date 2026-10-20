@@ -115,8 +115,29 @@ pub const State = struct {
     /// Bumped when the chrome changes without coming or going (a column
     /// dragged wider): the slide's spring starts over at its target.
     still: u32 = 0,
+    /// A page has the screen, as of the last frame, and until when the
+    /// chrome is swapping for it (`.easeOut(duration: 0.12)`); bumped at
+    /// each swap, so what comes and goes starts again where it rests.
+    immersed: bool = false,
+    swap_until: f64 = 0,
+    swaps: u32 = 0,
+    /// Where the bookmarks bar last stood, for its leaving fade.
+    bar: struct { x: f32 = 0, y: f32 = 0, w: f32 = 0, cards: bool = false } = .{},
 
     pub const give_up: f64 = 0.42;
+    pub const swap: f64 = 0.12;
+
+    /// Whether the chrome is swapping for a page taking the screen or
+    /// giving it back; a change starts the glide over at its target.
+    pub fn immersion(s: *State, on: bool, time: f64) bool {
+        if (on != s.immersed) {
+            s.immersed = on;
+            s.swap_until = time + swap;
+            s.still +%= 1;
+            s.swaps +%= 1;
+        }
+        return time < s.swap_until;
+    }
 
     /// This frame's room for `chrome`, at `time`.
     pub fn roomed(s: *State, chrome: ui.Size, time: f64, reduced: bool) ui.Size {

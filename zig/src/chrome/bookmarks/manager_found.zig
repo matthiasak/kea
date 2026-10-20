@@ -50,7 +50,7 @@ fn row(b: *Browser, c: *ui.Context, p: *const Palette, hit: bm.Match, order: []c
     if (node.isFolder()) outline.folderMark(c, p, 16, 9.5) else outline.siteMark(b, c, p, node, 16);
     ui.column(c, .{ .gap = 2, .grow = 1, .min_width = 0 });
     ui.text(c, label, .{ .size = 13, .color = if (node.unnamed()) p.muted else p.ink, .truncate = true });
-    ui.text(c, whereabouts(c, hit), .{ .size = 11.5, .color = p.muted, .truncate = true });
+    ui.text(c, whereabouts(c, hit), .{ .size = 11.5, .color = p.muted, .truncate_middle = true });
     ui.end(c);
     var showing = false;
     if (it.hovered) showing = plate.quick(c, p, "Show in Folder", null).clicked;

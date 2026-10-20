@@ -25,21 +25,49 @@ const CGSize = objc.CGSize;
 
 /// `DragStrip`: empty chrome that moves the window. A double click opens a
 /// new tab where the strip is an empty tab row (`onDoubleClick`), and
-/// otherwise does what a title bar's does: fills the screen.
-// ponytail: zooms whatever `AppleActionOnDoubleClick` says; read it when someone sets Minimize.
+/// otherwise does what a title bar's does (System Settings › Desktop &
+/// Dock): minimize, nothing, or fill the screen.
 pub fn dragStrip(b: *Browser, c: *ui.Context, style: ui.Style, on_double: enum { zoom, new_tab }) void {
     var s = style;
     s.window_drag = true;
     const i = c.open(s, null);
     c.end();
     const it = c.interact(i, .{});
-    // The window's background, not a control: no hand over it.
-    if (c.hot == it.id) c.cursor_hand = false;
     if (!it.double_clicked) return;
     switch (on_double) {
         .new_tab => b.newTab(),
-        .zoom => if (b.window) |w| w.zoom(),
+        .zoom => if (b.window) |w| switch (titleBarAction()) {
+            .minimize => w.minimize(),
+            .none => {},
+            .zoom => w.zoom(),
+        },
     }
+}
+
+pub const TitleBarAction = enum { minimize, none, zoom };
+
+/// `AppleActionOnDoubleClick`: unset means the default, which fills the screen.
+pub fn titleBarActionFor(value: ?[]const u8) TitleBarAction {
+    const v = value orelse return .zoom;
+    if (std.mem.eql(u8, v, "Minimize")) return .minimize;
+    if (std.mem.eql(u8, v, "None")) return .none;
+    return .zoom;
+}
+
+fn titleBarAction() TitleBarAction {
+    const pool = objc.Pool.push();
+    defer pool.pop();
+    const defaults = objc.msg(objc.Object, objc.class("NSUserDefaults"), "standardUserDefaults", .{});
+    const s = objc.msg(?objc.Object, defaults, "stringForKey:", .{objc.nsString("AppleActionOnDoubleClick")}) orelse return .zoom;
+    const utf8 = objc.msg(?[*:0]const u8, s, "UTF8String", .{}) orelse return .zoom;
+    return titleBarActionFor(std.mem.span(utf8));
+}
+
+test "a title bar's double click follows AppleActionOnDoubleClick" {
+    try std.testing.expectEqual(TitleBarAction.zoom, titleBarActionFor(null));
+    try std.testing.expectEqual(TitleBarAction.minimize, titleBarActionFor("Minimize"));
+    try std.testing.expectEqual(TitleBarAction.none, titleBarActionFor("None"));
+    try std.testing.expectEqual(TitleBarAction.zoom, titleBarActionFor("Maximize"));
 }
 
 /// Where the close button's centre goes, from the window's top-left: where a

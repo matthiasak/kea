@@ -121,7 +121,10 @@ const sock = struct {
     extern "c" fn read(fd: c_int, buf: [*]u8, n: usize) isize;
     extern "c" fn write(fd: c_int, buf: [*]const u8, n: usize) isize;
     extern "c" fn close(fd: c_int) c_int;
+    extern "c" fn setsockopt(fd: c_int, level: c_int, name: c_int, value: *const c_int, len: u32) c_int;
 };
+
+pub var huge_sent: std.atomic.Value(usize) = .init(0);
 
 /// Starts the listener on 127.0.0.1 and returns its port.
 pub fn listen() !u16 {
@@ -169,6 +172,21 @@ fn answer(client: c_int) void {
         const file: [4096]u8 = @splat('k');
         _ = sock.write(client, dl_head.ptr, dl_head.len);
         _ = sock.write(client, &file, file.len);
+        return;
+    }
+    // `/huge`: a picture with no length that never ends, until the reader
+    // hangs up; how much went out is kept in `huge_sent`.
+    if (std.mem.eql(u8, path, "/huge")) {
+        // SOL_SOCKET, SO_NOSIGPIPE: the reader hanging up is an error, not a signal.
+        const on: c_int = 1;
+        _ = sock.setsockopt(client, 0xffff, 0x1022, &on, @sizeOf(c_int));
+        const head = "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nConnection: close\r\n\r\n";
+        _ = sock.write(client, head.ptr, head.len);
+        const chunk: [65536]u8 = @splat(0);
+        while (huge_sent.load(.monotonic) < 400_000_000) {
+            if (sock.write(client, &chunk, chunk.len) <= 0) return;
+            _ = huge_sent.fetchAdd(chunk.len, .monotonic);
+        }
         return;
     }
     // `/words/a-b-c`: its body is "a b c", words neither its address nor its title has.

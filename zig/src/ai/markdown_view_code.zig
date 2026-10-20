@@ -12,7 +12,7 @@ const mermaid = @import("mermaid/mermaid.zig");
 const draw = @import("mermaid/draw.zig");
 const view = @import("markdown_view.zig");
 
-/// Drawn pictures kept per window before they are all let go.
+/// Drawn pictures kept per window; past it the one shown longest ago goes.
 const pictures_kept = 24;
 
 pub fn block(x: *const view.Ctx, language: []const u8, text: []const u8, closed: bool) void {
@@ -68,7 +68,66 @@ pub fn block(x: *const view.Ctx, language: []const u8, text: []const u8, closed:
     const shown = if (std.mem.indexOfScalar(u8, text, '\r') != null) lf(c.alloc(), text) catch text else text;
     const spans: []const ui.Span = if (is_mermaid) highlighted(c.alloc(), p, shown) catch &.{} else &.{};
     const style: ui.TextStyle = .{ .size = 12 * z, .mono = true, .color = p.ink, .wrap = x.o.drawn };
-    _ = c.leaf(.{ .width = if (x.o.drawn) .fill else .auto, .selectable = true }, .{ .text = .{ .str = shown, .style = style, .color = p.ink, .spans = spans } }, null);
+    // Mermaid's header line is 12 points whatever the zoom (`highlighted`):
+    // zoomed, it is a line of its own between what comes before and after.
+    const head: ?ui.Span = if (z != 1) for (spans) |sp| {
+        if (sp.weight != null) break sp;
+    } else null else null;
+    const parts = cut(c.alloc(), shown, spans, head) catch return;
+    ui.column(c, .{ .width = if (x.o.drawn) .fill else .auto, .selectable = true });
+    defer ui.end(c);
+    for (parts) |part| if (part.text) |str| {
+        var st = style;
+        if (part.fixed) st.size = 12;
+        _ = c.leaf(.{ .width = if (x.o.drawn) .fill else .auto }, .{ .text = .{ .str = str, .style = st, .color = p.ink, .spans = part.spans } }, null);
+    };
+}
+
+const Part = struct { text: ?[]const u8 = null, spans: []const ui.Span = &.{}, fixed: bool = false };
+
+/// The source as the lines before the header, the header, and the lines
+/// after it, each with its own spans (rebased); all of it as one without
+/// a header to set apart.
+fn cut(a: std.mem.Allocator, text: []const u8, spans: []const ui.Span, head: ?ui.Span) ![3]Part {
+    const h = head orelse return .{ .{ .text = text, .spans = spans }, .{}, .{} };
+    var out: [3]Part = .{ .{}, .{ .text = text[h.start..h.end], .fixed = true }, .{} };
+    var one = try a.alloc(ui.Span, 1);
+    one[0] = h;
+    one[0].start = 0;
+    one[0].end = h.end - h.start;
+    out[1].spans = one;
+    // Less the line break either side of the header.
+    if (h.start > 0) out[0] = .{ .text = text[0 .. h.start - 1], .spans = try within(a, spans, 0, h.start - 1) };
+    if (h.end < text.len) out[2] = .{ .text = text[h.end + 1 ..], .spans = try within(a, spans, h.end + 1, @intCast(text.len)) };
+    return out;
+}
+
+/// The spans wholly between `from` and `to`, counted from `from`.
+fn within(a: std.mem.Allocator, spans: []const ui.Span, from: u32, to: u32) ![]const ui.Span {
+    var out: std.ArrayList(ui.Span) = .empty;
+    for (spans) |sp| if (sp.start >= from and sp.end <= to) {
+        var s = sp;
+        s.start -= from;
+        s.end -= from;
+        try out.append(a, s);
+    };
+    return out.items;
+}
+
+test "a zoomed mermaid source sets its header line apart" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const p = @import("../design/palette.zig").get(false);
+    const src = "%% a note\ngraph TD\nA-->B\n%% end";
+    const spans = try highlighted(a, p, src);
+    const parts = try cut(a, src, spans, spans[1]);
+    try std.testing.expectEqualStrings("%% a note", parts[0].text.?);
+    try std.testing.expectEqualStrings("%% a note", parts[0].text.?[parts[0].spans[0].start..parts[0].spans[0].end]);
+    try std.testing.expectEqualStrings("graph TD", parts[1].text.?);
+    try std.testing.expect(parts[1].fixed and parts[1].spans[0].end == 8);
+    try std.testing.expectEqualStrings("A-->B\n%% end", parts[2].text.?);
+    try std.testing.expectEqualStrings("%% end", parts[2].text.?[parts[2].spans[0].start..parts[2].spans[0].end]);
 }
 
 fn pictureKey(text: []const u8, dark: bool, zoom: f32) u64 {
@@ -84,11 +143,13 @@ fn picture(x: *const view.Ctx, text: []const u8, d: mermaid.Diagram) ?[]const u8
     const st = x.st;
     const gpa = x.b.gpa;
     const k = pictureKey(text, x.c.theme.dark, x.o.zoom);
-    if (st.pictures.get(k)) |bytes| return bytes;
-    // ponytail: all let go past the cap; an LRU if answers hold many diagrams.
-    if (st.pictures.count() >= pictures_kept) st.forgetPictures(gpa);
+    if (st.pictures.getPtr(k)) |pic| {
+        pic.used = x.c.time;
+        return pic.bytes;
+    }
+    if (st.pictures.count() >= pictures_kept) st.forgetOldest(gpa, x.c.time);
     const bytes = draw.png(gpa, d, x.p, x.o.zoom) catch return null;
-    st.pictures.put(gpa, k, bytes) catch {
+    st.pictures.put(gpa, k, .{ .bytes = bytes, .used = x.c.time }) catch {
         gpa.free(bytes);
         return null;
     };
@@ -101,7 +162,7 @@ fn lf(a: std.mem.Allocator, text: []const u8) ![]const u8 {
 
 /// `Mermaid.highlighted`: `%%` comments faint, the first line that says
 /// something (not `---`) the header, in sunset and semibold; the rest ink.
-// ponytail: Swift sets the header at 12 points whatever the zoom; spans keep the text's size.
+// The header line's own size (12 points at any zoom) is `block`'s: spans carry no size.
 pub fn highlighted(a: std.mem.Allocator, p: *const Palette, text: []const u8) ![]const ui.Span {
     var out: std.ArrayList(ui.Span) = .empty;
     var colored_header = false;
@@ -109,7 +170,7 @@ pub fn highlighted(a: std.mem.Allocator, p: *const Palette, text: []const u8) ![
     var it = std.mem.splitScalar(u8, text, '\n');
     while (it.next()) |line| {
         defer start += line.len + 1;
-        const t = std.mem.trim(u8, line, " \t");
+        const t = @import("whitespace.zig").trim(line);
         const end: u32 = @intCast(start + line.len);
         if (std.mem.startsWith(u8, t, "%%")) {
             try out.append(a, .{ .start = @intCast(start), .end = end, .color = p.faint });

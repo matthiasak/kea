@@ -78,7 +78,7 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette, a: *Assistant, st: *
             st.typing = false;
             ui.focusNext(c, false);
         }
-        const r = ui.textArea(c, &st.draft, .{ .size = 13, .min_lines = 1, .max_lines = 8, .submit_on_return = true, .bare = true });
+        const r = ui.textArea(c, &st.draft, .{ .size = 13, .min_lines = 1, .max_lines = 8, .submit_on_return = true, .bare = true, .color = p.ink });
         // The prompt is VoiceOver's name for it, as the TextField's is; drawn
         // here in faint (the area's own would be muted), after the area so it
         // keeps its place (and its id, which the focus is).
@@ -119,7 +119,7 @@ fn plain(c: *ui.Context, said: []const u8) bool {
 fn pinList(c: *ui.Context, p: *const Palette, st: *State, todo: *Do, pins: []const @import("../data/chats_store.zig").ChatPin) void {
     ui.column(c, .{ .gap = 4, .width = .fill });
     defer ui.end(c);
-    ui.text(c, "PINS", .{ .size = 10, .weight = .semibold, .color = p.muted });
+    ui.text(c, "PINS", .{ .size = 10, .weight = .semibold, .color = p.muted, .tracking = 0.6 });
     _ = c.open(.{ .scroll = true, .scroll_bar = false, .gap = 4, .width = .fill, .max_height = @min(@as(f32, @floatFromInt(pins.len)) * 24, 108) }, "kea.chat.pins");
     for (pins) |pin| {
         ui.row(c, .{ .gap = 6, .width = .fill, .align_items = .center });

@@ -13,6 +13,7 @@ const Bookmark = bm.Bookmark;
 const Bookmarks = bm.Bookmarks;
 const Uuid = @import("../../data/json.zig").Uuid;
 const Palette = @import("../../design/palette.zig").Palette;
+const motion = @import("../../design/motion.zig");
 const controls = @import("../controls.zig");
 const plate = @import("../controls_plate.zig");
 const sheet = @import("../sheet.zig");
@@ -117,6 +118,7 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette) void {
     if (picks.organizing) |says| {
         proposal.asking(b, c, p, says);
     } else if (picks.proposal == null and picks.ids.items.items.len > 0) bar(b, c, p);
+    const room = switchBegin(b, c);
     if (picks.proposal) |pr| {
         proposal.view(b, c, p, pr);
     } else if (b.bookmarks.isEmpty()) {
@@ -126,11 +128,49 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette) void {
     } else if (picks.query.text().len > 0) {
         found.view(b, c, p);
     } else tree(b, c, p);
+    switchEnd(b, c, room);
     ui.end(c);
 
     pl.foot(c, p);
     foot(b, c, p);
     pl.end(c);
+}
+
+/// `.animation(Motion.settle, value: picks.query.isEmpty)`: going from the
+/// tree to what was found, or back, the new list fades in and the room
+/// springs from the old one's height to its own. Returns the room's box
+/// and the list's; draw the list, then `switchEnd`.
+fn switchBegin(b: *Browser, c: *ui.Context) [2]u32 {
+    const s = &b.marks_ui;
+    const room = c.open(.{ .width = .fill, .clip = true }, "kea.marks.room");
+    const inner = c.open(.{ .width = .fill, .direction = .column }, "inner");
+    const hunting = s.picks.query.text().len > 0;
+    if (hunting != s.hunting_was) {
+        s.hunting_was = hunting;
+        // Only a list already on screen moves: the sheet arriving doesn't.
+        if (c.rects.get(c.node(inner).id)) |r| {
+            s.switch_gen +%= 1;
+            s.switch_from = r.h;
+            s.switching = true;
+        }
+    }
+    return .{ room, inner };
+}
+
+fn switchEnd(b: *Browser, c: *ui.Context, boxes: [2]u32) void {
+    const s = &b.marks_ui;
+    c.end();
+    c.end();
+    if (!s.switching) return;
+    const id = c.node(boxes[0]).id;
+    const now = if (c.rects.get(c.node(boxes[1]).id)) |r| r.h else s.switch_from;
+    const fade = ui.springFrom(c, id, s.switch_gen *% 2, 0, 1, motion.settle);
+    const h = ui.springFrom(c, id, s.switch_gen *% 2 +% 1, s.switch_from, now, motion.settle);
+    // The list laid out at its own height, over a room of the spring's.
+    c.node(boxes[0]).style.height = .{ .px = @max(0, h) };
+    c.node(boxes[1]).style.absolute = true;
+    c.node(boxes[1]).style.opacity = std.math.clamp(fade, 0, 1);
+    if (@abs(h - now) < 0.5 and @abs(fade - 1) < 0.001) s.switching = false;
 }
 
 fn tree(b: *Browser, c: *ui.Context, p: *const Palette) void {
@@ -200,7 +240,10 @@ fn foot(b: *Browser, c: *ui.Context, p: *const Palette) void {
     ui.row(c, .{ .width = .fill, .gap = 8, .align_items = .center });
     defer ui.end(c);
     ui.text(c, "Bring in from", .{ .size = 12, .color = p.muted });
-    if (controls.pill(c, p, "Bring in\u{2026}", .{}).clicked) sheet.show(b, .bringing);
+    if (controls.pill(c, p, "Bring in\u{2026}", .{}).clicked) {
+        sheet.close(b, .bookmarking);
+        sheet.show(b, .bringing);
+    }
     if (controls.pill(c, p, "File\u{2026}", .{}).clicked) files.importFile(b);
     ui.spacer(c);
     if (controls.pill(c, p, "New Folder\u{2026}", .{}).clicked) ask.newFolder(b, null, null);
@@ -230,8 +273,5 @@ fn organizeMenu(a: std.mem.Allocator, b: *Browser, _: u64) anyerror![]const Menu
     var ai = try row_menu.item(a, b, "Organize with AI\u{2026}", .organize, &.{}, null, .manager);
     ai.disabled = b.marks_ui.picks.organizing != null;
     try out.append(a, ai);
-    // Not in Swift: the list written out as a bookmarks page (P8.7's export).
-    try out.append(a, .separator);
-    try out.append(a, try row_menu.item(a, b, "Export Bookmarks\u{2026}", .export_file, &.{}, null, .manager));
     return out.items;
 }

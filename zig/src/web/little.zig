@@ -196,6 +196,7 @@ fn px(v: f32) ui.Length {
 }
 
 fn view(self: *Little, c: *ui.Context) void {
+    c.hand_cursor = false;
     // Drawn first inside `newWindow`, before it is filled in.
     if (std.mem.indexOfScalar(*Little, open.items, self) == null) return;
     const p = palette.get(c.theme.dark);

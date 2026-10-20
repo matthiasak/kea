@@ -54,7 +54,8 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette) void {
     const scrim = c.open(.{ .absolute = true, .width = .fill, .height = .fill, .background = ui.Color.black.alpha(0.12) }, "scrim");
     c.end();
     const out = c.interact(scrim, .{});
-    if (out.pressed and c.input.pressed) dismissed = true;
+    // `.onTapGesture` / `Button`: on the mouse coming up, not going down.
+    if (out.clicked) dismissed = true;
 
     const panel = c.open(.{ .padding = .all(12), .background = p.ground, .radius = 12, .border = p.hairline, .control = true }, "panel");
     // The pointer picks the card under it once it has moved: the panel
@@ -90,7 +91,7 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette) void {
                 s.cards[s.card_count] = .{ .id = t.id, .rect = r };
                 s.card_count += 1;
             };
-            if (it.pressed and c.input.pressed) picked = t.id;
+            if (it.clicked) picked = t.id;
             if (it.hovered and pointing) s.selected = t.id;
         };
         ui.end(c);

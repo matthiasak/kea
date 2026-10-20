@@ -164,11 +164,11 @@ pub const Browser = struct {
     marks_ui: @import("../chrome/bookmarks/state.zig").State = .{},
     /// History's hunt, mode and list (chrome/history_panel.zig).
     recall: @import("../chrome/history_panel.zig").State = .{},
-
-    // The bars (chrome/bars.zig): a line that rises from the bottom, says
-    // one thing and leaves (`announcement`, on `gpa`, until `announced_until`
-    // on `ui.clock`); the file it is about (`announcedFile`), shown in the
-    // Finder when pressed; and a page asking on the bar (`asking`).
+    // The bars (chrome/bars.zig): a line that rises from the bottom, says one
+    // thing and leaves (`announcement`, on `gpa`, until `announced_until` on
+    // `ui.clock`); its file (`announcedFile`), shown in the Finder when pressed;
+    // a page asking (`asking`); question bars as last drawn, to leave (`bars`).
+    bars: @import("../chrome/bars.zig").State = .{},
     announcement: ?[]u8 = null,
     announced_until: f64 = 0,
     announced_file: ?[]u8 = null,
@@ -461,7 +461,7 @@ pub const Browser = struct {
         self.kea.fetches.unbind(self);
         chat_ops.deinit(self);
         @import("../import/bring.zig").deinit(self);
-        self.hush();
+        @import("../chrome/bars.zig").release(self);
         // A page still waiting on the bar is refused, never left holding.
         if (self.asking) |a| {
             self.asking = null;

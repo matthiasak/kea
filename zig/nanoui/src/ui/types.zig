@@ -191,7 +191,18 @@ pub const Style = struct {
     scroll_x: bool = false,
     /// A scrolling box shows its scroll indicator.
     scroll_bar: bool = true,
+    /// The indicator shows only while the box scrolls and a moment after,
+    /// as macOS's overlay scrollers.
+    scroll_bar_fades: bool = false,
+    /// A box whose place down its parent changes from one layout to the
+    /// next (a row above it gone) springs from where it was shown to where
+    /// it is, as SwiftUI animates a stack's rows; its ancestors' offsets
+    /// and scrolling aside.
+    settle_y: ?Spring = null,
 };
+
+/// A spring as SwiftUI writes one (`motion.zig`).
+pub const Spring = struct { response: f32, damping: f32 };
 
 /// Bytes [start, end) of a text drawn their own way: a color (ANSI
 /// output, syntax), and for rich text a weight, italics, the monospaced
@@ -225,6 +236,8 @@ pub const TextStyle = struct {
     leading: f32 = 1,
     /// One line cut to fit its box, ending in "…".
     truncate: bool = false,
+    /// As `truncate`, but the middle goes: "abc…xyz".
+    truncate_middle: bool = false,
     /// Glyphs fade out toward the box's right edge.
     fade: ?Fade = null,
     /// Wrapped text keeps at most this many lines (0: all of them), the
@@ -232,6 +245,15 @@ pub const TextStyle = struct {
     max_lines: u8 = 0,
     /// Digits all as wide (monospaced numbers): counters, clocks, sizes.
     tabular: bool = false,
+    /// Points added after each character (letter spacing).
+    tracking: f32 = 0,
+    /// The system face's rounded design (SF Rounded); others keep their own.
+    rounded: bool = false,
+
+    /// Cut to one line that fits, at its end or in its middle.
+    pub fn cuts(s: TextStyle) bool {
+        return s.truncate or s.truncate_middle;
+    }
 };
 
 /// Glyphs within `clear` points of the box's right edge are transparent;

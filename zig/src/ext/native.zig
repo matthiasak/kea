@@ -17,7 +17,7 @@ const X_OK = 1;
 
 const gpa = std.heap.c_allocator;
 
-pub const Error = error{ InvalidName, Forbidden, NotFound, NoHost, TooLong, Exited };
+pub const Error = error{ InvalidName, Forbidden, NotFound, NoHost, TooLong, Exited, Unsaved };
 
 /// `Refused`'s text for each.
 pub fn refused(err: Error) []const u8 {
@@ -28,7 +28,16 @@ pub fn refused(err: Error) []const u8 {
         error.NoHost => "No host named",
         error.TooLong => "Message too long for a native host",
         error.Exited => "Native host has exited.",
+        // `FileHandle.write(contentsOf:)` to a host gone (measured off
+        // Foundation: NSFileWriteUnknownError).
+        error.Unsaved => "The file couldn\u{2019}t be saved.",
     };
+}
+
+/// What `Process.run` throws for a program that won't start, on gpa
+/// (measured off Foundation: NSFileNoSuchFileError, whatever the cause).
+fn unstarted(program: []const u8) ?[]u8 {
+    return std.fmt.allocPrint(gpa, "The file \u{201C}{s}\u{201D} doesn\u{2019}t exist.", .{std.fs.path.basename(program)}) catch null;
 }
 
 /// The controller delegate's refusal for an extension that didn't ask
@@ -131,7 +140,7 @@ const Send = struct {
 
     fn ended(owner: *anyopaque) void {
         const s: *Send = @ptrCast(@alignCast(owner));
-        if (s.reply) |reply| failed(reply, s.key, error.Exited) else gpa.free(s.key);
+        if (s.reply) |reply| failed(reply, s.key, refused(error.Exited)) else gpa.free(s.key);
         gpa.destroy(s);
     }
 };
@@ -140,15 +149,17 @@ const Send = struct {
 /// is answered with the host's message or fails with `refused`'s text.
 pub fn send(message: objc.Object, host_name: []const u8, ext_id: []const u8, reply: value.Reply) void {
     const key = std.mem.concat(gpa, u8, &.{ ext_id, "→", host_name }) catch return reply.fail(refused(error.Exited));
-    const program = host(host_name, ext_id) catch |e| return failed(reply, key, e);
+    const program = host(host_name, ext_id) catch |e| return failed(reply, key, refused(e));
     defer gpa.free(program);
-    const origin = originOf(ext_id) orelse return failed(reply, key, error.Exited);
+    const origin = originOf(ext_id) orelse return failed(reply, key, refused(error.Exited));
     defer gpa.free(origin);
-    const s = gpa.create(Send) catch return failed(reply, key, error.Exited);
+    const s = gpa.create(Send) catch return failed(reply, key, refused(error.Exited));
     s.* = .{ .reply = reply, .key = key };
     const pipe = HostPipe.start(gpa, program, origin, s, Send.heard, Send.ended) catch {
         gpa.destroy(s);
-        return failed(reply, key, error.NotFound);
+        const why = unstarted(program) orelse return failed(reply, key, refused(error.NotFound));
+        defer gpa.free(why);
+        return failed(reply, key, why);
     };
     s.pipe = pipe;
     pipe.send(message) catch |e| {
@@ -156,7 +167,7 @@ pub fn send(message: objc.Object, host_name: []const u8, ext_id: []const u8, rep
         pipe.stop();
         // `ended` still comes, with nothing left to answer.
         const k = gpa.dupe(u8, key) catch return reply.fail(refused(e));
-        failed(reply, k, e);
+        failed(reply, k, refused(e));
     };
 }
 
@@ -165,11 +176,11 @@ pub fn send(message: objc.Object, host_name: []const u8, ext_id: []const u8, rep
 /// so it can't swamp the browser (Extensions.swift 1503-1510). Takes `key`.
 var failures: std.StringArrayHashMapUnmanaged(std.ArrayList(f64)) = .empty;
 
-fn failed(reply: value.Reply, key: []u8, err: Error) void {
+fn failed(reply: value.Reply, key: []u8, why: []const u8) void {
     const now = @import("../data/json.zig").now();
     const entry = failures.getOrPut(gpa, key) catch {
         gpa.free(key);
-        return reply.fail(refused(err));
+        return reply.fail(why);
     };
     if (entry.found_existing) gpa.free(key) else entry.value_ptr.* = .empty;
     const list = entry.value_ptr;
@@ -180,18 +191,25 @@ fn failed(reply: value.Reply, key: []u8, err: Error) void {
     };
     list.shrinkRetainingCapacity(kept);
     list.append(gpa, now) catch {};
-    if (list.items.len <= 12) return reply.fail(refused(err));
-    const later = gpa.create(Later) catch return reply.fail(refused(err));
-    later.* = .{ .reply = reply, .why = refused(err) };
+    if (list.items.len <= 12) return reply.fail(why);
+    const later = gpa.create(Later) catch return reply.fail(why);
+    later.* = .{ .reply = reply, .why = gpa.dupe(u8, why) catch {
+        gpa.destroy(later);
+        return reply.fail(why);
+    } };
     objc.dispatchAfter(std.time.ns_per_s, later, Later.run);
 }
 
 const Later = struct {
     reply: value.Reply,
-    why: []const u8,
+    /// On gpa.
+    why: []u8,
     fn run(ctx: ?*anyopaque) callconv(.c) void {
         const l: *Later = @ptrCast(@alignCast(ctx.?));
-        defer gpa.destroy(l);
+        defer {
+            gpa.free(l.why);
+            gpa.destroy(l);
+        }
         l.reply.fail(l.why);
     }
 };
@@ -211,9 +229,16 @@ const Link = struct {
         objc.msg(void, l.port, "sendMessage:completionHandler:", .{ message, @as(?*anyopaque, null) });
     }
 
+    /// Its output over: the port goes. A host that closed its output may
+    /// run on, so the link stays until it has gone — a later disconnect
+    /// still stops it, as Swift's handler holding the pipe does.
     fn ended(owner: *anyopaque) void {
         const l: *Link = @ptrCast(@alignCast(owner));
         if (!disconnected(l.port)) objc.msg(void, l.port, "disconnect", .{});
+    }
+
+    fn gone(owner: *anyopaque) void {
+        const l: *Link = @ptrCast(@alignCast(owner));
         _ = live.swapRemove(l.serial);
         objc.release(l.port);
         gpa.destroy(l);
@@ -232,30 +257,34 @@ fn linkOf(ctx: *anyopaque) ?*Link {
 }
 
 /// `runtime.connectNative`: run, and keep the two talking until either
-/// end lets go. Main thread.
-pub fn connect(port: objc.Object, ext_id: []const u8) Error!void {
-    const name = objc.msg(?objc.Object, port, "applicationIdentifier", .{}) orelse return error.NoHost;
-    const program = try host(objc.fromNSString(name), ext_id);
+/// end lets go; `done` answered either way. Main thread.
+pub fn connect(port: objc.Object, ext_id: []const u8, done: value.Done) void {
+    const name = objc.msg(?objc.Object, port, "applicationIdentifier", .{}) orelse return done.fail(refused(error.NoHost));
+    const program = host(objc.fromNSString(name), ext_id) catch |e| return done.fail(refused(e));
     defer gpa.free(program);
     // A new port is often a worker starting over; the one before may have
     // left its host behind.
     stopOrphans();
-    const origin = originOf(ext_id) orelse return error.NotFound;
+    const origin = originOf(ext_id) orelse return done.fail(refused(error.NotFound));
     defer gpa.free(origin);
-    const l = gpa.create(Link) catch return error.NotFound;
+    const l = gpa.create(Link) catch return done.fail(refused(error.NotFound));
     serials += 1;
     l.* = .{ .serial = serials, .pipe = undefined, .port = objc.retain(port) };
     l.pipe = HostPipe.start(gpa, program, origin, l, Link.heard, Link.ended) catch {
         objc.release(l.port);
         gpa.destroy(l);
-        return error.NotFound;
+        const why = unstarted(program) orelse return done.fail(refused(error.NotFound));
+        defer gpa.free(why);
+        return done.fail(why);
     };
+    l.pipe.on_gone = Link.gone;
     live.put(gpa, l.serial, l) catch {};
     const ctx: *anyopaque = @ptrFromInt(l.serial);
     var on_message = objc.Block(anyopaque, &.{ ?objc.Object, ?objc.Object }).init(ctx, portMessage);
     objc.msg(void, port, "setMessageHandler:", .{&on_message});
     var on_disconnect = objc.Block(anyopaque, &.{?objc.Object}).init(ctx, portGone);
     objc.msg(void, port, "setDisconnectHandler:", .{&on_disconnect});
+    done.ok();
 }
 
 fn portMessage(ctx: *anyopaque, message: ?objc.Object, _: ?objc.Object) void {
@@ -312,4 +341,10 @@ test "native host names" {
     try std.testing.expect(!validName("a..b"));
     try std.testing.expect(!validName(""));
     try std.testing.expect(!validName("a.b."));
+}
+
+test "a host that won't start is refused in Process.run's words" {
+    const why = unstarted("/Applications/Thing.app/Contents/MacOS/thing-host").?;
+    defer gpa.free(why);
+    try std.testing.expectEqualStrings("The file \u{201C}thing-host\u{201D} doesn\u{2019}t exist.", why);
 }

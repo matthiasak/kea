@@ -39,8 +39,8 @@ pub const Control = struct {
     progress: ?*const fn (ctx: ?*anyopaque, p: Progress) void = null,
     cancelled: bool = false,
     greatest: usize = 0,
-    last_message: [256]u8 = undefined,
-    last_len: ?usize = null,
+    /// The last message, by hash: its words live only for the call.
+    last_message: ?u64 = null,
     last_emission: f64 = 0,
     emitted: bool = false,
 
@@ -66,11 +66,9 @@ pub const Control = struct {
 
     fn emit(c: *Control, p: Progress, force: bool) void {
         _ = std.c.pthread_mutex_lock(&c.lock);
-        const msg = p.message[0..@min(p.message.len, c.last_message.len)];
-        const changed = c.last_len == null or !std.mem.eql(u8, c.last_message[0..c.last_len.?], msg);
-        if (changed) {
-            @memcpy(c.last_message[0..msg.len], msg);
-            c.last_len = msg.len;
+        const hash = std.hash.Wyhash.hash(0, p.message);
+        if (c.last_message != hash) {
+            c.last_message = hash;
             c.greatest = p.completed;
         } else c.greatest = @max(c.greatest, p.completed);
         const done = c.greatest;

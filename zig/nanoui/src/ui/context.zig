@@ -34,6 +34,8 @@ pub const Content = union(enum) {
         size: f32,
         weight: types.Weight,
         color: types.Color,
+        /// Turned this many of `turn.steps` clockwise.
+        step: u8 = 0,
     };
 
     pub const Text = struct {
@@ -210,6 +212,10 @@ pub const Context = struct {
     stats: FrameStats = .{},
     /// Set when the pointer is over something clickable.
     cursor_hand: bool = false,
+    /// Whether what `interact` makes clickable shows the pointing hand. An
+    /// app whose controls keep the arrow, as AppKit's do, sets it false
+    /// once; a view still asks for the hand with `cursor = .hand`.
+    hand_cursor: bool = true,
     cursor_text: bool = false,
     /// A cursor a view asks for, over what widgets set (dividers).
     cursor: ?Cursor = null,
@@ -393,7 +399,7 @@ pub const Context = struct {
         // A drag that selected text is not a click.
         const released = c.input.released and c.active == id and top and !c.selection.moved;
         const clicked = released and c.input.button == .left;
-        if (top) c.cursor_hand = true;
+        if (top and c.hand_cursor) c.cursor_hand = true;
         return .{
             .id = id,
             .rect = rect,

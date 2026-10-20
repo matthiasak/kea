@@ -9,6 +9,7 @@ const Tab = @import("tab.zig").Tab;
 const Browser = @import("../model/browser.zig").Browser;
 const config = @import("config.zig");
 const cg = @import("../sys/cg.zig");
+const urlsession = @import("../sys/urlsession.zig");
 
 /// The most a copied picture may weigh, and unpack to.
 const largest_image = 50_000_000;
@@ -69,7 +70,6 @@ fn downloadImage(p: *Pick, _: *nanoui.menu.Item) void {
 
 const Job = struct { serial: u64 };
 const DownloadBlock = objc.Block(Job, &.{objc.Object});
-const DataBlock = objc.Block(Job, &.{ ?objc.Object, ?objc.Object, ?objc.Object });
 const BlobBlock = objc.Block(Job, &.{ ?objc.Object, ?objc.Object });
 
 fn started(job: *Job, download: objc.Object) void {
@@ -79,36 +79,79 @@ fn started(job: *Job, download: objc.Object) void {
     if (@hasDecl(Browser, "keep")) b.keep(download, t.web);
 }
 
-/// For Copy Image: no cookies, nothing cached.
-fn fetcher() objc.Object {
+/// For Copy Image: no cookies, nothing cached (`Browser.fetcher`).
+fn fetcher() ?*urlsession.Session {
     const S = struct {
-        var session: ?objc.Object = null;
+        var session: ?*urlsession.Session = null;
     };
-    if (S.session) |s| return s;
-    const conf = objc.msg(objc.Object, objc.class("NSURLSessionConfiguration"), "ephemeralSessionConfiguration", .{});
-    objc.msg(void, conf, "setHTTPCookieStorage:", .{@as(?objc.Object, null)});
-    objc.msg(void, conf, "setHTTPShouldSetCookies:", .{objc.NO});
-    objc.msg(void, conf, "setURLCache:", .{@as(?objc.Object, null)});
-    objc.msg(void, conf, "setURLCredentialStorage:", .{@as(?objc.Object, null)});
-    objc.msg(void, conf, "setTimeoutIntervalForRequest:", .{@as(f64, 30)});
-    const queue = objc.msg(objc.Object, objc.class("NSOperationQueue"), "mainQueue", .{});
-    S.session = objc.retain(objc.msg(objc.Object, objc.class("NSURLSession"), "sessionWithConfiguration:delegate:delegateQueue:", .{ conf, @as(?objc.Object, null), queue }));
-    return S.session.?;
+    if (S.session == null) S.session = urlsession.Session.create(std.heap.c_allocator, .{ .request_timeout = 30, .resource_timeout = 7 * 86400, .keeps_nothing = true }) catch null;
+    return S.session;
+}
+
+/// A picture coming in, read as it comes and let go past the limit.
+const Copy = struct {
+    serial: u64,
+    bytes: std.ArrayList(u8) = .empty,
+    task: ?*urlsession.Task = null,
+
+    fn of(ctx: *anyopaque) *Copy {
+        return @ptrCast(@alignCast(ctx));
+    }
+
+    /// Done with: copied, or a word that it couldn't be.
+    fn finish(job: *Copy, ok: bool) void {
+        const a = std.heap.c_allocator;
+        defer {
+            job.bytes.deinit(a);
+            a.destroy(job);
+        }
+        const t = Tab.alive(job.serial) orelse return;
+        if (!ok) return copied(t, null);
+        const pool = objc.Pool.push();
+        defer pool.pop();
+        copied(t, objc.msg(objc.Object, objc.class("NSData"), "dataWithBytes:length:", .{ job.bytes.items.ptr, @as(objc.NSUInteger, job.bytes.items.len) }));
+    }
+
+    /// Stopped short: the task says nothing more, so it is finished here.
+    fn refuse(job: *Copy) void {
+        if (job.task) |task| task.cancel();
+        job.finish(false);
+    }
+
+    fn status(ctx: *anyopaque, code: i64) void {
+        if (code != 0 and (code < 200 or code >= 300)) of(ctx).refuse();
+    }
+
+    fn length(ctx: *anyopaque, n: i64) void {
+        if (n > largest_image) of(ctx).refuse();
+    }
+
+    fn data(ctx: *anyopaque, bytes: []const u8) void {
+        const job = of(ctx);
+        if (job.bytes.items.len + bytes.len > largest_image) return job.refuse();
+        job.bytes.appendSlice(std.heap.c_allocator, bytes) catch job.refuse();
+    }
+
+    fn done(ctx: *anyopaque, failure: ?urlsession.Failure) void {
+        of(ctx).finish(failure == null);
+    }
+};
+
+/// Copy Image from the network: read as it comes, stopped past 50 MB.
+pub fn copyFrom(t: *Tab, url: []const u8) void {
+    const job = std.heap.c_allocator.create(Copy) catch return;
+    job.* = .{ .serial = t.serial };
+    const session = fetcher() orelse return job.finish(false);
+    job.task = session.start(.{ .url = url }, .{ .ctx = job, .response = Copy.status, .length = Copy.length, .data = Copy.data, .done = Copy.done }) orelse return job.finish(false);
 }
 
 /// Fetched once and written as an actual image; a blob: picture is read
 /// in the frame that made it.
 fn copyImage(p: *Pick, _: *nanoui.menu.Item) void {
     const t = Tab.alive(p.serial) orelse return;
+    if (!std.ascii.startsWithIgnoreCase(p.url, "blob:")) return copyFrom(t, p.url);
     const job = std.heap.c_allocator.create(Job) catch return;
     job.* = .{ .serial = t.serial };
-    if (!std.ascii.startsWithIgnoreCase(p.url, "blob:")) {
-        const nsurl = objc.msg(?objc.Object, objc.class("NSURL"), "URLWithString:", .{objc.nsString(p.url)}) orelse return std.heap.c_allocator.destroy(job);
-        var block = DataBlock.init(job, fetched);
-        const task = objc.msg(objc.Object, fetcher(), "dataTaskWithURL:completionHandler:", .{ nsurl, @as(*anyopaque, @ptrCast(&block)) });
-        objc.msg(void, task, "resume", .{});
-        return;
-    }
     const wv = t.web orelse return std.heap.c_allocator.destroy(job);
     const read =
         \\const found = await fetch(src);
@@ -122,16 +165,6 @@ fn copyImage(p: *Pick, _: *nanoui.menu.Item) void {
     const args = objc.msg(objc.Object, objc.class("NSDictionary"), "dictionaryWithObject:forKey:", .{ objc.nsString(p.url), objc.nsString("src") });
     var block = BlobBlock.init(job, blobRead);
     objc.msg(void, wv, "callAsyncJavaScript:arguments:inFrame:inContentWorld:completionHandler:", .{ objc.nsString(read), args, p.frame, config.world(), @as(*anyopaque, @ptrCast(&block)) });
-}
-
-fn fetched(job: *Job, data: ?objc.Object, response: ?objc.Object, _: ?objc.Object) void {
-    defer std.heap.c_allocator.destroy(job);
-    const t = Tab.alive(job.serial) orelse return;
-    if (response) |r| if (objc.msg(objc.BOOL, r, "isKindOfClass:", .{objc.class("NSHTTPURLResponse")})) {
-        const status = objc.msg(objc.NSInteger, r, "statusCode", .{});
-        if (status < 200 or status >= 300) return copied(t, null);
-    };
-    copied(t, data);
 }
 
 fn blobRead(job: *Job, value: ?objc.Object, _: ?objc.Object) void {

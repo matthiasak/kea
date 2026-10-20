@@ -1,6 +1,7 @@
 //! `Mark` (Icons.swift): what stands for a page when there is no room for
 //! its title: the site's icon, or its letter in a faint square until then.
 const ui = @import("nanoui").ui;
+const objc = @import("nanoui").objc;
 const Palette = @import("../design/palette.zig").Palette;
 
 /// A site's icon (`Favicons.icon`): `key` names this picture of it (its
@@ -25,4 +26,18 @@ pub fn mark(c: *ui.Context, p: *const Palette, icon: ?Icon, letter: []const u8, 
     }, null);
     defer c.end();
     ui.text(c, letter, .{ .size = size * 0.56, .weight = .medium, .color = p.muted });
+}
+
+/// `text.first.map { String($0).uppercased() } ?? "•"`: the first
+/// character (a grapheme, as Swift's `Character`), capitalised as
+/// `uppercased()` does it, on the frame's arena.
+pub fn initial(c: *ui.Context, text: []const u8) []const u8 {
+    if (text.len == 0) return "•";
+    const pool = objc.Pool.push();
+    defer pool.pop();
+    const Range = extern struct { location: usize, length: usize };
+    const s = objc.nsString(text);
+    const r = objc.msg(Range, s, "rangeOfComposedCharacterSequenceAtIndex:", .{@as(usize, 0)});
+    const first = objc.msg(objc.Object, s, "substringWithRange:", .{r});
+    return c.print("{s}", .{objc.fromNSString(objc.msg(objc.Object, first, "uppercaseString", .{}))});
 }

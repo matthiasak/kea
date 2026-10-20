@@ -329,7 +329,7 @@ fn zoom(b: *Browser, c: *ui.Context, t: *Tab, dark: bool) void {
     const it = c.interact(i, .{});
     c.help(i, "Actual Size   ⌘0");
     c.addA11y(i, .button, "Actual Size", "", false, true);
-    ui.text(c, c.print("{d}%", .{@as(i64, @intFromFloat(@round(t.zoom * 100)))}), .{ .size = menu.font, .color = menu.secondary(dark) });
+    ui.text(c, c.print("{d}%", .{@as(i64, @intFromFloat(@round(t.zoom * 100)))}), .{ .size = menu.font, .color = menu.secondary(dark), .tabular = true });
     c.end();
     if (it.clicked) if (active) |a| a.resetZoom();
     if (step(c, "plus", "Zoom In   ⌘+", dark)) if (active) |a| a.magnifyBy(1.1);

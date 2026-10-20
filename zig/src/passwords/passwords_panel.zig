@@ -12,6 +12,7 @@ const plate = @import("../chrome/controls_plate.zig");
 const controls = @import("../chrome/controls.zig");
 const mark = @import("../chrome/mark.zig");
 const sheet = @import("../chrome/sheet.zig");
+const disclose = @import("../chrome/disclose.zig");
 const json = @import("../data/json.zig");
 const objc = @import("nanoui").objc;
 const bp = @import("browser_passwords.zig");
@@ -82,6 +83,8 @@ pub const State = struct {
     }
 };
 
+const add_id: u64 = 0x6b65_612e_6164_6421;
+
 const Act = union(enum) { none, toggle: []const u8, show: Kept, hide, copy: Kept, forget: Kept };
 
 pub fn view(b: *Browser, c: *ui.Context, p: *const Palette) void {
@@ -96,10 +99,12 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette) void {
         if (st.adding) st.closeAdd() else st.adding = true;
     }
     ui.end(c);
-    if (st.adding) {
+    // Fades in and out (`.transition(.opacity)`), what is below settling.
+    if (disclose.begin(c, add_id, st.adding, motion.settle)) {
         plate.cardBox(c, p);
-        addForm(b, c, p);
+        addForm(b, c, p, st.adding);
         ui.end(c);
+        disclose.end(c);
     }
     const sites = bp.shownSites(b, c.alloc()) catch &.{};
     var act: Act = .none;
@@ -172,27 +177,29 @@ fn site(b: *Browser, c: *ui.Context, p: *const Palette, s: bp.SiteRow) Act {
     const h = motion.quickTo(c, it.id, 0, if (it.hovered) 1 else 0);
     c.node(i).style.background = if (open) p.wash.alpha(0.6) else p.hover.alpha(h);
     const icon = b.kea.favicons.cached(s.host);
-    const letter = if (s.host.len > 0) c.print("{c}", .{std.ascii.toUpper(s.host[0])}) else "•";
-    mark.mark(c, p, if (icon) |ic| .{ .key = ic.name, .png = ic.png } else null, letter, 16, false);
+    mark.mark(c, p, if (icon) |ic| .{ .key = ic.name, .png = ic.png } else null, mark.initial(c, s.host), 16, false);
     ui.text(c, s.host, .{ .size = 13, .color = p.ink, .truncate = true });
     if (s.logins.len > 1) {
         ui.text(c, c.print("{d} accounts", .{s.logins.len}), .{ .size = 11.5, .color = p.muted });
     } else if (s.logins.len == 1 and s.logins[0].user.len > 0 and !open) {
-        ui.text(c, s.logins[0].user, .{ .size = 11.5, .color = p.muted, .truncate = true });
+        ui.text(c, s.logins[0].user, .{ .size = 11.5, .color = p.muted, .truncate_middle = true });
     }
     ui.spacer(c);
     _ = c.leaf(.{ .min_width = 8, .width = .{ .px = 8 } }, .none, null);
-    ui.icon(c, if (open) "chevron.down" else "chevron.right", .{ .size = 9, .weight = .semibold, .color = p.muted });
+    // A quarter turn as it opens, on the panel's `settle`.
+    const turn = motion.settleTo(c, it.id, 1, if (open) 1 else 0);
+    ui.icon(c, "chevron.right", .{ .size = 9, .weight = .semibold, .color = p.muted, .rotation = turn * std.math.pi / 2.0 });
     c.end();
     if (it.clicked) act = .{ .toggle = s.host };
-    if (open) {
+    if (disclose.begin(c, it.id +% 1, open, motion.settle)) {
         ui.column(c, .{ .width = .fill, .padding = .{ .left = 30, .right = 6, .top = 4, .bottom = 4 } });
         for (s.logins) |k| {
             ui.key(c, k.user);
             const a = account(b, c, p, k);
-            if (a != .none) act = a;
+            if (a != .none and open) act = a;
         }
         ui.end(c);
+        disclose.end(c);
     }
     return act;
 }
@@ -209,13 +216,16 @@ fn account(b: *Browser, c: *ui.Context, p: *const Palette, k: Kept) Act {
     c.addA11y(i, .row, name, k.host, false, true);
     c.node(i).style.background = p.hover.alpha(motion.quickTo(c, it.id, 0, if (it.hovered) 1 else 0));
     ui.column(c, .{ .min_width = 120 });
-    ui.text(c, name, .{ .size = 12, .color = if (k.user.len == 0) p.faint else p.ink, .truncate = true });
+    ui.text(c, name, .{ .size = 12, .color = if (k.user.len == 0) p.faint else p.ink, .truncate_middle = true });
     ui.end(c);
     // Ten dots whatever it is: a count that changed with it told anyone
     // looking over a shoulder how long it was.
-    if (shown) |secret|
-        ui.text(c, secret, .{ .size = 12.5, .mono = true, .color = p.ink, .truncate = true })
-    else
+    if (shown) |secret| {
+        // Selectable, to be copied a piece at a time (`.textSelection(.enabled)`).
+        ui.column(c, .{ .selectable = true, .min_width = 0 });
+        ui.text(c, secret, .{ .size = 12.5, .mono = true, .color = p.ink, .truncate = true });
+        ui.end(c);
+    } else
         ui.text(c, "••••••••••", .{ .size = 10, .mono = true, .color = p.muted });
     ui.spacer(c);
     _ = c.leaf(.{ .min_width = 8, .width = .{ .px = 8 } }, .none, null);
@@ -309,13 +319,14 @@ fn wipe(gpa: std.mem.Allocator, secret: []u8) void {
 // MARK: typing one in
 
 /// `AddForm`: the site, the name, the password, and Save.
-fn addForm(b: *Browser, c: *ui.Context, p: *const Palette) void {
+/// A form still fading out (`live` false) neither takes focus nor saves.
+fn addForm(b: *Browser, c: *ui.Context, p: *const Palette, live: bool) void {
     const st = &b.passwords.panel;
     ui.column(c, .{ .width = .fill, .gap = 8, .padding = .all(14) });
     defer ui.end(c);
     ui.row(c, .{ .width = .fill, .gap = 8 });
-    _ = field(c, p, &st.site, "Site", false, !st.add_focused);
-    st.add_focused = true;
+    _ = field(c, p, &st.site, "Site", false, live and !st.add_focused);
+    if (live) st.add_focused = true;
     _ = field(c, p, &st.user, "Username", false, false);
     ui.end(c);
     ui.row(c, .{ .width = .fill, .gap = 8, .align_items = .center });
@@ -326,7 +337,7 @@ fn addForm(b: *Browser, c: *ui.Context, p: *const Palette) void {
     const saved = controls.pill(c, p, "Save", .{ .filled = true }).clicked;
     ui.end(c);
     ui.end(c);
-    if ((saved or submitted) and ready) {
+    if ((saved or submitted) and ready and live) {
         bp.keepTyped(b, host, std.mem.trim(u8, st.user.text(), " "), st.password.text());
         st.closeAdd();
     }
@@ -335,10 +346,12 @@ fn addForm(b: *Browser, c: *ui.Context, p: *const Palette) void {
 fn field(c: *ui.Context, p: *const Palette, buf: *ui.TextBuffer, name: []const u8, secret: bool, focus: bool) ui.TextFieldResult {
     ui.column(c, .{ .grow = 1, .padding = .xy(10, 7), .radius = 9, .background = p.wash });
     defer ui.end(c);
+    if (focus) ui.focusNext(c, false);
+    const r = ui.textField(c, buf, .{ .bare = true, .size = 12.5, .width = .fill, .password = secret });
+    // After the field, so the field's id stays put as the first key lands.
     if (buf.text().len == 0)
         _ = c.leaf(.{ .absolute = true, .offset = .{ .x = 10, .y = 9 } }, .{ .text = .{ .str = name, .style = .{ .size = 12.5 }, .color = p.ink.alpha(0.3) } }, null);
-    if (focus) ui.focusNext(c, false);
-    return ui.textField(c, buf, .{ .bare = true, .size = 12.5, .width = .fill, .password = secret });
+    return r;
 }
 
 // MARK: the foot

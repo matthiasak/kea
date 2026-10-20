@@ -108,3 +108,19 @@ pub fn tabular(base: cf.CTFontRef) cf.CTFontRef {
     // Size 0 and no matrix: the font's own (an italic's slant kept).
     return CTFontCreateCopyWithAttributes(base, 0, null, desc) orelse @ptrCast(cf.CFRetain(base));
 }
+
+extern "c" const NSFontDescriptorSystemDesignRounded: objc.Object;
+
+/// `base` in the system's rounded design (SF Rounded), released; `base`
+/// itself where the face has none (a named family).
+pub fn rounded(base: cf.CTFontRef) cf.CTFontRef {
+    const pool = objc.Pool.push();
+    defer pool.pop();
+    const font: objc.Object = @ptrCast(base);
+    const desc = objc.msg(objc.Object, font, "fontDescriptor", .{});
+    const round = objc.msg(?objc.Object, desc, "fontDescriptorWithDesign:", .{NSFontDescriptorSystemDesignRounded}) orelse return base;
+    // Size 0: the descriptor's own.
+    const made = objc.msg(?objc.Object, objc.class("NSFont"), "fontWithDescriptor:size:", .{ round, @as(f64, 0) }) orelse return base;
+    cf.CFRelease(base);
+    return @ptrCast(objc.retain(made));
+}

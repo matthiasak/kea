@@ -12,7 +12,6 @@ const Palette = @import("../design/palette.zig").Palette;
 const controls = @import("../chrome/controls.zig");
 const plate = @import("../chrome/controls_plate.zig");
 const frame = @import("../chrome/settings/frame.zig");
-const appkit = @import("../sys/appkit.zig");
 const sync_mod = @import("sync.zig");
 const Sync = sync_mod.Sync;
 const Place = sync_mod.Place;
@@ -172,36 +171,18 @@ fn applyPassphrase(b: *Browser, s: *State, sync: *Sync) void {
     if (said) |err| b.announce(err);
 }
 
-/// `choose`: a folder, in iCloud Drive when there is one, as a sheet on the
-/// key window after this frame. Never in a test run.
+/// `choose`: a folder, in iCloud Drive when there is one, asked modally
+/// (`runModal`) after this frame. Never in a test run.
 fn choose(b: *Browser) void {
     if (b.kea.opts.root != null or b.window == null) return;
     objc.dispatchMain(b.kea, chooseLater);
 }
 
-const Choosing = struct {
-    kea: *Kea,
-    panel: objc.Object,
-
-    fn done(self: *Choosing, response: objc.NSInteger) void {
-        defer {
-            objc.release(self.panel);
-            std.heap.c_allocator.destroy(self);
-        }
-        const pool = objc.Pool.push();
-        defer pool.pop();
-        // NSModalResponseOK
-        if (response != 1) return;
-        const url = objc.msg(?objc.Object, self.panel, "URL", .{}) orelse return;
-        self.kea.sync.chooseFolder(objc.fromNSString(objc.msg(objc.Object, url, "path", .{})));
-    }
-};
-
 fn chooseLater(ctx: ?*anyopaque) callconv(.c) void {
     const kea: *Kea = @ptrCast(@alignCast(ctx.?));
     const pool = objc.Pool.push();
     defer pool.pop();
-    const panel = objc.retain(objc.msg(objc.Object, objc.class("NSOpenPanel"), "openPanel", .{}));
+    const panel = objc.msg(objc.Object, objc.class("NSOpenPanel"), "openPanel", .{});
     objc.msg(void, panel, "setCanChooseDirectories:", .{objc.YES});
     objc.msg(void, panel, "setCanChooseFiles:", .{objc.NO});
     objc.msg(void, panel, "setCanCreateDirectories:", .{objc.YES});
@@ -212,10 +193,10 @@ fn chooseLater(ctx: ?*anyopaque) callconv(.c) void {
     const there = objc.msg(objc.BOOL, fm, "fileExistsAtPath:isDirectory:", .{ icloud, &is_dir }) and is_dir;
     objc.msg(void, panel, "setDirectoryURL:", .{objc.msg(objc.Object, objc.class("NSURL"), "fileURLWithPath:", .{if (there) icloud else home})});
     objc.msg(void, panel, "setPrompt:", .{objc.nsString("Sync here")});
-    const ctx_ = std.heap.c_allocator.create(Choosing) catch return objc.release(panel);
-    ctx_.* = .{ .kea = kea, .panel = panel };
-    const app = objc.msg(objc.Object, objc.class("NSApplication"), "sharedApplication", .{});
-    appkit.beginSheet(panel, objc.msg(?objc.Object, app, "keyWindow", .{}), ctx_, Choosing.done);
+    // NSModalResponseOK
+    if (objc.msg(objc.NSInteger, panel, "runModal", .{}) != 1) return;
+    const url = objc.msg(?objc.Object, panel, "URL", .{}) orelse return;
+    kea.sync.chooseFolder(objc.fromNSString(objc.msg(objc.Object, url, "path", .{})));
 }
 
 extern "c" fn NSHomeDirectory() objc.Object;

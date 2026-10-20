@@ -174,3 +174,35 @@ test "Welcome's bring page offers the browsers found" {
     try t.expect(f.tester.hasText("Folders and all, behind the bookmark button"));
     try t.expect(control(&f, .button, "Bring them in") != null);
 }
+
+extern const kCFRunLoopDefaultMode: *const anyopaque;
+extern fn CFRunLoopRunInMode(mode: *const anyopaque, seconds: f64, return_after_source: u8) i32;
+
+test "a file's history goes in 200 places a turn, as Swift's yields" {
+    var f: Fixture = undefined;
+    try f.init(gpa, .{});
+    defer f.deinit();
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var body: std.ArrayList(u8) = .empty;
+    try body.appendSlice(a, "{\"metadata\":{\"data_type\":\"history\"},\"history\":[");
+    for (0..450) |n| {
+        if (n > 0) try body.append(a, ',');
+        try body.print(a, "{{\"url\":\"https://e{d}.example/\",\"title\":\"Page {d}\",\"time_usec\":1700000000000000,\"visits_count\":1}}", .{ n, n });
+    }
+    try body.appendSlice(a, "]}");
+    const path = try std.fs.path.join(a, &.{ f.temp.root, "History.json" });
+    try writeFile(path, body.items);
+    try t.expect(app.browser_import.takeFile(f.browser, path));
+    // One run-loop source at a time: each turn takes one batch.
+    var seen: std.ArrayList(usize) = .empty;
+    var turns: usize = 0;
+    while (f.browser.importing.file) |job| : (turns += 1) {
+        if (turns > 4000) return error.Timeout;
+        if (job.places > 0 and (seen.items.len == 0 or seen.items[seen.items.len - 1] != job.places)) try seen.append(a, job.places);
+        _ = CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.05, 1);
+    }
+    try t.expectEqualSlices(usize, &.{ 200, 400 }, seen.items);
+    try t.expectEqual(@as(usize, 450), f.kea.history.visits.count());
+}

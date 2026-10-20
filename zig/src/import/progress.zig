@@ -20,7 +20,7 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette) void {
     defer c.end();
     _ = c.interact(box, .{});
     c.addA11y(box, .group, c.print("Importing {s}, {s}", .{ job.filename, job.message }), "", false, true);
-    ui.text(c, job.filename, .{ .size = 13, .weight = .medium, .color = p.ink, .truncate = true });
+    ui.text(c, job.filename, .{ .size = 13, .weight = .medium, .color = p.ink, .truncate_middle = true });
     ui.text(c, job.message, .{ .size = 12, .color = p.muted, .truncate = true });
     const fraction: ?f32 = if (job.total) |t| if (t > 0) @min(1, @as(f32, @floatFromInt(job.completed)) / @as(f32, @floatFromInt(t))) else null else null;
     _ = c.open(.{ .width = .fill, .height = .{ .px = 3 }, .radius = 1.5, .background = p.hairline }, null);

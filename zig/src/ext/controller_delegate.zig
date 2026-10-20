@@ -263,8 +263,7 @@ fn connect(d: objc.Object, _: Sel, _: C, port: objc.Object, context: C, h: H) ca
     // The port a worker's shim opens only to find what ports share.
     if (std.mem.eql(u8, app, application)) return done.ok();
     if (!asksForNative(self, context)) return done.fail(native.permission_refused);
-    native.connect(port, idOf(context)) catch |e| return done.fail(native.refused(e));
-    done.ok();
+    native.connect(port, idOf(context), done);
 }
 
 fn asksForNative(self: *Extensions, context: C) bool {

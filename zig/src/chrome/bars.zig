@@ -50,6 +50,12 @@ pub fn announceFile(b: *Browser, msg: []const u8, file: ?[]const u8) void {
     b.redraw();
 }
 
+/// The window going: its announcement and the bars it kept.
+pub fn release(b: *Browser) void {
+    hush(b);
+    b.bars.deinit(b.gpa);
+}
+
 /// The announcement gone, and its file.
 pub fn hush(b: *Browser) void {
     if (b.announcement) |old| b.gpa.free(old);
@@ -67,10 +73,86 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette) void {
     if (b.announcement) |text| {
         if (presence.presence(c, id_said, live, motion.settle, null)) |t| announcement(b, c, p, text, t) else b.hush();
     }
-    if (b.asking) |asking| if (presence.presence(c, id_ask, true, motion.settle, null)) |t| captureAsking(b, c, p, asking, t);
-    if (b.passwords.offering) |offer| if (presence.presence(c, id_keep, true, motion.settle, null)) |t| keepAsking(b, c, p, offer, t);
-    if (ext_ui.offered(b)) |id| if (presence.presence(c, id_store, true, motion.settle, null)) |t| ext_ui.storeOffer(b, c, p, id, t);
+    // A question answered (or its tab gone) leaves as it was last drawn.
+    if (presence.presence(c, id_ask, b.asking != null, motion.settle, null)) |t| {
+        if (b.asking) |asking| captureAsking(b, c, p, asking, t) else _ = question(c, p, b.bars.ask, t, false);
+    } else b.bars.ask.forget(b.gpa);
+    if (presence.presence(c, id_keep, b.passwords.offering != null, motion.settle, null)) |t| {
+        if (b.passwords.offering) |offer| keepAsking(b, c, p, offer, t) else _ = question(c, p, b.bars.keep, t, false);
+    } else b.bars.keep.forget(b.gpa);
+    // Swift changes what the store bar watches outside any animation, so it
+    // comes and goes at once (its transition never plays).
+    if (ext_ui.offered(b)) |id| ext_ui.storeOffer(b, c, p, id, 1);
     if (presence.presence(c, id_veil, b.veiling, motion.settle, null)) |t| hint(c, p, veil_hint, t);
+}
+
+/// A question bar as drawn: what it says and its answers, the first on ink.
+pub const Question = struct {
+    key: []const u8 = "",
+    icon: ?[]const u8 = null,
+    said: []const u8 = "",
+    /// `keepAsking`'s line is cut to fit; the camera's is not.
+    cut: bool = false,
+    shadow_alpha: f32 = 0.12,
+    right: f32 = 10,
+    yes: []const u8 = "",
+    yes_key: []const u8 = "",
+    /// The plain answers after it, each in ink or muted.
+    rest: [2]?Plain = .{ null, null },
+
+    pub const Plain = struct { label: []const u8, ink: bool };
+
+    /// Kept after its question is gone, `said` owned on gpa; the labels
+    /// and keys are constants.
+    fn keep(q: *Question, gpa: std.mem.Allocator, now: Question) void {
+        if (std.mem.eql(u8, q.said, now.said) and std.mem.eql(u8, q.yes, now.yes)) return;
+        const said = gpa.dupe(u8, now.said) catch return;
+        q.forget(gpa);
+        q.* = now;
+        q.said = said;
+    }
+
+    pub fn forget(q: *Question, gpa: std.mem.Allocator) void {
+        if (q.said.len > 0) gpa.free(q.said);
+        q.* = .{};
+    }
+};
+
+/// The bars kept for leaving (`Browser.bars`).
+pub const State = struct {
+    ask: Question = .{},
+    keep: Question = .{},
+
+    pub fn deinit(s: *State, gpa: std.mem.Allocator) void {
+        s.ask.forget(gpa);
+        s.keep.forget(gpa);
+    }
+};
+
+/// Draws `q`; live, which answer was pressed (0 the one on ink), else a
+/// picture that takes no clicks.
+fn question(c: *ui.Context, p: *const Palette, q: Question, t: f32, live: bool) ?usize {
+    var s = capsule(p, q.shadow_alpha, 20, 6);
+    s.gap = 12;
+    s.padding = .{ .left = 16, .right = q.right, .top = 9, .bottom = 9 };
+    const r = arriving(t);
+    s.offset = r.offset;
+    s.opacity = r.opacity;
+    const i = c.open(s, q.key);
+    defer c.end();
+    if (live) _ = c.interact(i, .{});
+    if (q.icon) |icon| ui.icon(c, icon, .{ .size = 11, .weight = .medium, .color = p.muted });
+    ui.text(c, q.said, .{ .size = 12.5, .color = p.ink, .truncate = q.cut });
+    const yes = c.open(.{ .padding = .xy(11, 5), .radius = controls.capsule, .background = p.ink, .control = true }, q.yes_key);
+    const pressed = live and c.interact(yes, .{}).clicked;
+    if (live) c.addA11y(yes, .button, q.yes, "", false, true);
+    ui.text(c, q.yes, .{ .size = 12, .color = p.ground });
+    c.end();
+    var answer: ?usize = if (pressed) 0 else null;
+    for (q.rest, 1..) |maybe, n| if (maybe) |o| {
+        if (plain(c, o.label, if (o.ink) p.ink else p.muted, live) and answer == null) answer = n;
+    };
+    return answer;
 }
 
 fn arriving(t: f32) ui.Style {
@@ -108,71 +190,58 @@ fn announcement(b: *Browser, c: *ui.Context, p: *const Palette, text: []const u8
 fn captureAsking(b: *Browser, c: *ui.Context, p: *const Palette, asking: dialogs.Asking, t: f32) void {
     const a = asking.ask;
     const wants = a.message;
-    var s = capsule(p, 0.12, 20, 6);
-    s.gap = 12;
-    s.padding = .{ .left = 16, .right = 10, .top = 9, .bottom = 9 };
-    const r = arriving(t);
-    s.offset = r.offset;
-    s.opacity = r.opacity;
-    const i = c.open(s, "kea.capture-ask");
-    defer c.end();
-    _ = c.interact(i, .{});
     const eql = std.mem.eql;
-    const icon = if (eql(u8, wants, "location")) "location" else if (eql(u8, wants, "microphone")) "mic" else if (eql(u8, wants, "notifications")) "bell" else "video";
-    ui.icon(c, icon, .{ .size = 11, .weight = .medium, .color = p.muted });
-    const said = if (eql(u8, wants, "location"))
-        c.print("{s} wants to know your location", .{a.host})
-    else if (eql(u8, wants, "notifications"))
-        c.print("{s} wants to send you notifications", .{a.host})
-    else
-        c.print("{s} wants to use your {s}", .{ a.host, wants });
-    ui.text(c, said, .{ .size = 12.5, .color = p.ink });
-    // Allow, on ink: the thing asked for.
-    const allow = c.open(.{ .padding = .xy(11, 5), .radius = controls.capsule, .background = p.ink, .control = true }, "kea.capture-allow");
-    const allow_it = c.interact(allow, .{});
     // Read before any answer: answering frees the question.
     const once = asking.once();
     const keeps = asking.keeps();
-    const allow_label = if (once) "Allow once" else "Allow";
-    c.addA11y(allow, .button, allow_label, "", false, true);
-    ui.text(c, allow_label, .{ .size = 12, .color = p.ground });
-    c.end();
-    const always = once and keeps and plain(c, "Always allow", p.ink);
-    const deny = plain(c, "Don't allow", p.muted);
-    if (allow_it.clicked) dialogs.answerBar(b, true, !once) else if (always) dialogs.answerBar(b, true, true) else if (deny) dialogs.answerBar(b, false, true);
+    const q: Question = .{
+        .key = "kea.capture-ask",
+        .icon = if (eql(u8, wants, "location")) "location" else if (eql(u8, wants, "microphone")) "mic" else if (eql(u8, wants, "notifications")) "bell" else "video",
+        .said = if (eql(u8, wants, "location"))
+            c.print("{s} wants to know your location", .{a.host})
+        else if (eql(u8, wants, "notifications"))
+            c.print("{s} wants to send you notifications", .{a.host})
+        else
+            c.print("{s} wants to use your {s}", .{ a.host, wants }),
+        .yes = if (once) "Allow once" else "Allow",
+        .yes_key = "kea.capture-allow",
+        .rest = .{ if (once and keeps) .{ .label = "Always allow", .ink = true } else null, .{ .label = "Don't allow", .ink = false } },
+    };
+    b.bars.ask.keep(b.gpa, q);
+    const answer = question(c, p, q, t, true) orelse return;
+    switch (answer) {
+        0 => dialogs.answerBar(b, true, !once),
+        1 => dialogs.answerBar(b, true, true),
+        else => dialogs.answerBar(b, false, true),
+    }
 }
 
 /// `keepAsking`: offered once, answered once. The password is never shown
 /// back to you.
 fn keepAsking(b: *Browser, c: *ui.Context, p: *const Palette, offer: @import("../passwords/forms.zig").Offer, t: f32) void {
     const login = offer.login;
-    var s = capsule(p, 0.12, 20, 6);
-    s.gap = 12;
-    s.padding = .{ .left = 16, .right = 12, .top = 9, .bottom = 9 };
-    const r = arriving(t);
-    s.offset = r.offset;
-    s.opacity = r.opacity;
-    const i = c.open(s, "kea.keep-asking");
-    defer c.end();
-    _ = c.interact(i, .{});
-    const said = if (offer.changed)
-        c.print("Update the password for {s} on {s}?", .{ login.user, login.host })
-    else if (login.user.len == 0)
-        c.print("Save this password for {s}?", .{login.host})
-    else
-        c.print("Save the password for {s} on {s}?", .{ login.user, login.host });
-    ui.text(c, said, .{ .size = 12.5, .color = p.ink, .truncate = true });
-    const keep_label = if (offer.changed) "Update" else "Save";
-    const keep = c.open(.{ .padding = .xy(11, 5), .radius = controls.capsule, .background = p.ink, .control = true }, "kea.keep-save");
-    const keep_it = c.interact(keep, .{});
-    c.addA11y(keep, .button, keep_label, "", false, true);
-    ui.text(c, keep_label, .{ .size = 12, .color = p.ground });
-    c.end();
-    const later = plain(c, "Not now", p.muted);
-    const never = !offer.changed and plain(c, "Never here", p.muted);
+    const q: Question = .{
+        .key = "kea.keep-asking",
+        .said = if (offer.changed)
+            c.print("Update the password for {s} on {s}?", .{ login.user, login.host })
+        else if (login.user.len == 0)
+            c.print("Save this password for {s}?", .{login.host})
+        else
+            c.print("Save the password for {s} on {s}?", .{ login.user, login.host }),
+        .cut = true,
+        .right = 12,
+        .yes = if (offer.changed) "Update" else "Save",
+        .yes_key = "kea.keep-save",
+        .rest = .{ .{ .label = "Not now", .ink = false }, if (!offer.changed) .{ .label = "Never here", .ink = false } else null },
+    };
+    b.bars.keep.keep(b.gpa, q);
     // Answered last: each answer frees the offer drawn above.
     const keeping = @import("../passwords/browser_passwords.zig");
-    if (keep_it.clicked) keeping.keepOffer(b) else if (later) keeping.dropOffer(b) else if (never) keeping.neverOffer(b);
+    switch (question(c, p, q, t, true) orelse return) {
+        0 => keeping.keepOffer(b),
+        1 => keeping.dropOffer(b),
+        else => keeping.neverOffer(b),
+    }
 }
 
 fn knockout(s: ui.Shadow) ui.Shadow {
@@ -181,14 +250,14 @@ fn knockout(s: ui.Shadow) ui.Shadow {
     return k;
 }
 
-/// A plain text button; true when pressed.
-fn plain(c: *ui.Context, label: []const u8, color: ui.Color) bool {
+/// A plain text button; true when pressed (live).
+fn plain(c: *ui.Context, label: []const u8, color: ui.Color, live: bool) bool {
     const i = c.open(.{ .control = true }, null);
     defer c.end();
-    const it = c.interact(i, .{});
-    c.addA11y(i, .button, label, "", false, true);
     ui.text(c, label, .{ .size = 12, .color = color });
-    return it.clicked;
+    if (!live) return false;
+    c.addA11y(i, .button, label, "", false, true);
+    return c.interact(i, .{}).clicked;
 }
 
 /// `hint`: a dark pill that says how a mode works.

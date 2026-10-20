@@ -19,6 +19,7 @@ const lights = @import("lights.zig");
 const tab_width = @import("tab_width.zig");
 const tab_pill = @import("tab_pill.zig");
 const tab_drag = @import("tab_drag.zig");
+const tab_leaving = @import("tab_leaving.zig");
 const split_tab_item = @import("split_tab_item.zig");
 const split_drop = @import("split_drop.zig");
 const tab_menu = @import("tab_menu.zig");
@@ -36,8 +37,17 @@ const px = struct {
 pub const Strip = struct {
     /// Every pill drawn last frame, where it was in the run.
     seen: std.ArrayList(Seen) = .empty,
-    /// Pills gone from the row, fading where they stood.
-    leaving: std.ArrayList(Seen) = .empty,
+    /// The frame before's `seen`, swapped back each frame for its capacity:
+    /// an idle strip allocates nothing.
+    last: std.ArrayList(Seen) = .empty,
+    /// Pills gone from the row, shrinking and fading where they stood, and
+    /// what each pill in the row shows, for when it goes (tab_leaving.zig).
+    leaving: std.ArrayList(tab_leaving.Leaving) = .empty,
+    snaps: std.AutoHashMapUnmanaged(u64, tab_leaving.Snap) = .empty,
+    /// The tab whose address was typed into last frame, and until when the
+    /// row moves on Motion.glide for its change (`value: editingTab`).
+    editing: ?u64 = null,
+    glide_until: f64 = 0,
     /// The strip has drawn once: what is there then plays no transition.
     drawn: bool = false,
     /// The space whose row was drawn last.
@@ -62,7 +72,8 @@ pub const Strip = struct {
 
     pub fn deinit(s: *Strip, gpa: std.mem.Allocator) void {
         s.seen.deinit(gpa);
-        s.leaving.deinit(gpa);
+        s.last.deinit(gpa);
+        tab_leaving.deinit(s, gpa);
     }
 };
 
@@ -94,7 +105,7 @@ const Item = union(enum) {
     heading: *TabGroup,
 };
 
-fn pillId(id: u64) u64 {
+pub fn pillId(id: u64) u64 {
     return std.hash.Wyhash.hash(0x7069_6c6c, std.mem.asBytes(&id));
 }
 
@@ -255,10 +266,15 @@ fn drawRun(b: *Browser, c: *ui.Context, p: *const Palette, list: []const Item, e
     const live_fill = c.leaf(.{ .height = .fill }, .none, null);
     c.end();
 
-    var last: std.ArrayList(Seen) = .empty;
-    std.mem.swap(std.ArrayList(Seen), &last, &st.seen);
-    defer last.deinit(b.gpa);
+    std.mem.swap(std.ArrayList(Seen), &st.last, &st.seen);
     st.seen.clearRetainingCapacity();
+    const last = &st.last;
+    // An address typed into a tab, or done with: the row glides to it.
+    if (st.editing != b.editing_tab) {
+        st.editing = b.editing_tab;
+        st.glide_until = c.time + 1;
+    }
+    const spring = if (c.time < st.glide_until) motion.glide else motion.settle;
     // A row put in wholesale (the window's first frame, another space)
     // arrives as it is, as SwiftUI's first render plays no transition.
     const fresh = !st.drawn or !st.space.eql(b.space_id);
@@ -282,10 +298,11 @@ fn drawRun(b: *Browser, c: *ui.Context, p: *const Palette, list: []const Item, e
             },
             .tab => |ti| {
                 const t = ti.tab;
+                tab_leaving.keep(b, t);
                 const pid = pillId(t.id);
                 const w = split_tab_item.stripSpan(b, t, each);
-                const shown_w = motion.settleTo(c, pid, 1, w);
-                const x = motion.settleTo(c, pid, 0, target_x);
+                const shown_w = ui.spring(c, pid, 1, w, spring);
+                const x = ui.spring(c, pid, 0, target_x, spring);
                 const known = for (last.items) |s| {
                     if (s.id == t.id) break true;
                 } else false;
@@ -339,7 +356,7 @@ fn drawRun(b: *Browser, c: *ui.Context, p: *const Palette, list: []const Item, e
     }
 
     if (live_rect) |lr| liveGround(b, c, p, live_box, live_fill, lr, live_tab.?, each);
-    if (fresh) st.leaving.clearRetainingCapacity() else leaving(b, c, p, last.items, each);
+    if (fresh) tab_leaving.clear(b) else tab_leaving.leave(b, c, p, last.items, each);
     if (held) |h| {
         // Over its neighbours, on the drop chip; the live one keeps its grey.
         const live = h.tab.id == b.active_id;
@@ -374,33 +391,6 @@ fn liveGround(b: *Browser, c: *ui.Context, p: *const Palette, box: u32, fill: u3
     const f = &c.node(fill).style;
     f.width = px(w * read);
     f.background = p.ink.alpha(0.055);
-}
-
-/// Pills gone since last frame fade and shrink where they stood. Only a
-/// closed tab's title is still known (its ghost); a tab moved elsewhere
-/// simply goes.
-fn leaving(b: *Browser, c: *ui.Context, p: *const Palette, last: []const Seen, each: f32) void {
-    const st = &b.strip;
-    for (last) |s| {
-        const still = for (st.seen.items) |n| {
-            if (n.id == s.id) break true;
-        } else false;
-        if (!still) st.leaving.append(b.gpa, s) catch {};
-    }
-    var k: usize = 0;
-    for (st.leaving.items) |s| {
-        const v = presence.presence(c, pillId(s.id), false, motion.settle, null) orelse continue;
-        const ghost = for (b.ghosts.items) |g| {
-            if (g.was == s.id) break g;
-        } else continue;
-        st.leaving.items[k] = s;
-        k += 1;
-        const o = std.math.clamp(v, 0, 1);
-        _ = c.open(.{ .absolute = true, .offset = .{ .x = s.x, .y = (metrics.strip - 28) / 2 }, .width = px(s.w), .height = px(28), .padding = .{ .left = 11, .right = 7 }, .align_items = .center, .opacity = o, .scale = 0.9 + 0.1 * o, .scale_anchor = .{ .x = 0, .y = 0.5 } }, null);
-        if (!s.pin and tab_width.titled(each)) ui.text(c, ghost.title, .{ .size = 12.5, .color = p.muted, .truncate = true });
-        c.end();
-    }
-    st.leaving.shrinkRetainingCapacity(k);
 }
 
 /// A carried tab let go: over a group heading it joins that group.

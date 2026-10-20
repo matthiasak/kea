@@ -338,6 +338,8 @@ fn openWindow(_: objc.Object, _: objc.SEL, store: objc.Object, url: objc.Object,
     var pick: ?*@import("../model/browser.zig").Browser = null;
     var last_open: @TypeOf(pick) = null;
     for (kea.browsers.items) |b| {
+        // Never an extension's popup window (Notifications.swift:130).
+        if (b.ext.popup != null) continue;
         if ((kea.dataStore(b.space_id) orelse default) != store) continue;
         if (pick == null) pick = b;
         if (!b.shut) last_open = b;
@@ -496,7 +498,7 @@ fn bringForward(site: []const u8, from: ?objc.Object) void {
     const kea = kea_now orelse return;
     var first: ?*Tab = null;
     var best: ?*Tab = null;
-    for (kea.browsers.items) |b| for (b.tabs.items) |t| {
+    for (kea.browsers.items) |b| if (b.ext.popup == null) for (b.tabs.items) |t| {
         if (t.shy) continue;
         var buf: [400]u8 = undefined;
         if (!std.mem.eql(u8, originOf(&buf, t.address orelse continue), site)) continue;

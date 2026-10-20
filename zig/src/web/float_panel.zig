@@ -314,6 +314,12 @@ fn view(p: *Panel, c: *ui.Context) void {
     // Everything reaches this layer: the page under it never sees a press.
     const it = c.interact(root, .{});
     c.cursor_hand = false;
+    c.hand_cursor = false;
+    // The stretch corner's cursor rect (Float.swift `resetCursorRects`):
+    // followed move by move while the pointer is over the panel.
+    c.wants_moves = it.hovered;
+    const m = c.input.mouse;
+    if (it.hovered and m.x > c.size.w - 22 and m.y > c.size.h - 22) c.cursor = .crosshair;
     if (it.hovered != p.near) {
         p.near = it.hovered;
         fadeScrim(p, if (p.near) 1 else 0);

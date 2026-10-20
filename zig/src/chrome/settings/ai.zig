@@ -8,6 +8,7 @@ const ui = nanoui.ui;
 const MenuItem = nanoui.MenuItem;
 const Browser = @import("../../model/browser.zig").Browser;
 const Kea = @import("../../app/kea.zig").Kea;
+const app_name = @import("../../app/kea.zig").app_name;
 const Uuid = @import("../../data/json.zig").Uuid;
 const Palette = @import("../../design/palette.zig").Palette;
 const ai = @import("../../ai/ai.zig");
@@ -88,7 +89,7 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette) void {
         defer ui.end(c);
         const chosen = m.chosen();
         plate.line(c, p, "Where it runs", place(c, m, chosen));
-        if (picker(c, p, "Where it runs", if (chosen) |v| v.label(c.alloc()) catch v.name else "Choose…")) |at| tab_menu.later(b, at, 0, providerItems);
+        if (controls.popUpButton(c, p, "Where it runs", if (chosen) |v| v.label(c.alloc()) catch v.name else "Choose…")) |at| tab_menu.later(b, at, 0, providerItems);
         ui.end(c);
         if (chosen) |provider| {
             frame.rule(c, p);
@@ -152,7 +153,7 @@ fn key(b: *Browser, c: *ui.Context, p: *const Palette, provider: ai.Provider) vo
     const s = &b.settings.ai;
     const m = b.kea.ai;
     {
-        plate.line(c, p, "Key from", "Where Kea finds it when you ask");
+        plate.line(c, p, "Key from", "Where " ++ app_name ++ " finds it when you ask");
         defer ui.end(c);
         var n: usize = @intFromEnum(s.kind);
         if (controls.segmented(c, p, &.{ "Keychain", "Variable", "Command" }, &n, false)) s.kind = @enumFromInt(n);
@@ -264,33 +265,20 @@ fn localModel(b: *Browser, c: *ui.Context, p: *const Palette, provider: ai.Provi
         const from = if (custom) c.print("From {s}", .{b.kea.ai.host(c.alloc(), provider) catch ""}) else c.print("From {s} on this Mac", .{provider.name});
         plate.line(c, p, "Model", from);
         const chosen = b.prefs.aiModel(provider.id, provider.suggested);
-        if (picker(c, p, "Model", if (chosen.len == 0) "Choose…" else chosen)) |at| tab_menu.later(b, at, 0, localItems);
+        if (controls.popUpButton(c, p, "Model", if (chosen.len == 0) "Choose…" else chosen)) |at| tab_menu.later(b, at, 0, localItems);
     }
     ui.end(c);
-}
-
-/// A `.menu` picker (as General's "Search with"): its title and the
-/// up-down chevrons; where its menu goes when pressed.
-fn picker(c: *ui.Context, p: *const Palette, label: []const u8, title: []const u8) ?ui.Point {
-    const i = c.open(.{ .direction = .row, .gap = 6, .padding = .xy(8, 3), .radius = 6, .background = p.ground, .border = p.hairline, .align_items = .center, .control = true }, null);
-    defer c.end();
-    const it = c.interact(i, .{});
-    c.addA11y(i, .menu_button, label, title, false, true);
-    if (it.hovered) c.node(i).style.background = p.hover;
-    ui.text(c, title, .{ .size = 13, .color = p.ink });
-    ui.icon(c, "chevron.up.chevron.down", .{ .size = 9, .weight = .semibold, .color = p.muted });
-    if (!it.clicked) return null;
-    const r = it.rect orelse return null;
-    return .{ .x = r.x, .y = r.y + r.h + 4 };
 }
 
 /// A text field on a wash, its prompt faint while it is empty.
 fn field(c: *ui.Context, p: *const Palette, buf: *ui.TextBuffer, prompt: []const u8, width: f32, password: bool) ui.TextFieldResult {
     ui.column(c, .{ .padding = .xy(8, 5), .radius = 7, .background = p.wash, .clip = true });
     defer ui.end(c);
+    const r = ui.textField(c, buf, .{ .bare = true, .size = 12, .width = .{ .px = width }, .password = password, .caret_color = p.ink, .selection_color = p.ink.alpha(0.12) });
+    // After the field, so the first key typed leaves its id (its focus) be.
     if (buf.text().len == 0)
         _ = c.leaf(.{ .absolute = true, .offset = .{ .x = 8, .y = 5 } }, .{ .text = .{ .str = prompt, .style = .{ .size = 12 }, .color = p.faint } }, null);
-    return ui.textField(c, buf, .{ .bare = true, .size = 12, .width = .{ .px = width }, .password = password, .caret_color = p.ink, .selection_color = p.ink.alpha(0.12) });
+    return r;
 }
 
 // MARK: menus

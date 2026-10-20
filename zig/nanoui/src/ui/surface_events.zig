@@ -173,6 +173,8 @@ fn mouseMoved(obj: objc.Object, _: objc.SEL, event: objc.Object) callconv(.c) vo
         s.ctx.cursor_text = over;
         s.updateCursor();
     }
+    // Onto or off a marker with its own tooltip, inside the same box.
+    s.refreshTip();
 }
 
 fn mouseExited(obj: objc.Object, _: objc.SEL, _: objc.Object) callconv(.c) void {

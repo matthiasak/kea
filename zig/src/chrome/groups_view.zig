@@ -73,9 +73,10 @@ pub fn groupHeading(b: *Browser, c: *ui.Context, p: *const Palette, group: *cons
     }
     if (!horizontal) ui.spacer(c);
     if (!editing and !horizontal) {
-        // nanoui can't turn a glyph: the folded group's chevron points right.
+        // Turned a quarter back while folded, as the rows settle.
+        const turn = motion.settleTo(c, it.id, 1, if (group.collapsed) -std.math.pi / 2.0 else 0);
         _ = c.open(.{ .opacity = h }, null);
-        ui.icon(c, if (group.collapsed) "chevron.right" else "chevron.down", .{ .size = 9, .weight = .medium, .color = p.muted });
+        ui.icon(c, "chevron.down", .{ .size = 9, .weight = .medium, .color = p.muted, .rotation = turn });
         c.end();
     }
 
@@ -99,9 +100,10 @@ fn nameField(b: *Browser, c: *ui.Context, p: *const Palette, group: *const TabGr
     const w: ui.Length = if (horizontal) px(@max(60, headingWidth(c, group.name) - 20)) else .fill;
     const placeholder = st.group_draft.text().len == 0;
     _ = c.open(.{ .width = w }, null);
-    if (placeholder) _ = c.leaf(.{ .absolute = true }, .{ .text = .{ .str = "Group name", .style = name_style, .color = p.faint } }, null);
     if (claim) ui.focusNext(c, false);
     const res = ui.textField(c, &st.group_draft, .{ .bare = true, .size = name_style.size, .width = .fill, .selection_color = p.ink.alpha(0.12), .caret_color = p.ink });
+    // After the field, so the first key typed leaves its id (its focus) be.
+    if (placeholder) _ = c.leaf(.{ .absolute = true }, .{ .text = .{ .str = "Group name", .style = name_style, .color = p.faint } }, null);
     c.end();
     if (res.submitted) {
         b.renameTabGroup(group.id, st.group_draft.text());
@@ -140,7 +142,6 @@ fn carry(b: *Browser, c: *ui.Context, group: *const TabGroup, it: ui.Interaction
     if (!h.moved and std.math.hypot(c.input.mouse.x - h.origin.x, c.input.mouse.y - h.origin.y) < 5) return false;
     if (!h.moved) c.changed = true;
     h.moved = true;
-    c.cursor = .closed_hand;
     return true;
 }
 

@@ -46,6 +46,7 @@ pub const ai_core = @import("ai/ai.zig");
 pub const markdown_view = @import("ai/markdown_view.zig");
 pub const dialogs = @import("web/dialogs.zig");
 pub const downloads = @import("web/downloads.zig");
+pub const image_menu = @import("web/image_menu.zig");
 pub const loot = @import("data/loot.zig");
 pub const when = @import("chrome/when.zig");
 pub const commands = @import("app/commands.zig");

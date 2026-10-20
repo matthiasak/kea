@@ -307,7 +307,13 @@ pub const Surface = struct {
             if (first == null or first.? != self.nsview) _ = objc.msg(objc.BOOL, self.window.nswindow, "makeFirstResponder:", .{self.nsview});
         }
         self.last_focus = c.focus;
-        const tip = c.hotHelp();
+        self.refreshTip();
+    }
+
+    /// Shows the help under the pointer: after a frame, and on a move
+    /// within one box onto a marker with its own.
+    pub fn refreshTip(self: *Surface) void {
+        const tip = self.ctx.hotHelp();
         const same = if (tip) |t| (if (self.tip) |old| std.mem.eql(u8, t, old) else false) else self.tip == null;
         if (same) return;
         if (self.tip) |old| self.gpa.free(old);

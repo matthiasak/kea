@@ -86,6 +86,9 @@ pub const Config = struct {
     /// AIClient's session: no cookies, cache or kept credentials, TLS 1.2 at
     /// least, and no redirect followed.
     strict: bool = false,
+    /// No cookies, cache or kept credentials, redirects still followed
+    /// (`strict` implies it).
+    keeps_nothing: bool = false,
 };
 
 /// How a task ended, other than finishing: its NSError's code, and whether
@@ -99,6 +102,8 @@ pub const Events = struct {
     ctx: *anyopaque,
     /// The answer's status: its HTTP status, 0 when it isn't HTTP.
     response: *const fn (*anyopaque, i64) void,
+    /// The answer's `expectedContentLength` (−1 unknown), with `response`.
+    length: ?*const fn (*anyopaque, i64) void = null,
     data: *const fn (*anyopaque, []const u8) void,
     /// Always last: null when it finished.
     done: *const fn (*anyopaque, ?Failure) void,
@@ -127,12 +132,14 @@ pub const Session = struct {
         const c = objc.msg(objc.Object, objc.class("NSURLSessionConfiguration"), "ephemeralSessionConfiguration", .{});
         objc.msg(void, c, "setTimeoutIntervalForRequest:", .{config.request_timeout});
         objc.msg(void, c, "setTimeoutIntervalForResource:", .{config.resource_timeout});
-        if (config.strict) {
+        if (config.strict or config.keeps_nothing) {
             const none: ?objc.Object = null;
             objc.msg(void, c, "setURLCache:", .{none});
             objc.msg(void, c, "setHTTPCookieStorage:", .{none});
             objc.msg(void, c, "setHTTPShouldSetCookies:", .{objc.NO});
             objc.msg(void, c, "setURLCredentialStorage:", .{none});
+        }
+        if (config.strict) {
             // NSURLRequestReloadIgnoringLocalAndRemoteCacheData
             objc.msg(void, c, "setRequestCachePolicy:", .{@as(objc.NSUInteger, 4)});
             // tls_protocol_version_TLSv12
@@ -233,6 +240,8 @@ fn received(self: objc.Object, _: objc.SEL, _: objc.Object, task: objc.Object, r
     if (taskFor(self, task)) |t| if (t.events) |e| {
         const http = objc.msg(objc.BOOL, response, "isKindOfClass:", .{objc.class("NSHTTPURLResponse")});
         e.response(e.ctx, if (http) objc.msg(objc.NSInteger, response, "statusCode", .{}) else 0);
+        // The response handler may have cancelled it.
+        if (t.events) |still| if (still.length) |f| f(still.ctx, objc.msg(i64, response, "expectedContentLength", .{}));
     };
     // NSURLSessionResponseAllow
     callBlock(objc.NSInteger, completion, 1);

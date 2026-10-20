@@ -48,15 +48,21 @@ test "cmd-comma opens Settings on remembered page" {
     try t.expect(!f.tester.hasText("Tabs in a sidebar"));
 }
 
-test "sheets are one at a time" {
+test "sheets stack as Swift's flags do and close in closePanel's order" {
     var f: Fixture = undefined;
     try f.init(gpa, .{});
     defer f.deinit();
     const b = f.browser;
-    app.sheet.show(b, .recalling);
     app.sheet.show(b, .tuning);
-    try t.expect(b.tuning and !b.recalling);
+    f.tester.settle(1);
+    // ⌘Y over Settings: History opens too, Settings stays.
+    app.sheet.toggle(b, .recalling);
+    f.tester.settle(1);
+    try t.expect(b.tuning and b.recalling);
+    try t.expect(f.tester.hasText("Settings"));
     try t.expectEqual(app.sheet.Kind.tuning, app.sheet.current(b).?);
+    try t.expect(app.sheet.closePanel(b));
+    try t.expect(!b.tuning and b.recalling);
     try t.expect(app.sheet.closePanel(b));
     try t.expect(app.sheet.current(b) == null);
     try t.expect(!app.sheet.closePanel(b));
@@ -162,4 +168,27 @@ test "welcome walks its pages and is seen once" {
     f.tester.settle(1);
     try t.expect(!b.welcoming and f.kea.prefs.welcomed);
     try t.expect(!f.tester.hasText("Bring things over."));
+}
+
+test "Settings fields with a placeholder keep focus past the first key" {
+    var f: Fixture = undefined;
+    try f.init(gpa, .{});
+    defer f.deinit();
+    const b = f.browser;
+    app.settings.open(b, .general);
+    f.tester.settle(1);
+    // Site shortcuts › Add: the keyword field, typed into a key at a time.
+    try clickControl(&f, .button, "Add");
+    f.tester.settle(0.5);
+    const word = f.tester.findText("yt") orelse return error.NoField;
+    f.tester.click(word.x + 4, word.y + word.h / 2);
+    for ("gh") |ch| f.tester.typeText(&.{ch});
+    try t.expectEqualStrings("gh", b.settings.general.draft.?.word.text());
+    // The custom engine's address, the same way.
+    b.prefs.set("engine", @TypeOf(b.prefs.engine).custom);
+    f.tester.settle(0.5);
+    const at = f.tester.findText("https://example.com/search?q=%s") orelse return error.NoField;
+    f.tester.click(at.x + 4, at.y + at.h / 2);
+    for ("ht") |ch| f.tester.typeText(&.{ch});
+    try t.expectEqualStrings("ht", b.prefs.custom_engine);
 }

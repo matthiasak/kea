@@ -74,7 +74,10 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette) void {
     // Coming from another browser, now or any time later: the same sheet as
     // File › Bring Things Over… and the Welcome's.
     plate.line(c, p, "Bring things over", "Bookmarks, history, passwords and extensions from another browser on this Mac, or from a file it exported");
-    if (controls.pill(c, p, "Bring Things Over…", .{}).clicked) @import("../sheet.zig").show(b, .bringing);
+    if (controls.pill(c, p, "Bring Things Over…", .{}).clicked) {
+        @import("../sheet.zig").close(b, .tuning);
+        @import("../sheet.zig").show(b, .bringing);
+    }
     ui.end(c);
     frame.rule(c, p);
 
@@ -184,15 +187,8 @@ fn searchDetail(c: *ui.Context, b: *Browser) []const u8 {
 fn searchWith(b: *Browser, c: *ui.Context, p: *const Palette) void {
     const s = &b.settings.general;
     plate.line(c, p, "Search with", searchDetail(c, b));
-    // The `.menu` picker: its title and the up-down chevrons; its menu on a press.
-    const i = c.open(.{ .direction = .row, .gap = 6, .padding = .xy(8, 3), .radius = 6, .background = p.ground, .border = p.hairline, .align_items = .center, .control = true }, null);
-    const it = c.interact(i, .{});
-    c.addA11y(i, .menu_button, "Search with", b.prefs.engine.title(), false, true);
-    if (it.hovered) c.node(i).style.background = p.hover;
-    ui.text(c, b.prefs.engine.title(), .{ .size = 13, .color = p.ink });
-    ui.icon(c, "chevron.up.chevron.down", .{ .size = 9, .weight = .semibold, .color = p.muted });
-    c.end();
-    if (it.clicked) if (it.rect) |r| tab_menu.later(b, .{ .x = r.x, .y = r.y + r.h + 4 }, 0, engines);
+    // The `.menu` picker, drawn as AppKit's pop-up button.
+    if (controls.popUpButton(c, p, "Search with", b.prefs.engine.title())) |at| tab_menu.later(b, at, 0, engines);
     ui.end(c);
     if (b.prefs.engine != .custom) {
         s.custom_shown = false;
@@ -204,10 +200,10 @@ fn searchWith(b: *Browser, c: *ui.Context, p: *const Palette) void {
     }
     ui.column(c, .{ .width = .fill, .padding = .{ .left = 14, .right = 14, .bottom = 11 } });
     ui.column(c, .{ .width = .fill, .padding = .xy(10, 7), .radius = 9, .background = p.wash });
-    if (s.custom.text().len == 0)
-        _ = c.leaf(.{ .absolute = true, .offset = .{ .x = 10, .y = 7 } }, .{ .text = .{ .str = "https://example.com/search?q=%s", .style = .{ .size = 12.5 }, .color = p.muted.alpha(0.8) } }, null);
     if (ui.textField(c, &s.custom, .{ .bare = true, .size = 12.5, .width = .fill, .caret_color = p.ink, .selection_color = p.ink.alpha(0.12) }).changed)
         b.prefs.set("custom_engine", s.custom.text());
+    if (s.custom.text().len == 0)
+        _ = c.leaf(.{ .absolute = true, .offset = .{ .x = 10, .y = 7 } }, .{ .text = .{ .str = "https://example.com/search?q=%s", .style = .{ .size = 12.5 }, .color = p.muted.alpha(0.8) } }, null);
     ui.end(c);
     ui.end(c);
 }
@@ -297,12 +293,11 @@ fn siteShortcuts(b: *Browser, c: *ui.Context, p: *const Palette) void {
         ui.column(c, .{ .width = .fill, .padding = .{ .left = 14, .right = 14, .bottom = 6 } });
         ui.row(c, .{ .gap = 8, .width = .fill, .padding = .xy(10, 7), .radius = 9, .background = p.wash, .align_items = .center });
         ui.column(c, .{ .width = .{ .px = 50 } });
-        ui.text(c, k.keyword, .{ .size = 12.5, .color = p.ink, .truncate = true });
+        ui.text(c, k.keyword, .{ .size = 12.5, .color = p.ink, .wrap = true });
         ui.end(c);
         ui.text(c, "→", .{ .size = 12.5, .color = p.muted });
         ui.column(c, .{ .grow = 1, .min_width = 0 });
-        // ponytail: cut at the end, not the middle (`truncationMode(.middle)`).
-        ui.text(c, k.template, .{ .size = 12.5, .color = p.ink, .truncate = true });
+        ui.text(c, k.template, .{ .size = 12.5, .color = p.ink, .truncate_middle = true });
         ui.end(c);
         const i = c.open(.{ .control = true }, null);
         if (c.interact(i, .{}).clicked) gone = k.id;
@@ -328,7 +323,10 @@ fn siteShortcuts(b: *Browser, c: *ui.Context, p: *const Palette) void {
 fn field(c: *ui.Context, p: *const Palette, buf: *ui.TextBuffer, placeholder: []const u8, width: ui.Length) ui.TextFieldResult {
     ui.column(c, .{ .width = width, .grow = if (width == .fill) 1 else 0 });
     defer ui.end(c);
+    const r = ui.textField(c, buf, .{ .bare = true, .size = 12.5, .width = .fill, .caret_color = p.ink, .selection_color = p.ink.alpha(0.12) });
+    // After the field: before it, the first key typed shifted the field's
+    // id and took its focus away.
     if (buf.text().len == 0)
         _ = c.leaf(.{ .absolute = true }, .{ .text = .{ .str = placeholder, .style = .{ .size = 12.5, .truncate = true }, .color = p.muted.alpha(0.7) } }, null);
-    return ui.textField(c, buf, .{ .bare = true, .size = 12.5, .width = .fill, .caret_color = p.ink, .selection_color = p.ink.alpha(0.12) });
+    return r;
 }

@@ -15,6 +15,7 @@ const when = @import("when.zig");
 const address = @import("../model/address.zig");
 const json = @import("../data/json.zig");
 const motion = @import("../design/motion.zig");
+const presence = @import("presence.zig");
 
 const px = struct {
     fn v(n: f32) ui.Length {
@@ -124,11 +125,7 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette) void {
     } else act = list(b, c, p);
     ui.end(c);
     pl.foot(c, p);
-    if (st.clearing) sweeps(b, c, p) else {
-        ui.text(c, if (st.count == 1) "1 page" else c.print("{d} pages", .{st.count}), .{ .size = 12, .color = p.muted });
-        ui.spacer(c);
-        if (controls.pill(c, p, "Clear…", .{}).clicked) st.clearing = true;
-    }
+    foot(b, c, p);
     pl.end(c);
     switch (act) {
         .none => {},
@@ -203,11 +200,11 @@ fn line(b: *Browser, c: *ui.Context, p: *const Palette, row: Row, h: f32) Act {
     c.addA11y(i, .row, row.title, row.address, false, true);
     c.node(i).style.background = p.hover.alpha(motion.quickTo(c, it.id, 0, if (it.hovered) 1 else 0));
     const icon = b.kea.favicons.icon(row.url);
-    const letter = if (row.address.len > 0) c.print("{c}", .{std.ascii.toUpper(row.address[0])}) else "•";
+    const letter = mark.initial(c, row.address);
     mark.mark(c, p, if (icon) |ic| .{ .key = ic.key, .png = ic.png } else null, letter, 16, false);
     ui.column(c, .{ .gap = 2, .grow = 1, .min_width = 0 });
     ui.text(c, row.title, .{ .size = 13, .color = p.ink, .truncate = true });
-    ui.text(c, row.address, .{ .size = 11.5, .color = p.muted, .truncate = true });
+    ui.text(c, row.address, .{ .size = 11.5, .color = p.muted, .truncate_middle = true });
     ui.end(c);
     _ = c.leaf(.{ .min_width = 8, .width = px(8) }, .none, null);
     if (it.hovered) {
@@ -217,6 +214,44 @@ fn line(b: *Browser, c: *ui.Context, p: *const Palette, row: Row, h: f32) Act {
 }
 
 /// The three clearing cards, and Back.
+const foot_id: u64 = std.hash.Wyhash.hash(0, "kea.recall.foot");
+
+/// The count and Clear…, or the clearing cards: one fades out as the other
+/// fades in, where it stood, and the foot's height settles between them
+/// (`.animation(Motion.settle, value: clearing)`, `.transition(.opacity)`).
+fn foot(b: *Browser, c: *ui.Context, p: *const Palette) void {
+    const st = &b.recall;
+    const box = c.open(.{ .width = .fill, .clip = true }, "recall-foot");
+    defer c.end();
+    const now: u1 = @intFromBool(st.clearing);
+    var ts: [2]?f32 = undefined;
+    for (&ts, 0..) |*v, k| {
+        const shown = k == now;
+        // Already there when the panel first draws: no transition then.
+        v.* = presence.presenceFrom(c, foot_id +% k, if (shown) 1 else 0, shown, motion.settle, null);
+    }
+    var h: f32 = 0;
+    var known = true;
+    // The one leaving, over the one in the flow, at the top.
+    for ([2]u1{ now ^ 1, now }) |k| {
+        const v = @min(ts[k] orelse continue, 1);
+        const i = c.open(.{ .width = .fill, .absolute = k != now, .opacity = v }, if (k == 0) "recall-count" else "recall-sweeps");
+        if (k == 0) count(b, c, p) else sweeps(b, c, p);
+        c.end();
+        if (c.rects.get(c.node(i).id)) |r| h += r.h * v else known = false;
+    }
+    if (known and (ts[now ^ 1] != null or ts[now].? < 1)) c.node(box).style.height = px(h);
+}
+
+fn count(b: *Browser, c: *ui.Context, p: *const Palette) void {
+    const st = &b.recall;
+    ui.row(c, .{ .width = .fill, .align_items = .center });
+    defer ui.end(c);
+    ui.text(c, if (st.count == 1) "1 page" else c.print("{d} pages", .{st.count}), .{ .size = 12, .color = p.muted });
+    ui.spacer(c);
+    if (controls.pill(c, p, "Clear…", .{}).clicked) st.clearing = true;
+}
+
 fn sweeps(b: *Browser, c: *ui.Context, p: *const Palette) void {
     const st = &b.recall;
     ui.column(c, .{ .width = .fill, .gap = 10 });

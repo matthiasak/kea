@@ -306,3 +306,40 @@ test "a background tab opened to wait builds nothing while tabs.lazy is on" {
     const now = b.open("kea-test://site/page?title=Now", .{ .foreground = false, .may_wait = true });
     try t.expect(now.built and !now.asleep());
 }
+
+test "⌘W closes an open Peek first, then the panel, then the tab" {
+    var f: Fixture = undefined;
+    try f.init(t.allocator, .{ .tabs = 2 });
+    defer f.deinit();
+    const b = f.browser;
+    const count = b.tabs.items.len;
+    b.peek("https://example.com/", b.activeTab().?);
+    app.sheet.show(b, .recalling);
+    f.tester.settle(1);
+    try t.expect(f.press("w", 13, .{ .cmd = true }));
+    try t.expect(b.peek_tab == null);
+    try t.expect(b.recalling);
+    try t.expectEqual(count, b.tabs.items.len);
+    try t.expect(f.press("w", 13, .{ .cmd = true }));
+    try t.expect(!b.recalling);
+    try t.expectEqual(count, b.tabs.items.len);
+    try t.expect(f.press("w", 13, .{ .cmd = true }));
+    try t.expectEqual(count - 1, b.tabs.items.len);
+}
+
+test "⌘D duplicates an address of any length" {
+    var f: Fixture = undefined;
+    try f.init(t.allocator, .{});
+    defer f.deinit();
+    const b = f.browser;
+    const long = try t.allocator.alloc(u8, 5000);
+    defer t.allocator.free(long);
+    @memset(long, 'a');
+    @memcpy(long[0..23], "https://example.com/?q=");
+    const tab = b.activeTab().?;
+    tab.own(&tab.address, long);
+    b.duplicate();
+    try t.expectEqual(@as(usize, 2), b.tabs.items.len);
+    try t.expect(b.activeTab().? != tab);
+    try t.expectEqualStrings(long, b.activeTab().?.url());
+}

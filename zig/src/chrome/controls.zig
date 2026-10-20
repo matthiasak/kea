@@ -9,6 +9,9 @@ const Palette = @import("../design/palette.zig").Palette;
 const motion = @import("../design/motion.zig");
 const card = @import("../design/card.zig");
 
+/// A `.menu` `Picker`: the system's `NSPopUpButton`, drawn by AppKit.
+pub const popUpButton = @import("pop_up_button.zig").popUpButton;
+
 const px = struct {
     fn v(n: f32) ui.Length {
         return .{ .px = n };

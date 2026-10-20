@@ -9,6 +9,7 @@ const ai = @import("ai.zig");
 const client = @import("client.zig");
 const page = @import("page_text.zig");
 const sse = @import("client_sse.zig");
+const white = @import("whitespace.zig");
 const cs = @import("../data/chats_store.zig");
 const Tab = @import("../web/tab.zig").Tab;
 const Browser = @import("../model/browser.zig").Browser;
@@ -77,43 +78,24 @@ pub fn remembered(_: ai.Provider) usize {
     return 12;
 }
 
-/// Trimmed off a name the model wrote.
-const name_trim = "#*_`\"'“”‘’.:- \t\n\r\x0b\x0c";
+/// Trimmed off a name the model wrote: these, and `.whitespacesAndNewlines`.
+fn named(cp: u21) bool {
+    return white.isWhite(cp) or switch (cp) {
+        '#', '*', '_', '`', '"', '\'', '“', '”', '‘', '’', '.', ':', '-' => true,
+        else => false,
+    };
+}
 
 fn trimSet(s: []const u8) []const u8 {
-    var start: usize = 0;
-    var end = s.len;
-    outer: while (start < end) {
-        const len = std.unicode.utf8ByteSequenceLength(s[start]) catch 1;
-        if (start + len > end) break;
-        const ch = s[start .. start + len];
-        var set = (std.unicode.Utf8View.init(name_trim) catch unreachable).iterator();
-        while (set.nextCodepointSlice()) |c| if (std.mem.eql(u8, c, ch)) {
-            start += len;
-            continue :outer;
-        };
-        break;
-    }
-    outer: while (end > start) {
-        var b = end - 1;
-        while (b > start and (s[b] & 0xC0) == 0x80) b -= 1;
-        const ch = s[b..end];
-        var set = (std.unicode.Utf8View.init(name_trim) catch unreachable).iterator();
-        while (set.nextCodepointSlice()) |c| if (std.mem.eql(u8, c, ch)) {
-            end = b;
-            continue :outer;
-        };
-        break;
-    }
-    return s[start..end];
+    return white.trimWhere(s, named);
 }
 
 /// The name in a model's reply: its first line that isn't blank, without
 /// quotes, Markdown or a "Title:"; at most 60 characters. Borrows `reply`.
 pub fn title(reply: []const u8) ?[]const u8 {
-    var lines = std.mem.tokenizeAny(u8, reply, "\n\r\x0b\x0c");
+    var lines: white.Pieces(white.isNewline) = .{ .s = reply };
     const first = while (lines.next()) |l| {
-        const t = std.mem.trim(u8, l, " \t");
+        const t = white.trim(l);
         if (t.len > 0) break t;
     } else return null;
     var line = trimSet(first);
@@ -339,4 +321,6 @@ test "a chat's name from the model's reply" {
     try std.testing.expectEqualStrings("Trip plan", title("“Name: Trip plan”").?);
     try std.testing.expect(title("\n\n  ") == null);
     try std.testing.expect(title("\"…\"") != null);
+    // Foundation's newlines and spaces, not only ASCII's.
+    try std.testing.expectEqualStrings("Kea facts", title("\u{3000}\u{2028}\u{00A0}Kea facts\u{2029}and more").?);
 }

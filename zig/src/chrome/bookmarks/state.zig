@@ -179,6 +179,13 @@ pub const State = struct {
     revision: u64 = 0,
     /// The search takes the keys as the manager appears.
     hunt_focus: bool = false,
+    /// The tree ⇄ search switch (`.animation(Motion.settle, value:
+    /// picks.query.isEmpty)`): which it was, the room's height then, and
+    /// whether the room is still springing to the new height.
+    hunting_was: bool = false,
+    switch_gen: u32 = 0,
+    switch_from: f32 = 0,
+    switching: bool = false,
 
     pub fn expanded(s: *State, list: List) *Ids {
         return switch (list) {

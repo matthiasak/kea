@@ -23,10 +23,10 @@ const ext_commands = @import("../../ext/commands.zig");
 
 pub const State = struct {
     hunt: ui.TextBuffer = .{},
-    /// The command whose key is being typed (its id kept in `listening_id`),
-    /// and the monitor taking it.
-    listening: ?[]const u8 = null,
-    listening_id: [160]u8 = undefined,
+    /// The command whose key is being typed (its id owned on `gpa`: an
+    /// extension command's lives only as long as a frame's list), and the
+    /// monitor taking it.
+    listening: ?[]u8 = null,
     monitor: ?objc.Object = null,
     /// Why that key won't do, until `note_until` (`json.now()`).
     note: ?[]const u8 = null,
@@ -170,16 +170,15 @@ fn extensionCommands(b: *Browser, c: *ui.Context, p: *const Palette, e: *@import
 
 /// The command, Kea's or an extension's, that has `kc` (other than `id`):
 /// its title in `buf`.
-fn usedBy(b: *Browser, kc: KeyCombo, id: []const u8, buf: []u8) ?[]const u8 {
+/// The title of the command that has `kc`, copied onto `a`.
+fn usedBy(b: *Browser, kc: KeyCombo, id: []const u8, a: std.mem.Allocator) ?[]const u8 {
     const store = &b.kea.shortcuts;
-    if (store.owner(kc, id)) |other| return other.title;
+    if (store.owner(kc, id)) |other| return a.dupe(u8, other.title) catch null;
     const e = b.kea.ext orelse return null;
     const other = ext_commands.owner(e, kc, id) orelse return null;
     defer store.gpa.free(other.id);
     defer store.gpa.free(other.title);
-    const n = @min(buf.len, other.title.len);
-    @memcpy(buf[0..n], other.title[0..n]);
-    return buf[0..n];
+    return a.dupe(u8, other.title) catch null;
 }
 
 fn label(b: *Browser, c: *ui.Context, id: []const u8) []const u8 {
@@ -187,8 +186,7 @@ fn label(b: *Browser, c: *ui.Context, id: []const u8) []const u8 {
     const store = &b.kea.shortcuts;
     const mine = s.listening != null and std.mem.eql(u8, s.listening.?, id);
     if (mine) {
-        var buf: [160]u8 = undefined;
-        if (s.taking) |t| if (usedBy(b, t, id, &buf)) |other| return c.print("Used by {s} — press again", .{other});
+        if (s.taking) |t| if (usedBy(b, t, id, c.alloc())) |other| return c.print("Used by {s} — press again", .{other});
         if (s.note) |n| return n;
         return "Type a shortcut";
     }
@@ -217,10 +215,7 @@ fn keyBox(b: *Browser, c: *ui.Context, p: *const Palette, id: []const u8) void {
 
 fn listen(s: *State, id: []const u8) void {
     stop(s);
-    // An extension command's id lives only as long as this frame's list.
-    const n = @min(id.len, s.listening_id.len);
-    @memcpy(s.listening_id[0..n], id[0..n]);
-    s.listening = s.listening_id[0..n];
+    s.listening = browserOf(s).gpa.dupe(u8, id) catch return;
     browserOf(s).kea.shortcuts.recording = true;
     s.monitor = appkit.addLocalMonitor(appkit.mask.key_down, s, take);
 }
@@ -250,8 +245,8 @@ pub fn take(s: *State, event: objc.Object) ?objc.Object {
     // An extension's command takes a key as its manifest would.
     const ext = std.mem.startsWith(u8, id, "ext:");
     if (ext and (kc.key.len != 1 or shortcuts.isBrowserOnly(kc))) return say(s, "Not for an extension");
-    var title_buf: [160]u8 = undefined;
-    const other = usedBy(b, kc, id, &title_buf);
+    const other = usedBy(b, kc, id, b.gpa);
+    defer if (other) |o| b.gpa.free(o);
     if (other != null and !(if (s.taking) |t| t.eql(kc) else false)) {
         @memcpy(s.taking_key[0..kc.key.len], kc.key);
         s.taking = kc;
@@ -261,8 +256,9 @@ pub fn take(s: *State, event: objc.Object) ?objc.Object {
     store.assign(kc, id);
     stop(s);
     if (other) |o| {
-        var said: [200]u8 = undefined;
-        b.announce(std.fmt.bufPrint(&said, "{f} moved from {s}", .{ kc, o }) catch return null);
+        const said = std.fmt.allocPrint(b.gpa, "{f} moved from {s}", .{ kc, o }) catch return null;
+        defer b.gpa.free(said);
+        b.announce(said);
     }
     return null;
 }
@@ -276,7 +272,11 @@ fn say(s: *State, text: []const u8) ?objc.Object {
 
 fn stop(s: *State) void {
     if (s.monitor) |m| appkit.removeMonitor(m);
-    if (s.listening != null) browserOf(s).kea.shortcuts.recording = false;
+    if (s.listening) |id| {
+        const b = browserOf(s);
+        b.kea.shortcuts.recording = false;
+        b.gpa.free(id);
+    }
     s.monitor = null;
     s.listening = null;
     s.note = null;

@@ -74,8 +74,7 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette) void {
         ui.row(c, .{ .width = .fill, .padding = .xy(14, 9), .align_items = .center });
         ui.text(c, k[1], .{ .size = 13, .color = p.ink });
         ui.spacer(c);
-        // ponytail: the system face, not SF Rounded (`design: .rounded`).
-        ui.text(c, k[0], .{ .size = 12, .color = p.muted });
+        ui.text(c, k[0], .{ .size = 12, .color = p.muted, .rounded = true });
         ui.end(c);
     }
 }

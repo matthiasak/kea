@@ -192,7 +192,10 @@ fn row(b: *Browser, c: *ui.Context, p: *const Palette, use: Use, node: *const Bo
     };
 
     const h = motion.quickTo(c, it.id, 0, if (it.hovered) 1 else 0);
-    const strong = motion.quickTo(c, it.id, 1, if (aim == .into or shown or selected) 1 else 0);
+    // Aimed into on quick, shown (found) on settle, picked at once.
+    const into = motion.quickTo(c, it.id, 1, if (aim == .into) 1 else 0);
+    const lit = motion.settleTo(c, it.id, 3, if (shown) 1 else 0);
+    const strong: f32 = if (selected) 1 else std.math.clamp(@max(into, lit), 0, 1);
     c.node(i).style.background = p.wash.alpha(h).mix(p.hover, strong);
     const dragging = carrying and d.carrying.has(node.id);
     c.node(i).style.opacity = 1 - 0.65 * motion.quickTo(c, it.id, 2, if (dragging) 1 else 0);

@@ -41,8 +41,10 @@ fn openUrls(h: *Harness) !void {
     try h.expect(!app.links.isDefault(), "the test runner says it's the Mac's browser", .{});
 }
 
+/// Loaded and titled: WebKit tells the title in its own turn, which may
+/// come after the load ends.
 fn arrived(t: *app.Tab) bool {
-    return t.committed != null and !t.loading;
+    return t.committed != null and !t.loading and t.page_title.len > 0;
 }
 
 extern "c" fn NSClassFromString(name: objc.Object) ?objc.Class;

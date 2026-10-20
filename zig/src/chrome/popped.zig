@@ -173,6 +173,7 @@ pub fn followBookmarks(kea: *Kea) void {
 }
 
 fn view(self: *PanelWindow, c: *ui.Context) void {
+    c.hand_cursor = false;
     // Drawn first inside `newWindow`, before it is filled in.
     if (self.window == null) return;
     const p = palette.get(c.theme.dark);

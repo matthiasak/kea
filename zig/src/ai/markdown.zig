@@ -4,6 +4,8 @@
 //! Inline emphasis on screen is the view's (markdown_view.zig).
 const std = @import("std");
 const regex = @import("regex.zig");
+const white = @import("whitespace.zig");
+const objc = @import("nanoui").objc;
 
 pub const Block = union(enum) {
     heading: struct { level: u8, text: []const u8 },
@@ -15,13 +17,24 @@ pub const Block = union(enum) {
     rule,
 };
 
-// ponytail: ASCII whitespace; Swift's `.whitespaces` also takes Unicode spaces (U+00A0, U+3000…).
-fn trim(s: []const u8) []const u8 {
-    return std.mem.trim(u8, s, " \t");
+/// `trimmingCharacters(in: .whitespaces)`, Unicode's spaces included.
+const trim = white.trim;
+
+/// `Character.isWhitespace` of the last character of `s` (not empty).
+fn endsWhite(s: []const u8) bool {
+    return white.isWhite(white.at(s, white.before(s, s.len)).cp);
 }
 
-fn isSpace(ch: u8) bool {
-    return ch == ' ' or ch == '\t' or ch == '\n' or ch == '\r' or ch == 0x0b or ch == 0x0c;
+/// `lowercased()`: Foundation's, so not only ASCII letters; on `a`.
+fn lower(a: std.mem.Allocator, s: []const u8) ![]const u8 {
+    if (std.unicode.utf8ValidateSlice(s) and for (s) |ch| {
+        if (ch >= 0x80) break true;
+    } else false) {
+        const pool = objc.Pool.push();
+        defer pool.pop();
+        return a.dupe(u8, objc.fromNSString(objc.msg(objc.Object, objc.nsString(s), "lowercaseString", .{})));
+    }
+    return std.ascii.allocLowerString(a, s);
 }
 
 /// The blocks of `text`, everything on `a` (an arena).
@@ -66,7 +79,7 @@ fn parseBlocks(a: std.mem.Allocator, lines: []const []const u8, depth: usize) er
                 try body.append(a, lines[i]);
                 i += 1;
             }
-            try out.append(a, .{ .code = .{ .language = try std.ascii.allocLowerString(a, fence.language), .text = try joinLines(a, body.items), .closed = closed } });
+            try out.append(a, .{ .code = .{ .language = try lower(a, fence.language), .text = try joinLines(a, body.items), .closed = closed } });
             continue;
         }
 
@@ -203,22 +216,28 @@ fn fenceOpen(trimmed: []const u8) ?Fence {
         if (count >= 3) {
             const after = trim(trimmed[count..]);
             if (ch == '`' and std.mem.indexOfScalar(u8, after, '`') != null) return null;
-            var words = std.mem.tokenizeAny(u8, after, " \t\n\r\x0b\x0c");
-            return .{ .marker = trimmed[0..count], .language = words.next() orelse "" };
+            var words: white.Pieces(white.isWhite) = .{ .s = after };
+            const word = while (words.next()) |w| {
+                if (w.len > 0) break w;
+            } else "";
+            return .{ .marker = trimmed[0..count], .language = word };
         }
     }
     return null;
 }
 
 fn isRule(line: []const u8) bool {
-    var first: u8 = 0;
+    var first: u21 = 0;
     var n: usize = 0;
-    for (line) |ch| {
-        if (isSpace(ch)) continue;
+    var i: usize = 0;
+    while (i < line.len) {
+        const ch = white.at(line, i);
+        i += ch.len;
+        if (white.isWhite(ch.cp)) continue;
         if (n == 0) {
-            if (ch != '-' and ch != '*' and ch != '_') return false;
-            first = ch;
-        } else if (ch != first) return false;
+            if (ch.cp != '-' and ch.cp != '*' and ch.cp != '_') return false;
+            first = ch.cp;
+        } else if (ch.cp != first) return false;
         n += 1;
     }
     return n >= 3;
@@ -235,7 +254,7 @@ fn parseHeading(trimmed: []const u8) ?Heading {
     var text = trim(rest);
     while (std.mem.endsWith(u8, text, "#")) {
         const dropped = text[0 .. text.len - 1];
-        if (dropped.len == 0 or isSpace(dropped[dropped.len - 1])) {
+        if (dropped.len == 0 or endsWhite(dropped)) {
             text = trim(dropped);
             break;
         } else if (dropped[dropped.len - 1] == '#') {
@@ -344,4 +363,16 @@ fn parseListMarker(line: []const u8) ?ListMarker {
 
 test {
     _ = @import("markdown_html.zig");
+    _ = white;
+}
+
+test "unicode spaces count as Swift's do" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const got = try blocks(a, "\u{3000}- - -\u{00A0}\n```\u{00A0}ÄBC\u{2003}x\ncode\n```\n# Title\u{3000}#");
+    try std.testing.expectEqual(@as(usize, 3), got.len);
+    try std.testing.expect(got[0] == .rule);
+    try std.testing.expectEqualStrings("äbc", got[1].code.language);
+    try std.testing.expectEqualStrings("Title", got[2].heading.text);
 }

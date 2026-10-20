@@ -61,15 +61,17 @@ fn paintNode(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, clip:
         });
         switch (n.content) {
             .text => |t| paintText(c, out, index, n, t, clip4, opacity, selectable),
-            .icon => |ic| if (c.text.atlas.symbol(ic.name, ic.size, @intFromEnum(ic.weight))) |sp| {
+            .icon => |ic| if (c.text.atlas.symbol(ic.name, ic.size, @intFromEnum(ic.weight), 0)) |sp| {
                 // Centered in its box, which may be larger (a fixed frame).
                 const inner = r.inset(st.padding);
-                const x = inner.x + (inner.w - (sp.w + 2 * sp.x)) / 2;
-                const y = inner.y + (inner.h - (sp.h + 2 * sp.y)) / 2;
+                const x = snap(inner.x + (inner.w - (sp.w + 2 * sp.x)) / 2, c.scale) + sp.x;
+                const y = snap(inner.y + (inner.h - (sp.h + 2 * sp.y)) / 2, c.scale) + sp.y;
+                // Turned, the square it turns in, on the same centre.
+                const d = if (ic.step != 0) c.text.atlas.symbol(ic.name, ic.size, @intFromEnum(ic.weight), ic.step) orelse sp else sp;
                 push(c, out, .{
-                    .rect = .{ snap(x, c.scale) + sp.x, snap(y, c.scale) + sp.y, sp.w, sp.h },
+                    .rect = .{ x + (sp.w - d.w) / 2, y + (sp.h - d.h) / 2, d.w, d.h },
                     .color = metal.color4(ic.color.alpha(opacity)),
-                    .uv = sp.uv,
+                    .uv = d.uv,
                     .kind = metal.Kind.text,
                     .clip = clip4,
                 });
@@ -100,8 +102,11 @@ fn paintNode(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, clip:
     while (child != none) : (child = c.node(child).next) paintNode(c, out, child, child_clip, opacity, selectable);
     if ((st.clip or st.scroll or st.scroll_x) and st.radius > 0) roundClip(out.items[first..], r, visible, st.radius);
 
-    if (st.scroll and st.scroll_bar) paintScrollbar(c, out, n, visible, opacity);
-    if (st.scroll_x and st.scroll_bar) paintScrollbarX(c, out, n, visible, opacity);
+    // An overlay scroller: once it scrolls, and a second after.
+    const moved = (c.scroll.get(n.id) orelse 0) + (c.scroll_x.get(n.id) orelse 0);
+    const bar = if (st.scroll_bar_fades) @import("motion.zig").flash(c, n.id, 0x6261_72, moved, 1, 0.3) else 1;
+    if (st.scroll and st.scroll_bar and bar > 0) paintScrollbar(c, out, n, visible, opacity * bar);
+    if (st.scroll_x and st.scroll_bar and bar > 0) paintScrollbarX(c, out, n, visible, opacity * bar);
     if (st.scale != 1) scaleItems(out.items[start..], r, st.scale, st.scale_anchor, clip4);
 }
 

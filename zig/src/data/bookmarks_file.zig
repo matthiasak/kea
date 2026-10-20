@@ -2,7 +2,8 @@
 //! the old Netscape format, an HTML page of nested lists, read loosely as
 //! browsers write it loosely — tags in any case, paragraphs and closing tags
 //! left out, attributes in any order. Only http and https addresses are
-//! kept. Kea's own `bookmarks.json` tree is read too, and both are written.
+//! kept. Kea's own `bookmarks.json` tree is read too. Nothing is written:
+//! Kea has no bookmarks export.
 //!
 //!     <DT><H3>Folder</H3>
 //!     <DL><p>
@@ -223,64 +224,6 @@ fn isWord(ch: u8) bool {
     return std.ascii.isAlphanumeric(ch) or ch == '_';
 }
 
-// MARK: writing
-
-/// The tree as a Netscape bookmarks page, as browsers export one. On `a`.
-pub fn html(a: std.mem.Allocator, roots: []const Bookmark) ![]u8 {
-    var out: std.ArrayList(u8) = .empty;
-    try out.appendSlice(a,
-        \\<!DOCTYPE NETSCAPE-Bookmark-file-1>
-        \\<!-- This is an automatically generated file.
-        \\     It will be read and overwritten.
-        \\     DO NOT EDIT! -->
-        \\<META HTTP-EQUIV="Content-Type" CONTENT="text/html; charset=UTF-8">
-        \\<TITLE>Bookmarks</TITLE>
-        \\<H1>Bookmarks</H1>
-        \\<DL><p>
-        \\
-    );
-    try list(a, &out, roots, 1);
-    try out.appendSlice(a, "</DL><p>\n");
-    return out.items;
-}
-
-fn list(a: std.mem.Allocator, out: *std.ArrayList(u8), nodes: []const Bookmark, depth: usize) !void {
-    for (nodes) |n| {
-        try out.appendNTimes(a, ' ', depth * 4);
-        if (n.url) |u| {
-            try out.appendSlice(a, "<DT><A HREF=\"");
-            try escape(a, out, u);
-            try out.appendSlice(a, "\">");
-            try escape(a, out, n.title);
-            try out.appendSlice(a, "</A>\n");
-            continue;
-        }
-        try out.appendSlice(a, "<DT><H3>");
-        try escape(a, out, n.title);
-        try out.appendSlice(a, "</H3>\n");
-        try out.appendNTimes(a, ' ', depth * 4);
-        try out.appendSlice(a, "<DL><p>\n");
-        try list(a, out, n.kids(), depth + 1);
-        try out.appendNTimes(a, ' ', depth * 4);
-        try out.appendSlice(a, "</DL><p>\n");
-    }
-}
-
-fn escape(a: std.mem.Allocator, out: *std.ArrayList(u8), s: []const u8) !void {
-    for (s) |ch| switch (ch) {
-        '&' => try out.appendSlice(a, "&amp;"),
-        '<' => try out.appendSlice(a, "&lt;"),
-        '>' => try out.appendSlice(a, "&gt;"),
-        '"' => try out.appendSlice(a, "&quot;"),
-        else => try out.append(a, ch),
-    };
-}
-
-/// The tree as Kea's own `bookmarks.json` list.
-pub fn jsonText(a: std.mem.Allocator, roots: []const Bookmark) ![]u8 {
-    return json.encode(a, roots);
-}
-
 test "netscape html bookmarks parse" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -318,27 +261,19 @@ test "netscape html bookmarks parse" {
     try std.testing.expect(try read(a, "not bookmarks") == null);
 }
 
-test "netscape html export round-trips" {
+test "kea's own json list reads under fresh ids" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
     var inner = [_]Bookmark{.{ .id = Uuid.random(), .title = "Quote \"<this>\" & that", .url = "https://a.example/?x=1&y=2" }};
-    var empty = [_]Bookmark{};
     const tree = [_]Bookmark{
         .{ .id = Uuid.random(), .title = "Top", .url = "https://top.example/" },
         Bookmark.folder("Folder", &inner),
-        Bookmark.folder("Empty", &empty),
     };
-    const back = (try read(a, try html(a, &tree))).?;
-    try std.testing.expectEqual(@as(usize, 3), back.len);
-    try std.testing.expectEqualStrings("Top", back[0].title);
-    try std.testing.expectEqualStrings("https://top.example/", back[0].url.?);
-    try std.testing.expectEqualStrings("Folder", back[1].title);
-    try std.testing.expectEqualStrings(inner[0].title, back[1].children.?[0].title);
-    try std.testing.expectEqualStrings(inner[0].url.?, back[1].children.?[0].url.?);
-    try std.testing.expectEqual(@as(usize, 0), back[2].children.?.len);
-    // And Kea's own JSON: the same tree, under ids none of which are already kept.
-    const again = (try read(a, try jsonText(a, &tree))).?;
+    // The same tree, under ids none of which are already kept.
+    const again = (try read(a, try json.encode(a, &tree))).?;
+    try std.testing.expectEqualStrings("Top", again[0].title);
+    try std.testing.expectEqualStrings(inner[0].url.?, again[1].children.?[0].url.?);
     try std.testing.expect(!again[1].id.eql(tree[1].id));
     try std.testing.expect(!again[1].children.?[0].id.eql(inner[0].id));
     try std.testing.expectEqualStrings(inner[0].title, again[1].children.?[0].title);

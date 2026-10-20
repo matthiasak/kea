@@ -7,7 +7,28 @@ const Harness = @import("main.zig").Harness;
 
 pub const cases = [_]Case{
     .{ .name = "download lands and downloads.json records it", .run = lands },
+    .{ .name = "copy image stops reading past 50 MB", .run = hugeImage },
 };
+
+fn refused(b: *app.Browser) bool {
+    const said = b.announcement orelse return false;
+    return std.mem.eql(u8, said, "Couldn't copy that image");
+}
+
+/// Swift reads the picture as it comes and lets go past `largestImage`;
+/// one that never ends is refused long before it would have finished.
+fn hugeImage(h: *Harness) !void {
+    const b = try h.start();
+    const scheme = @import("scheme.zig");
+    scheme.huge_sent.store(0, .monotonic);
+    const url = try std.fmt.allocPrint(h.gpa, "{s}/huge", .{h.http});
+    defer h.gpa.free(url);
+    app.image_menu.copyFrom(b.activeTab().?, url);
+    h.waitFor(b, refused, 30, "the refusal") catch
+        return h.fail("not refused; {d} bytes sent", .{scheme.huge_sent.load(.monotonic)});
+    const sent = scheme.huge_sent.load(.monotonic);
+    try h.expect(sent < 200_000_000, "{d} bytes sent before it let go", .{sent});
+}
 
 fn kept(k: *app.Kea) bool {
     return k.loot.kept.len > 0;

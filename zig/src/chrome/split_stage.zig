@@ -94,7 +94,11 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette, r: Room, size: ui.Si
         n = 1;
     };
     const roomy = size.w - divider.gutter >= 2 * divider.narrowest;
-    const paired = n == 2 and roomy;
+    // A page lent to WebKit's full screen window has the stage (`immersed`).
+    const immersed: ?usize = if (n == 2) for (tabs[0..n], 0..) |t, i| {
+        if (t.immersed) break i;
+    } else null else null;
+    const paired = n == 2 and roomy and immersed == null;
 
     const move = motionOf(st, tabs[0..n], split, roomy);
     st.divider.dragged = false;
@@ -123,8 +127,10 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette, r: Room, size: ui.Si
             .{ .x = left + divider.gutter, .w = room - left, .h = size.h },
         };
     } else for (tabs[0..n], 0..) |t, i| {
-        // Too narrow for two: the page with the keys alone, still a pair.
-        if (n < 2 or t.id == b.active_id) frames[i] = area;
+        // `shown`: the full-screen page alone; too narrow for two, the page
+        // with the keys alone, still a pair.
+        const show = if (n < 2) true else if (immersed) |im| i == im else t.id == b.active_id;
+        if (show) frames[i] = area;
     }
     if (n == 2 and frames[0] == null and frames[1] == null) frames[0] = area;
 
@@ -227,6 +233,9 @@ fn pane(b: *Browser, c: *ui.Context, p: *const Palette, t: *Tab, at: ui.Rect, ca
     defer c.end();
     c.addStageHoleNode(i);
     if (cards) card.cardEdge(c, i);
+    // `CardEdge`'s ground behind the page: seen only where no page is shown
+    // (Stage.swift `Page`: blank, asleep, floating), never over a live one.
+    if (cards and (t.isBlank() or t.asleep() or t.floating)) c.node(i).style.background = p.ground;
     // Watched, never taken: a click here is the page's.
     const hovered = if (c.rects.get(c.node(i).id)) |rr| rr.contains(c.input.mouse) else false;
 

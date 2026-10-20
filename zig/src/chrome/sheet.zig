@@ -1,10 +1,12 @@
 //! The sheets over the window (`ContentView.sheet`, App.swift:942-958):
 //! a floor of black at .10 that closes it when pressed, and the panel in
 //! the middle, arriving at .97 scale and fading in under `Motion.settle`
-//! and leaving the same way. One at a time: Settings (`tuning`), the
-//! bookmarks manager, Passwords (`managing`), Bring things over
-//! (`bringing_in`), History and Downloads, each a `Browser` field opened
-//! through `show`. The floor owns the cursor (`CursorGround`): the arrow.
+//! and leaving the same way. Settings (`tuning`), the bookmarks manager,
+//! Passwords (`managing`), Bring things over (`bringing_in`), History and
+//! Downloads are each a `Browser` field opened through `show`, independent
+//! as Swift's flags are: ⌘Y over Settings opens History too, stacked in
+//! `ContentView.panels`' order. The floor owns the cursor (`CursorGround`):
+//! the arrow.
 const std = @import("std");
 const ui = @import("nanoui").ui;
 const Browser = @import("../model/browser.zig").Browser;
@@ -17,9 +19,12 @@ const presence = @import("presence.zig");
 pub const Kind = enum { tuning, bookmarking, managing, bringing, recalling, hoarding };
 
 pub const State = struct {
-    /// The sheet last shown, drawn until it has left.
-    last: ?Kind = null,
+    /// The sheets drawn last frame: shown, or still leaving.
+    drawn: std.EnumSet(Kind) = .{},
 };
+
+/// `ContentView.panels`' order, the bottom one first.
+const stack = [_]Kind{ .recalling, .hoarding, .tuning, .bookmarking, .managing, .bringing };
 
 fn field(comptime k: Kind) []const u8 {
     return if (k == .bringing) "bringing_in" else @tagName(k);
@@ -35,16 +40,24 @@ fn set(b: *Browser, comptime k: Kind, on: bool) void {
     if (@TypeOf(f.*) == bool) f.* = on else if (!on) f.* = null else if (f.* == null) f.* = "";
 }
 
-/// The sheet up now.
+/// The sheet `closePanel` would close: the first up in its order.
 pub fn current(b: *const Browser) ?Kind {
     inline for (comptime std.enums.values(Kind)) |k| if (isOn(b, k)) return k;
     return null;
 }
 
-/// Opens `kind` and closes any other.
+/// Opens `kind`; any other up stays (`browser.recalling = true`).
 pub fn show(b: *Browser, kind: Kind) void {
-    inline for (comptime std.enums.values(Kind)) |k| set(b, k, k == kind);
+    switch (kind) {
+        inline else => |k| set(b, k, true),
+    }
     b.redraw();
+}
+
+pub fn isShown(b: *const Browser, kind: Kind) bool {
+    return switch (kind) {
+        inline else => |k| isOn(b, k),
+    };
 }
 
 pub fn close(b: *Browser, kind: Kind) void {
@@ -56,7 +69,7 @@ pub fn close(b: *Browser, kind: Kind) void {
 
 /// `tuning.toggle()` and its kin.
 pub fn toggle(b: *Browser, kind: Kind) void {
-    if (current(b) == kind) close(b, kind) else show(b, kind);
+    if (isShown(b, kind)) close(b, kind) else show(b, kind);
 }
 
 /// `Browser.closePanel`: the sheet up, closed; whether there was one.
@@ -68,31 +81,32 @@ pub fn closePanel(b: *Browser) bool {
 
 const sheet_id: u64 = std.hash.Wyhash.hash(0, "kea.sheet");
 
-/// Draws the sheet, over everything but the tab switcher and the import's card.
+/// Draws the sheets, over everything but the tab switcher and the import's card.
 pub fn view(b: *Browser, c: *ui.Context, p: *const Palette) void {
-    const now = current(b);
-    if (now) |k| {
-        if (b.sheet.last != k) {
-            // Swapped straight for another: the old one has gone too.
-            if (b.sheet.last) |old| fresh(b, old);
-            fresh(b, k);
-        }
-        b.sheet.last = k;
-    }
-    const kind = b.sheet.last orelse return;
-    const t = presence.presence(c, sheet_id, now != null, motion.settle, null) orelse {
-        fresh(b, kind);
-        b.sheet.last = null;
+    inline for (stack) |k| one(b, c, p, k);
+}
+
+/// `sheet { … }`: its own floor and its own arrival and leaving.
+fn one(b: *Browser, c: *ui.Context, p: *const Palette, comptime kind: Kind) void {
+    const on = isOn(b, kind);
+    const was = b.sheet.drawn.contains(kind);
+    if (on and !was) fresh(b, kind);
+    const t = presence.presence(c, sheet_id +% @intFromEnum(kind), on, motion.settle, null) orelse {
+        if (was) fresh(b, kind);
+        b.sheet.drawn.remove(kind);
         return;
     };
+    b.sheet.drawn.insert(kind);
     const o = std.math.clamp(t, 0, 1);
-    ui.column(c, .{ .absolute = true, .width = .fill, .height = .fill, .align_items = .center, .justify = .center, .opacity = o });
-    defer ui.end(c);
+    // Keyed by kind: another sheet arriving under it leaves its ids (its
+    // focused field) where they were.
+    _ = c.open(.{ .absolute = true, .width = .fill, .height = .fill, .align_items = .center, .justify = .center, .opacity = o }, "kea.sheet." ++ @tagName(kind));
+    defer c.end();
     const floor = c.leaf(.{ .absolute = true, .width = .fill, .height = .fill, .background = ui.Color.black.alpha(0.10) }, .none, "kea.sheet.floor");
     const box = c.open(.{ .scale = 0.97 + 0.03 * t }, "kea.sheet.panel");
     defer c.end();
     // Leaving, it is only a picture: the window under it has the pointer.
-    if (now != null) {
+    if (on) {
         c.cursor = .arrow;
         if (c.interact(floor, .{}).pressed) close(b, kind);
         // The panel takes its own clicks; the floor has only what's around it.

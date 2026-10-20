@@ -20,8 +20,15 @@ pub const State = struct { shown: bool = false, gen: u32 = 0 };
 
 /// Shift-click on a link, from a tab in the row.
 pub fn peek(b: *Browser, url: []const u8, from: *Tab) void {
-    if (b.peek_tab != null) return;
-    b.peek_tab = b.make(url, from.shy);
+    // A peek already open gives way to the new one (`peekTab = page`);
+    // links only ask with none open (`peekTab == nil`), so tests and the
+    // model reach this, not a click.
+    const shy = from.shy;
+    if (b.peek_tab) |old| {
+        b.peek_tab = null;
+        b.letGo(old);
+    }
+    b.peek_tab = b.make(url, shy);
     b.redraw();
 }
 

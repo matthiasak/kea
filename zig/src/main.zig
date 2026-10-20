@@ -98,6 +98,7 @@ test {
     _ = @import("app/kea.zig");
     _ = @import("design/palette.zig");
     _ = @import("chrome/ring.zig");
+    _ = @import("chrome/pop_up_button.zig");
     _ = @import("chrome/when.zig");
     _ = @import("chrome/tests_controls.zig");
     _ = @import("chrome/lights.zig");
@@ -128,6 +129,8 @@ test {
     _ = @import("ai/client.zig");
     _ = @import("ai/client_more.zig");
     _ = @import("ai/markdown.zig");
+    _ = @import("ai/whitespace.zig");
+    _ = @import("chrome/spinner.zig");
     _ = @import("ai/page_text.zig");
     _ = @import("ai/sign_in.zig");
     _ = @import("ai/catalog.zig");

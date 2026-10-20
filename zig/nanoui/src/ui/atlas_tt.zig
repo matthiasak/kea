@@ -8,6 +8,7 @@ const std = @import("std");
 const font = @import("tt/font.zig");
 const tt_raster = @import("tt/raster.zig");
 const icons = @import("icons.zig");
+const turn = @import("turn.zig");
 
 const initial_size: u32 = 512;
 const max_size: u32 = 4096;
@@ -36,7 +37,7 @@ pub const RunFont = struct {
 };
 
 const Key = struct { font: u16, glyph: u16, bin: u8 };
-const SymbolKey = struct { name: u64, size_bits: u32, weight: u8 };
+const SymbolKey = struct { name: u64, size_bits: u32, weight: u8, step: u8 };
 
 pub const Atlas = struct {
     gpa: std.mem.Allocator,
@@ -198,37 +199,44 @@ pub const Atlas = struct {
 
     /// The icon `name` (SF Symbols' names) at `point_size` and `weight` (0
     /// regular … 3 bold), as a mask: `x`, `y` are 0 and `w`, `h` its size.
-    pub fn symbol(a: *Atlas, name: []const u8, point_size: f32, weight: u8) ?Sprite {
-        const key: SymbolKey = .{ .name = std.hash.Wyhash.hash(0, name), .size_bits = @bitCast(point_size), .weight = weight };
+    /// Turned clockwise by `step` (`turn.zig`), it is the square it turns in.
+    pub fn symbol(a: *Atlas, name: []const u8, point_size: f32, weight: u8, step: u8) ?Sprite {
+        const key: SymbolKey = .{ .name = std.hash.Wyhash.hash(0, name), .size_bits = @bitCast(point_size), .weight = weight, .step = step };
         if (a.symbols.get(key)) |sp| return sp;
-        const sp = a.rasterizeSymbol(name, point_size, weight);
+        const sp = a.rasterizeSymbol(name, point_size, weight, step);
         a.symbols.put(a.gpa, key, sp) catch {};
         return sp;
     }
 
-    fn rasterizeSymbol(a: *Atlas, name: []const u8, point_size: f32, weight: u8) ?Sprite {
+    fn rasterizeSymbol(a: *Atlas, name: []const u8, point_size: f32, weight: u8, step: u8) ?Sprite {
         const icon = icons.find(name) orelse return null;
         // Icons are drawn on a 24-unit grid, a little larger than the
         // text they sit beside, as SF Symbols are.
         const side_pt = point_size * 1.2;
         const side: u32 = @intFromFloat(@ceil(side_pt * a.scale));
-        const w = side + 2 * pad;
-        const h = side + 2 * pad;
-        const at = a.place(w, h) orelse return null;
-        var r = tt_raster.Raster.init(a.gpa, w, h) catch return null;
+        const dw = side + 2 * pad;
+        var r = tt_raster.Raster.init(a.gpa, dw, dw) catch return null;
         defer r.deinit(a.gpa);
         const k = @as(f32, @floatFromInt(side)) / 24;
         icons.draw(icon, &r, k, @floatFromInt(pad), 1.6 + 0.35 * @as(f32, @floatFromInt(weight)));
-        a.scratch.resize(a.gpa, w * h) catch return null;
+        a.scratch.resize(a.gpa, dw * dw) catch return null;
         r.coverage(a.scratch.items);
-        a.blit(at, w, h, a.scratch.items);
+        const w = if (step != 0) turn.side(dw, dw) else dw;
+        if (step != 0) {
+            const flat = a.gpa.dupe(u8, a.scratch.items) catch return null;
+            defer a.gpa.free(flat);
+            a.scratch.resize(a.gpa, w * w) catch return null;
+            turn.turned(flat, dw, dw, step, a.scratch.items, w);
+        }
+        const at = a.place(w, w) orelse return null;
+        a.blit(at, w, w, a.scratch.items);
         const pp = @as(f32, pad) / a.scale;
         return .{
-            .uv = a.uv(at, w, h),
+            .uv = a.uv(at, w, w),
             .x = -pp,
             .y = -pp,
             .w = @as(f32, @floatFromInt(w)) / a.scale,
-            .h = @as(f32, @floatFromInt(h)) / a.scale,
+            .h = @as(f32, @floatFromInt(w)) / a.scale,
         };
     }
 };

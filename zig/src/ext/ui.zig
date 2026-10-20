@@ -56,6 +56,7 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette) void {
     plate.cardBox(c, p);
     plate.line(c, p, "From another browser", "What Chrome, Arc, Brave and the others added from the Chrome Web Store — installed fresh from the store, you say yes to each one");
     if (controls.pill(c, p, "Bring them over…", .{}).clicked) {
+        sheet.close(b, .tuning);
         b.importing.extensions = true;
         sheet.show(b, .bringing);
     }

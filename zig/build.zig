@@ -96,6 +96,8 @@ pub fn build(b: *std.Build) void {
     run_e2e.addArg("--nanoui-hidden");
     run_e2e.has_side_effects = true;
     b.step("e2e", "Run the in-process WebKit end-to-end cases").dependOn(&run_e2e.step);
+    // The same binary in zig-out/bin, to run under `leaks --atExit --`.
+    b.step("e2e-bin", "Install keazig-e2e into zig-out/bin").dependOn(&b.addInstallArtifact(e2e, .{}).step);
 
     // Chrome states rendered to PNGs ($KEAZIG_SNAPSHOTS or $TMPDIR/keazig-snapshots)
     const snaps = b.addExecutable(.{ .name = "keazig-snapshots", .root_module = harness(b, "src/tests/snapshots.zig", target, optimize) });

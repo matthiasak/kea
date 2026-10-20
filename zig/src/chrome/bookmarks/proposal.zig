@@ -16,7 +16,7 @@ const ubi = @import("../../ai/ubi_chat.zig");
 const appkit = @import("../../sys/appkit.zig");
 const controls = @import("../controls.zig");
 const plate = @import("../controls_plate.zig");
-const ring = @import("../ring.zig");
+const spinner = @import("../spinner.zig").spinner;
 const sheet = @import("../sheet.zig");
 const outline = @import("outline.zig");
 
@@ -94,7 +94,7 @@ pub fn apply(b: *Browser) void {
 pub fn asking(b: *Browser, c: *ui.Context, p: *const Palette, says: []const u8) void {
     ui.row(c, .{ .width = .fill, .gap = 8, .align_items = .center });
     defer ui.end(c);
-    ring.ring(c, 16);
+    spinner(c);
     ui.text(c, says, .{ .size = 12, .color = p.muted });
     ui.spacer(c);
     if (plate.quick(c, p, "Stop", null).clicked) press(b, .stop);

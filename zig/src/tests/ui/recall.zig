@@ -80,6 +80,27 @@ test "history clearing cards and clear history forget icons too" {
     try t.expect(f.tester.hasText("0 pages"));
 }
 
+test "history's foot fades between the count and the clearing cards" {
+    var f: Fixture = undefined;
+    try start(&f);
+    defer f.deinit();
+    f.kea.history.record("https://kea.example/", "Kea");
+    app.sheet.show(f.browser, .recalling);
+    f.tester.settle(1);
+    try f.tester.clickText("Clear…");
+    f.tester.advance(0.05);
+    // Mid-way, both: the count leaving where it stood, the cards arriving.
+    try t.expect(f.browser.recall.clearing);
+    try t.expect(f.tester.hasText("Clear…") and f.tester.hasText("Sign out of everything"));
+    f.tester.settle(1);
+    try t.expect(!f.tester.hasText("Clear…"));
+    try f.tester.clickText("Back");
+    f.tester.advance(0.05);
+    try t.expect(f.tester.hasText("Clear…") and f.tester.hasText("Sign out of everything"));
+    f.tester.settle(1);
+    try t.expect(!f.tester.hasText("Sign out of everything"));
+}
+
 test "downloads panel lists a seeded Loot row and its actions call through" {
     var f: Fixture = undefined;
     try start(&f);

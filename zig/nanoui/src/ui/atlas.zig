@@ -5,6 +5,7 @@ const std = @import("std");
 const objc = @import("../objc.zig");
 const cf = @import("cf.zig");
 const types = @import("types.zig");
+const turn = @import("turn.zig");
 
 extern "c" fn CTFontGetBoundingRectsForGlyphs(font: cf.CTFontRef, orientation: u32, glyphs: [*]const u16, rects: ?[*]objc.CGRect, count: cf.CFIndex) objc.CGRect;
 extern "c" fn CTFontDrawGlyphs(font: cf.CTFontRef, glyphs: [*]const u16, positions: [*]const objc.CGPoint, count: usize, ctx: cf.CGContextRef) void;
@@ -29,7 +30,7 @@ pub const Sprite = struct {
 };
 
 const Key = struct { font: u16, glyph: u16, bin: u8 };
-const SymbolKey = struct { name: u64, size_bits: u32, weight: u8 };
+const SymbolKey = struct { name: u64, size_bits: u32, weight: u8, step: u8 };
 
 pub const Atlas = struct {
     gpa: std.mem.Allocator,
@@ -158,15 +159,16 @@ pub const Atlas = struct {
 
     /// The SF Symbol `name` at `point_size` and `weight` (0 regular … 3
     /// bold), as a mask: `x`, `y` are 0 and `w`, `h` its size in points.
-    pub fn symbol(a: *Atlas, name: []const u8, point_size: f32, weight: u8) ?Sprite {
-        const key: SymbolKey = .{ .name = std.hash.Wyhash.hash(0, name), .size_bits = @bitCast(point_size), .weight = weight };
+    /// Turned clockwise by `step` (`turn.zig`), it is the square it turns in.
+    pub fn symbol(a: *Atlas, name: []const u8, point_size: f32, weight: u8, step: u8) ?Sprite {
+        const key: SymbolKey = .{ .name = std.hash.Wyhash.hash(0, name), .size_bits = @bitCast(point_size), .weight = weight, .step = step };
         if (a.symbols.get(key)) |sp| return sp;
-        const sp = a.rasterizeSymbol(name, point_size, weight);
+        const sp = a.rasterizeSymbol(name, point_size, weight, step);
         a.symbols.put(a.gpa, key, sp) catch {};
         return sp;
     }
 
-    fn rasterizeSymbol(a: *Atlas, name: []const u8, point_size: f32, weight: u8) ?Sprite {
+    fn rasterizeSymbol(a: *Atlas, name: []const u8, point_size: f32, weight: u8, step: u8) ?Sprite {
         const pool = objc.Pool.push();
         defer pool.pop();
         const base = objc.msg(?objc.Object, objc.class("NSImage"), "imageWithSystemSymbolName:accessibilityDescription:", .{
@@ -185,29 +187,39 @@ pub const Atlas = struct {
         const h: u32 = @intFromFloat(@ceil(sz.height * scale));
         if (w + 2 * pad > max_size or h + 2 * pad > max_size) return null;
         const rect: objc.CGRect = .{ .origin = .{ .x = pad, .y = pad }, .size = .{ .width = @floatFromInt(w), .height = @floatFromInt(h) } };
-        const bw = w + 2 * pad;
-        const bh = h + 2 * pad;
-        const origin = a.allocate(bw, bh) orelse blk: {
-            a.makeRoom();
-            break :blk a.allocate(bw, bh) orelse return null;
-        };
+        const dw = w + 2 * pad;
+        const dh = h + 2 * pad;
+        const turned = step != 0;
+        const bw = if (turned) turn.side(dw, dh) else dw;
+        const bh = if (turned) bw else dh;
+        if (bw > max_size) return null;
         // AppKit draws the symbol, into color (it can't into a mask), and
         // the mask keeps its coverage: the symbol's CGImage holds only the
         // strokes' outlines on recent macOS.
-        const rgba = a.gpa.alloc(u8, bw * bh * 4) catch return null;
+        const rgba = a.gpa.alloc(u8, dw * dh * 4) catch return null;
         defer a.gpa.free(rgba);
         @memset(rgba, 0);
         const space = cf.CGColorSpaceCreateWithName(cf.kCGColorSpaceSRGB) orelse return null;
         defer cf.CGColorSpaceRelease(space);
-        const ctx = cf.CGBitmapContextCreate(rgba.ptr, bw, bh, 8, bw * 4, space, 2 | (2 << 12)) orelse return null;
+        const ctx = cf.CGBitmapContextCreate(rgba.ptr, dw, dh, 8, dw * 4, space, 2 | (2 << 12)) orelse return null;
         defer cf.CGContextRelease(ctx);
         const gc = objc.msg(objc.Object, objc.class("NSGraphicsContext"), "graphicsContextWithCGContext:flipped:", .{ @as(*anyopaque, ctx), objc.NO });
         objc.msg(void, objc.class("NSGraphicsContext"), "saveGraphicsState", .{});
         objc.msg(void, objc.class("NSGraphicsContext"), "setCurrentContext:", .{gc});
         objc.msg(void, img, "drawInRect:fromRect:operation:fraction:", .{ rect, objc.CGRect{}, @as(objc.NSUInteger, 2), @as(f64, 1) });
         objc.msg(void, objc.class("NSGraphicsContext"), "restoreGraphicsState", .{});
-        a.pixels.resize(a.gpa, bw * bh) catch return null;
+        a.pixels.resize(a.gpa, dw * dh) catch return null;
         for (a.pixels.items, 0..) |*m, i| m.* = rgba[i * 4 + 3];
+        if (turned) {
+            const flat = a.gpa.dupe(u8, a.pixels.items) catch return null;
+            defer a.gpa.free(flat);
+            a.pixels.resize(a.gpa, bw * bh) catch return null;
+            turn.turned(flat, dw, dh, step, a.pixels.items, bw);
+        }
+        const origin = a.allocate(bw, bh) orelse blk: {
+            a.makeRoom();
+            break :blk a.allocate(bw, bh) orelse return null;
+        };
         a.upload(origin, bw, bh);
         const as: f32 = @floatFromInt(a.size);
         const p: f32 = @as(f32, pad) / scale;

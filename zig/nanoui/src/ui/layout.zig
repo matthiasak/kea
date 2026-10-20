@@ -53,11 +53,11 @@ pub fn measure(c: *Context, index: u32, avail_w: f32) types.Size {
                 content.w = @ceil(w);
                 content.h = lh;
                 // Cut to fit (`truncate.zig`): a row may shrink it.
-                flexible = t.style.truncate;
+                flexible = t.style.cuts();
             }
         },
         .icon => |ic| {
-            if (c.text.atlas.symbol(ic.name, ic.size, @intFromEnum(ic.weight))) |sp| {
+            if (c.text.atlas.symbol(ic.name, ic.size, @intFromEnum(ic.weight), 0)) |sp| {
                 content = .{ .w = sp.w + 2 * sp.x, .h = sp.h + 2 * sp.y };
             } else content = .{ .w = ic.size, .h = ic.size };
         },
@@ -101,7 +101,7 @@ pub fn measure(c: *Context, index: u32, avail_w: f32) types.Size {
     if (st.width == .px) size.w = st.width.px;
     if (st.height == .px) size.h = st.height.px;
     // Truncating text is no wider than the room it is given.
-    if (n.content == .text and n.content.text.style.truncate) size.w = @min(size.w, box_w);
+    if (n.content == .text and n.content.text.style.cuts()) size.w = @min(size.w, box_w);
     size.w = std.math.clamp(size.w, st.min_width, @max(st.min_width, st.max_width));
     size.h = std.math.clamp(size.h, st.min_height, @max(st.min_height, st.max_height));
     c.node(index).measured = size;
@@ -114,10 +114,17 @@ pub fn arrange(c: *Context, index: u32, rect_in: types.Rect) void {
     const n = c.node(index);
     const st = n.style;
     var rect = rect_in;
+    // Where its parent puts it, its ancestors' moves aside: moved since the
+    // last layout, a `settle_y` box springs there from where it was shown.
+    const carried = c.motion.carried;
+    defer c.motion.carried = carried;
+    var dy = st.offset.y;
+    if (st.settle_y) |s| dy += @import("motion.zig").settleY(c, n.id, rect_in.y - carried, s);
+    c.motion.carried = carried + dy;
     rect.x += st.offset.x;
-    rect.y += st.offset.y;
+    rect.y += dy;
     n.rect = rect;
-    if (n.content == .text and n.content.text.style.truncate) truncate.fit(c, index, rect.w);
+    if (n.content == .text and n.content.text.style.cuts()) truncate.fit(c, index, rect.w);
     if (n.content == .text and n.content.text.style.max_lines > 0) truncate.fitLines(c, index, rect.w);
     if (n.first_child == none) return;
 
@@ -210,6 +217,8 @@ pub fn arrange(c: *Context, index: u32, rect_in: types.Rect) void {
         }
     }
 
+    // Scrolling moves the children without moving their places.
+    c.motion.carried -= scroll_y;
     child = n.first_child;
     while (child != none) : (child = c.node(child).next) {
         const ch = c.node(child);

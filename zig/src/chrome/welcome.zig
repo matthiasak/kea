@@ -50,24 +50,28 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette) void {
         c.cursor = .arrow;
     }
     ui.spacer(c);
-    ui.column(c, .{ .width = .fill, .max_width = 520 });
+    const holder = c.open(.{ .width = .fill, .max_width = 520 }, null);
+    const room = c.rects.get(c.node(holder).id);
     for (0..pages) |n| {
         const i: u8 = @intCast(n);
         const at = presence.presence(c, panel_id +% 1 +% n, i == s.page, motion.glide, null) orelse continue;
         // In from the side it moves toward, out to the other.
         const from: f32 = if (s.forward) 40 else -40;
         const x = if (i == s.page) (1 - at) * from else (1 - at) * -from;
-        ui.key(c, c.print("welcome.{d}", .{n}));
-        ui.column(c, .{ .width = .fill, .absolute = i != s.page, .offset = .{ .x = x }, .opacity = std.math.clamp(at, 0, 1) });
+        const page = c.open(.{ .width = .fill, .absolute = i != s.page, .offset = .{ .x = x }, .opacity = std.math.clamp(at, 0, 1) }, c.print("welcome.{d}", .{n}));
+        // A page leaving stands centred where the pages stand, as in a ZStack.
+        if (i != s.page) if (room) |r| if (c.rects.get(c.node(page).id)) |own| {
+            c.node(page).style.offset.y = (r.h - own.h) / 2;
+        };
         switch (i) {
             0 => welcome(c, p),
             1 => bring(b, c, p),
             2 => hold(b, c, p),
             else => linksPage(b, c, p),
         }
-        ui.end(c);
+        c.end();
     }
-    ui.end(c);
+    c.end();
     ui.spacer(c);
     foot(b, c, p);
 }
@@ -248,14 +252,13 @@ fn linksPage(b: *Browser, c: *ui.Context, p: *const Palette) void {
 
     ui.column(c, .{ .gap = 8 });
     ui.row(c, .{ .padding = .{ .top = 6 } });
-    // ponytail: no 0.6 tracking; nanoui text has no letter spacing.
-    ui.text(c, "A FEW THINGS WORTH KNOWING", .{ .size = 11, .weight = .medium, .color = p.muted });
+    ui.text(c, "A FEW THINGS WORTH KNOWING", .{ .size = 11, .weight = .medium, .color = p.muted, .tracking = 0.6 });
     ui.end(c);
     for (keys) |k| {
         ui.row(c, .{ .gap = 10, .align_items = .center });
         ui.row(c, .{ .min_width = 44, .justify = .center });
         ui.row(c, .{ .padding = .xy(7, 3), .radius = 6, .background = p.wash });
-        ui.text(c, k[0], .{ .size = 12, .weight = .medium, .color = p.ink });
+        ui.text(c, k[0], .{ .size = 12, .weight = .medium, .color = p.ink, .rounded = true });
         ui.end(c);
         ui.end(c);
         ui.text(c, k[1], .{ .size = 13, .color = p.muted });

@@ -7,6 +7,7 @@
 const std = @import("std");
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
+const objc = nanoui.objc;
 const MenuItem = nanoui.MenuItem;
 const Browser = @import("../model/browser.zig").Browser;
 const TabSplit = @import("../model/split.zig").TabSplit;
@@ -29,11 +30,11 @@ pub const State = struct {
     /// The first page's share while the divider is held; null otherwise.
     live: ?f64 = null,
     snapped: bool = false,
-    /// The press: the pointer's x, and the left page's width then.
+    /// The press: the pointer's x, and the stage's left edge (window x).
     origin_x: f32 = 0,
     /// Left the press point since the press: from then on every x counts.
     moved: bool = false,
-    origin_left: f32 = 0,
+    stage_x: f32 = 0,
     /// When the pointer came to rest over it (`c.time`).
     over_since: ?f64 = null,
     /// Just let go of: the pair then told of it is no move to show.
@@ -78,7 +79,7 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette, s: TabSplit, left: f
     const rested = if (st.over_since) |t0| c.time - t0 >= 0.1 else false;
     if (st.over_since) |t0| if (!rested) c.frameIn(@floatCast(0.1 - (c.time - t0)));
     const lit = rested or st.live != null;
-    const w = ui.tween(c, it.id, 0, if (lit) 3 else 1, motion.quick_duration, .linear);
+    const w = ui.tween(c, it.id, 0, if (lit) 3 else 1, motion.quick_duration, ca_default);
     if (it.hovered or st.live != null) c.cursor = .resize_left_right;
     _ = c.leaf(.{ .width = .{ .px = w }, .height = .fill, .radius = w / 2, .background = p.faint.mix(p.muted, (w - 1) / 2) }, .none, null);
 
@@ -93,13 +94,16 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette, s: TabSplit, left: f
         st.snapped = @abs(s.fraction() - 0.5) < 0.0001;
         st.origin_x = c.input.mouse.x;
         st.moved = false;
-        st.origin_left = left;
+        st.stage_x = if (it.rect) |rr| rr.x - left else 0;
     }
     const held = st.live orelse return;
     if (c.input.down) {
         if (!st.moved and c.input.mouse.x == st.origin_x) return;
         st.moved = true;
-        const at = follow(st, st.origin_left + (c.input.mouse.x - st.origin_x), room);
+        const was_snapped = st.snapped;
+        // The gutter centred on the pointer (`clampLeft(x - gutter / 2)`).
+        const at = follow(st, c.input.mouse.x - st.stage_x - gutter / 2, room);
+        if (st.snapped and !was_snapped) haptic();
         if (room > 0) st.live = at / room;
         if (st.live.? != held) c.changed = true;
         return;
@@ -108,6 +112,16 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette, s: TabSplit, left: f
     st.live = null;
     st.dragged = true;
     b.setSplitFraction(s.id, held);
+}
+
+/// CATransaction's default timing (`kCAMediaTimingFunctionDefault`), as
+/// `light(_:)`'s implicit animation takes it.
+const ca_default: ui.Curve = .{ .bezier = .{ 0.25, 0.1, 0.25, 1 } };
+
+/// Settling on even: the trackpad's `.alignment` tick, `.now`.
+fn haptic() void {
+    const performer = objc.msg(objc.Object, objc.class("NSHapticFeedbackManager"), "defaultPerformer", .{});
+    objc.msg(void, performer, "performFeedbackPattern:performanceTime:", .{ @as(objc.NSInteger, 1), @as(objc.NSUInteger, 1) });
 }
 
 const Pick = struct {

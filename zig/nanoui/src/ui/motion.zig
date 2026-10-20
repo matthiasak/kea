@@ -7,7 +7,7 @@
 const std = @import("std");
 const Context = @import("context.zig").Context;
 
-pub const Spring = struct { response: f32, damping: f32 };
+pub const Spring = @import("types.zig").Spring;
 
 pub const Curve = union(enum) {
     ease_out,
@@ -32,6 +32,9 @@ const Entry = struct {
 
 pub const State = struct {
     entries: std.AutoHashMapUnmanaged(u64, Entry) = .empty,
+    /// While laying out: how far the ancestors of the box being placed
+    /// were moved (offsets, springs, scrolling), for `settleY`.
+    carried: f32 = 0,
 
     pub fn deinit(s: *State, gpa: std.mem.Allocator) void {
         s.entries.deinit(gpa);
@@ -147,4 +150,48 @@ fn bezierAt(a: f32, b: f32, t: f32) f32 {
 fn bezierSlope(a: f32, b: f32, t: f32) f32 {
     const u = 1 - t;
     return 3 * u * u * a + 6 * u * t * (b - a) + 3 * t * t * (1 - b);
+}
+
+const salt_place: u32 = 0x706c_6163;
+const salt_moved: u32 = 0x6d6f_7665;
+
+/// How far box `id` is shown from `natural`, its place down its parent in
+/// this layout: moved since the last, it starts from where it was shown
+/// and springs to it (`Style.settle_y`).
+pub fn settleY(c: *Context, id: u64, natural: f32, s: Spring) f32 {
+    const place = entry(c, id, salt_place, natural, natural) orelse return 0;
+    const was = place.value;
+    place.value = natural;
+    const off = entry(c, id, salt_moved, 0, 0) orelse return 0;
+    off.value += was - natural;
+    return springFrom(c, id, salt_moved, 0, 0, s);
+}
+
+/// 1 once `watched` changes and `hold` seconds after, then down to 0 over
+/// `fade`: what shows only while something moves (an overlay scroller).
+pub fn flash(c: *Context, id: u64, salt: u32, watched: f32, hold: f32, fade: f32) f32 {
+    // Kept under Reduce Motion too: the scroller still shows, as macOS's does.
+    const gop = c.motion.entries.getOrPut(c.gpa, keyOf(id, salt)) catch return 0;
+    if (!gop.found_existing) gop.value_ptr.* = .{ .value = 0, .target = watched, .stepped = c.frame, .used = c.frame };
+    gop.value_ptr.used = c.frame;
+    const e = gop.value_ptr;
+    // `from`: when it last moved, in the context's clock.
+    if (watched != e.target) {
+        e.target = watched;
+        e.from = @floatCast(c.time);
+        e.value = 1;
+    }
+    if (e.value == 0) return 0;
+    const elapsed = @as(f32, @floatCast(c.time)) - e.from;
+    if (elapsed < hold) {
+        c.frameIn(hold - elapsed);
+        return 1;
+    }
+    const v = 1 - (elapsed - hold) / fade;
+    if (v <= 0) {
+        e.value = 0;
+        return 0;
+    }
+    c.animating = true;
+    return v;
 }

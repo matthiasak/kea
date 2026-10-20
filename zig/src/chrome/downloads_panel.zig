@@ -162,7 +162,7 @@ fn fetchRow(c: *ui.Context, p: *const Palette, e: *Entry) Act {
     ui.icon(c, icon(e), .{ .size = 14, .color = p.muted });
     ui.end(c);
     ui.column(c, .{ .gap = 4, .grow = 1, .min_width = 0 });
-    ui.text(c, e.label(), .{ .size = 13, .color = p.ink, .truncate = true });
+    ui.text(c, e.label(), .{ .size = 13, .color = p.ink, .truncate_middle = true });
     ui.row(c, .{ .gap = 7, .align_items = .center, .width = .fill });
     if (e.fraction) |fraction| {
         // Grey, as the ring in the chrome is.
@@ -171,7 +171,7 @@ fn fetchRow(c: *ui.Context, p: *const Palette, e: *Entry) Act {
         ui.end(c);
     }
     ui.column(c, .{ .grow = 1, .min_width = 0 });
-    ui.text(c, c.print("{s} · {s}", .{ stateLabel(e), bytes(c, e) }), .{ .size = 11.5, .color = p.muted, .tabular = true, .truncate = true });
+    ui.text(c, c.print("{s} · {s}", .{ stateLabel(e), bytes(c, e) }), .{ .size = 11.5, .color = p.muted, .tabular = true, .truncate_middle = true });
     ui.end(c);
     ui.end(c);
     if (e.state == .failed) {
@@ -190,7 +190,11 @@ fn fetchRow(c: *ui.Context, p: *const Palette, e: *Entry) Act {
             if (plate.quick(c, p, "Cancel", null).clicked) return .{ .cancel = id };
         },
         .pausing, .resuming => {
-            _ = plate.quick(c, p, stateLabel(e), p.ink.alpha(0.4));
+            // `.disabled(true)` on a plain button: the whole of it at half
+            // opacity (measured off SwiftUI: text and wash both ×0.5).
+            ui.column(c, .{ .opacity = 0.5 });
+            _ = plate.quick(c, p, stateLabel(e), null);
+            ui.end(c);
             if (plate.quick(c, p, "Cancel", null).clicked) return .{ .cancel = id };
         },
         .paused => {
@@ -230,7 +234,7 @@ fn keptRow(c: *ui.Context, p: *const Palette, k: Keep) Act {
     ui.icon(c, if (there) "doc" else "doc.badge.ellipsis", .{ .size = 13, .color = if (there) p.muted else p.faint });
     ui.end(c);
     ui.column(c, .{ .gap = 2, .grow = 1, .min_width = 0 });
-    ui.text(c, k.name, .{ .size = 13, .color = if (there) p.ink else p.faint, .truncate = true });
+    ui.text(c, k.name, .{ .size = 13, .color = if (there) p.ink else p.faint, .truncate_middle = true });
     const ago = when.said(c.alloc(), k.date);
     ui.text(c, if (k.from.len == 0) ago else c.print("{s} · {s}", .{ k.from, ago }), .{ .size = 11.5, .color = p.muted, .truncate = true });
     ui.end(c);

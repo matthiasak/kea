@@ -112,6 +112,9 @@ pub const HostPipe = struct {
     owner: *anyopaque,
     on_message: *const fn (owner: *anyopaque, message: objc.Object) void,
     on_exit: *const fn (owner: *anyopaque) void,
+    /// The process itself gone, after `on_exit`, just before the pipe is
+    /// let go: a host may close its output and run on.
+    on_gone: ?*const fn (owner: *anyopaque) void = null,
 
     /// Runs `program` with `origin` as its one argument.
     pub fn start(gpa: std.mem.Allocator, program: []const u8, origin: []const u8, owner: *anyopaque, on_message: *const fn (*anyopaque, objc.Object) void, on_exit: *const fn (*anyopaque) void) !*HostPipe {
@@ -178,7 +181,7 @@ pub const HostPipe = struct {
         if (!self.exited) _ = kill(self.pid, SIGTERM);
     }
 
-    pub fn send(self: *HostPipe, message: objc.Object) error{ TooLong, Exited }!void {
+    pub fn send(self: *HostPipe, message: objc.Object) error{ TooLong, Exited, Unsaved }!void {
         const pool = objc.Pool.push();
         defer pool.pop();
         const body = encode(message) orelse return error.Exited;
@@ -190,7 +193,7 @@ pub const HostPipe = struct {
             const n = write(self.input, bytes[done..].ptr, bytes.len - done);
             if (n < 0) {
                 if (__error().* == EINTR) continue;
-                return error.Exited;
+                return error.Unsaved;
             }
             done += @intCast(n);
         }
@@ -255,6 +258,7 @@ pub const HostPipe = struct {
         _ = close(self.input);
         _ = close(self.output);
         self.frames.deinit(self.gpa);
+        if (self.on_gone) |f| f(self.owner);
         self.gpa.destroy(self);
     }
 };
@@ -293,4 +297,22 @@ test "native messaging frames round-trip" {
         try std.testing.expectEqual(@as(i64, 2), back.value.object.get("n").?.array.items[1].integer);
         try std.testing.expectEqualStrings("\"plain\"", got.items[1]);
     }
+}
+
+extern "c" fn usleep(us: c_uint) c_int;
+
+test "a write to a host that has gone fails as unsaved, not a signal" {
+    const Quiet = struct {
+        fn heard(_: *anyopaque, _: objc.Object) void {}
+        fn ended(_: *anyopaque) void {}
+    };
+    var owner: u8 = 0;
+    // Its exit is heard on the main queue, which no one runs here: the
+    // pipe stays put (and is left behind, on c_allocator).
+    const p = try HostPipe.start(std.heap.c_allocator, "/usr/bin/true", "chrome-extension://x/", &owner, Quiet.heard, Quiet.ended);
+    _ = usleep(300_000);
+    const pool = objc.Pool.push();
+    defer pool.pop();
+    try std.testing.expectError(error.Unsaved, p.send(objc.nsString("hi")));
+    p.stop();
 }

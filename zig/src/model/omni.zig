@@ -126,6 +126,7 @@ pub fn landSummon(self: *Browser) void {
 
 /// ⌘K. Only what is open, nothing else.
 pub fn summon(self: *Browser) void {
+    @import("../chrome/hidden_panel.zig").setReviewing(self, false);
     self.cancelTabEdit();
     self.summoning = true;
     self.setTyped("");

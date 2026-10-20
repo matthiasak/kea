@@ -123,10 +123,18 @@ fn siteOfferRow(b: *Browser, c: *ui.Context, p: *const Palette, site: SearchSite
 }
 
 /// The site Tab put in the field: its icon and name before what is typed.
-// ponytail: arrives and leaves at once; Swift scales it in from .9 on Motion.quick.
+/// It arrives scaled from .9 at its leading edge and fading in, on
+/// `Motion.quick`. ponytail: it leaves at once (the chip is gone with it).
 pub fn siteChip(b: *Browser, c: *ui.Context, p: *const Palette, site: SearchSite) void {
     const i = c.open(.{ .direction = .row, .gap = 6, .padding = .xy(8, 0), .height = px(22), .radius = 7, .background = p.wash, .align_items = .center }, "omni-site-chip");
     defer c.end();
+    // New this frame (not drawn last frame): from nothing, as split_stage's panes.
+    const id = c.node(i).id;
+    if (c.rects.get(id) == null) _ = ui.tween(c, id, 0x6368, 0, 0, .linear);
+    const t = ui.tween(c, id, 0x6368, 1, motion.quick_duration, motion.quick_curve);
+    c.node(i).style.scale = 0.9 + 0.1 * t;
+    c.node(i).style.scale_anchor = .{ .x = 0, .y = 0.5 };
+    c.node(i).style.opacity = t;
     c.addA11y(i, .image, c.print("Searching {s}", .{site.name}), "", false, false);
     siteIcon(b, c, p, site);
     ui.text(c, site.name, .{ .size = 13, .weight = .medium, .color = p.ink });

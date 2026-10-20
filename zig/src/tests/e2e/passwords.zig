@@ -45,6 +45,15 @@ fn submitOffers(h: *Harness) !void {
     try h.expect(b.passwords.offering == null, "still offering", .{});
     const said = b.announcement orelse "";
     try h.expect(std.mem.eql(u8, said, "Password saved for site"), "announced '{s}'", .{said});
-    h.frame();
-    try h.expect(!drew(b, line), "the bar stayed", .{});
+    // It leaves as it was drawn, on Swift's settle (`.move` + opacity).
+    var left = false;
+    for (0..60) |_| {
+        h.frame();
+        if (!drew(b, line)) {
+            left = true;
+            break;
+        }
+        h.pump(0.02);
+    }
+    try h.expect(left, "the bar stayed", .{});
 }

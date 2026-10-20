@@ -97,12 +97,15 @@ pub const IconOptions = struct {
     frame: ?f32 = null,
     weight: types.Weight = .regular,
     color: ?Color = null,
+    /// Turned clockwise about its centre, in radians (SwiftUI's
+    /// `rotationEffect`); laid out as if it were not.
+    rotation: f32 = 0,
 };
 
 /// An SF Symbol: `ui.icon(c, "star.fill", .{ .color = c.theme.accent })`.
 pub fn icon(c: *Context, name: []const u8, opts: IconOptions) void {
     const style: Style = if (opts.frame) |f| .{ .width = .{ .px = f }, .height = .{ .px = f } } else .{};
-    _ = c.leaf(style, .{ .icon = .{ .name = name, .size = opts.size, .weight = opts.weight, .color = opts.color orelse c.theme.text } }, null);
+    _ = c.leaf(style, .{ .icon = .{ .name = name, .size = opts.size, .weight = opts.weight, .color = opts.color orelse c.theme.text, .step = @import("turn.zig").quantize(opts.rotation) } }, null);
 }
 
 pub const ImageOptions = struct {

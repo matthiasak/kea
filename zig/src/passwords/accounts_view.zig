@@ -13,6 +13,7 @@ const Palette = @import("../design/palette.zig").Palette;
 const card = @import("../design/card.zig");
 const motion = @import("../design/motion.zig");
 const overlays = @import("../chrome/overlays.zig");
+const mark_mod = @import("../chrome/mark.zig");
 const relay = @import("form_relay.zig");
 
 pub const key = "kea.accounts";
@@ -63,7 +64,7 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette) void {
         if (row(c, p, .{ .symbol = "person.badge.key" }, pk.name, detail)) picked = .{ .i = n, .passkey = true };
     }
     for (asked.logins, 0..) |l, n| {
-        if (row(c, p, .{ .letter = initial(c, l.user) }, if (l.user.len == 0) "No name" else l.user, l.host)) picked = .{ .i = n, .passkey = false };
+        if (row(c, p, .{ .letter = mark_mod.initial(c, l.user) }, if (l.user.len == 0) "No name" else l.user, l.host)) picked = .{ .i = n, .passkey = false };
     }
     ui.row(c, .{ .width = .fill, .gap = 6, .align_items = .center, .padding = .xy(12, 7), .background = p.wash.alpha(0.5) });
     ui.icon(c, "key", .{ .size = 9, .weight = .medium, .color = p.muted });
@@ -71,16 +72,6 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette) void {
     ui.end(c);
     // Last: a pick takes the list down, and what it drew from.
     if (picked) |pk| relay.pick(b, pk.i, pk.passkey);
-}
-
-/// The name's first letter, capitalised as Swift's `uppercased()` does; "•" for none.
-fn initial(c: *ui.Context, user: []const u8) []const u8 {
-    if (user.len == 0) return "•";
-    const n = @min(user.len, std.unicode.utf8ByteSequenceLength(user[0]) catch 1);
-    const pool = objc.Pool.push();
-    defer pool.pop();
-    const upper = objc.msg(objc.Object, objc.nsString(user[0..n]), "uppercaseString", .{});
-    return c.print("{s}", .{objc.fromNSString(upper)});
 }
 
 const Mark = union(enum) { letter: []const u8, symbol: []const u8 };

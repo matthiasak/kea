@@ -253,7 +253,7 @@ pub fn items(arena: std.mem.Allocator, b: *Browser, tab: *Tab) ![]MenuItem {
     if (tab.pin == null) {
         // Another window, or a new one (Browser.moveToWindow).
         var others: std.ArrayList(*Browser) = .empty;
-        for (b.kea.browsers.items) |o| if (o != b and o.window != null) try others.append(arena, o);
+        for (b.kea.browsers.items) |o| if (o != b and o.window != null and o.ext.popup == null) try others.append(arena, o);
         const lone = b.tabs.items.len < 2;
         if (others.items.len == 0) {
             try out.append(arena, try add.plain("Move to New Window", .new_window, lone));

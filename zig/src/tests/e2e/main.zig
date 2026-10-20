@@ -14,7 +14,7 @@ pub const Case = struct {
     run: *const fn (*Harness) anyerror!void,
 };
 
-const cases = @import("smoke.zig").cases ++ @import("windows.zig").cases ++ @import("favicons.zig").cases ++ @import("web.zig").cases ++ @import("links.zig").cases ++ @import("downloads.zig").cases ++ @import("page_features.zig").cases ++ @import("page_b.zig").cases ++ @import("side_panels.zig").cases ++ @import("peek_switch.zig").cases ++ @import("split.zig").cases ++ @import("find_bar.zig").cases ++ @import("menus.zig").cases ++ @import("chat.zig").cases ++ @import("passwords.zig").cases ++ @import("extensions.zig").cases;
+const cases = @import("smoke.zig").cases ++ @import("windows.zig").cases ++ @import("favicons.zig").cases ++ @import("web.zig").cases ++ @import("links.zig").cases ++ @import("downloads.zig").cases ++ @import("page_features.zig").cases ++ @import("page_b.zig").cases ++ @import("side_panels.zig").cases ++ @import("peek_switch.zig").cases ++ @import("split.zig").cases ++ @import("find_bar.zig").cases ++ @import("menus.zig").cases ++ @import("chat.zig").cases ++ @import("passwords.zig").cases ++ @import("extensions.zig").cases ++ @import("quality.zig").cases;
 
 pub const Harness = struct {
     gpa: std.mem.Allocator,
@@ -124,10 +124,41 @@ pub const Harness = struct {
 
 var ui_app: *nanoui.App = undefined;
 
+/// Every allocation (and growing remap) the cases make on `gpa`, from any
+/// thread: the idle case asks that a frame make none.
+pub var allocations: usize = 0;
+
+const Counting = struct {
+    child: std.mem.Allocator,
+
+    fn allocator(self: *Counting) std.mem.Allocator {
+        return .{ .ptr = self, .vtable = &.{ .alloc = alloc, .resize = resize, .remap = remap, .free = free } };
+    }
+    fn count() void {
+        _ = @atomicRmw(usize, &allocations, .Add, 1, .monotonic);
+    }
+    fn alloc(ctx: *anyopaque, len: usize, a: std.mem.Alignment, ra: usize) ?[*]u8 {
+        count();
+        return @as(*Counting, @ptrCast(@alignCast(ctx))).child.rawAlloc(len, a, ra);
+    }
+    fn resize(ctx: *anyopaque, m: []u8, a: std.mem.Alignment, n: usize, ra: usize) bool {
+        if (n > m.len) count();
+        return @as(*Counting, @ptrCast(@alignCast(ctx))).child.rawResize(m, a, n, ra);
+    }
+    fn remap(ctx: *anyopaque, m: []u8, a: std.mem.Alignment, n: usize, ra: usize) ?[*]u8 {
+        if (n > m.len) count();
+        return @as(*Counting, @ptrCast(@alignCast(ctx))).child.rawRemap(m, a, n, ra);
+    }
+    fn free(ctx: *anyopaque, m: []u8, a: std.mem.Alignment, ra: usize) void {
+        @as(*Counting, @ptrCast(@alignCast(ctx))).child.rawFree(m, a, ra);
+    }
+};
+
 pub fn main(init: std.process.Init) !void {
     // Cases get their own allocator so a leak fails the run, not just prints.
     var dbg: std.heap.DebugAllocator(.{}) = .init;
-    const gpa = dbg.allocator();
+    var counting: Counting = .{ .child = dbg.allocator() };
+    const gpa = counting.allocator();
     ui_app = try nanoui.App.create(init, .{ .name = app.kea.app_name, .quit_on_last_window_closed = false });
     defer ui_app.destroy();
     _ = objc.msg(objc.BOOL, ui_app.nsapp, "setActivationPolicy:", .{@as(objc.NSInteger, 2)});

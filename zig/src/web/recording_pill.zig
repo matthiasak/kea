@@ -162,6 +162,7 @@ fn px(v: f32) ui.Length {
 
 /// A line per extension recording, each with Stop.
 fn view(p: *Pill, c: *ui.Context) void {
+    c.hand_cursor = false;
     if (!p.ready) return;
     const pal = palette.get(c.theme.dark);
     const i = c.open(.{ .direction = .column, .gap = 4, .padding = .{ .left = 14, .right = 7, .top = 7, .bottom = 7 }, .radius = 18, .background = pal.ground, .border = pal.hairline }, pill_key);

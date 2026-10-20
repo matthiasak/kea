@@ -132,6 +132,9 @@ test {
     _ = @import("tests_a11y_adjust.zig");
     _ = @import("tests_shadow_x.zig");
     _ = @import("tests_text_style.zig");
+    _ = @import("tests_text_extras.zig");
+    _ = @import("tests_settle.zig");
+    _ = @import("turn.zig");
     _ = types;
     _ = @import("layout.zig");
     _ = textfield;

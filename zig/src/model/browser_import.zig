@@ -340,11 +340,38 @@ fn readDone(ctx: ?*anyopaque, job: *ReadJob) void {
     }
     if (found.places.items.len > 0 and !f.control.isCancelled()) {
         f.say("Adding history…");
-        // ponytail: one batch, not Swift's 200 at a time with a yield between.
-        for (found.places.items) |place| b.history.take(place.url, place.title, place.count, place.last);
-        f.places = found.places.items.len;
-        b.history.settle();
+        f.completed = 0;
+        f.total = found.places.items.len;
+        return addPlaces(f);
     }
+    afterPlaces(f);
+}
+
+/// 200 places a run-loop turn, as Swift yields between batches: the window
+/// draws, and Cancel is heard, while a long history goes in.
+fn addPlaces(f: *FileImport) void {
+    const b = f.browser orelse return finish(f);
+    const all = (f.read_job.?.output catch unreachable).places.items;
+    if (!f.control.isCancelled() and f.places < all.len) {
+        const end = @min(f.places + 200, all.len);
+        for (all[f.places..end]) |place| b.history.take(place.url, place.title, place.count, place.last);
+        f.places = end;
+        f.completed = end;
+        f.total = all.len;
+        b.redraw();
+        if (end < all.len) return objc.dispatchMain(f, addPlacesLater);
+    }
+    if (f.places > 0) b.history.settle();
+    afterPlaces(f);
+}
+
+fn addPlacesLater(ctx: ?*anyopaque) callconv(.c) void {
+    addPlaces(@ptrCast(@alignCast(ctx.?)));
+}
+
+fn afterPlaces(f: *FileImport) void {
+    const found = f.read_job.?.output catch unreachable;
+    const b = f.browser orelse return finish(f);
     if (found.passwords.items.len > 0 and !f.control.isCancelled()) {
         f.say("Saving passwords…");
         f.completed = 0;

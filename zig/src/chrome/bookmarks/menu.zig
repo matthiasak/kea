@@ -6,6 +6,7 @@
 const std = @import("std");
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
+const objc = nanoui.objc;
 const MenuItem = nanoui.MenuItem;
 const Browser = @import("../../model/browser.zig").Browser;
 const Bookmark = @import("../../data/bookmarks.zig").Bookmark;
@@ -75,6 +76,13 @@ const Open = struct {
     url: []const u8,
 
     fn fire(self: *Open, _: *nanoui.menu.Item) void {
-        self.b.visit(self.url, false);
+        self.b.visit(self.url, commandHeld());
     }
 };
+
+/// `visit` reads the event that picked the item: ⌘ held opens a new tab.
+fn commandHeld() bool {
+    const app = objc.msg(objc.Object, objc.class("NSApplication"), "sharedApplication", .{});
+    const ev = objc.msg(?objc.Object, app, "currentEvent", .{}) orelse return false;
+    return objc.msg(objc.NSUInteger, ev, "modifierFlags", .{}) & (1 << 20) != 0;
+}

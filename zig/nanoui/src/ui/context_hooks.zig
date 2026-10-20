@@ -13,14 +13,30 @@ pub fn focusNext(c: *Context, select_all: bool) void {
     c.focus_select_all = select_all;
 }
 
-/// The tooltip of box `index` (one that interacts), shown while the
-/// pointer rests on it or on a box inside it.
+/// The tooltip of box `index`, shown while the pointer rests on it or on a
+/// box inside it. A box that takes no clicks (a marker icon) shows its own
+/// over that of the clickable box it is drawn in, as AppKit's tooltip
+/// rects do.
 pub fn help(c: *Context, index: u32, s: []const u8) void {
     c.helps.put(c.gpa, c.node(index).id, c.alloc().dupe(u8, s) catch return) catch {};
 }
 
-/// The help of the hot box, or of the nearest box it is in that has one.
+/// The help of the smallest quiet box under the pointer inside the hot
+/// box, else of the hot box, or of the nearest box it is in that has one.
 pub fn hotHelp(c: *const Context) ?[]const u8 {
+    if (c.rects.get(c.hot)) |hot| {
+        var best: ?[]const u8 = null;
+        var area = hot.w * hot.h;
+        var it = c.helps.iterator();
+        while (it.next()) |e| {
+            const r = c.rects.get(e.key_ptr.*) orelse continue;
+            if (e.key_ptr.* == c.hot or !r.contains(c.input.mouse) or r.w * r.h >= area) continue;
+            if (r.x < hot.x or r.y < hot.y or r.x + r.w > hot.x + hot.w or r.y + r.h > hot.y + hot.h) continue;
+            best = e.value_ptr.*;
+            area = r.w * r.h;
+        }
+        if (best) |s| return s;
+    }
     for (c.hot_path.items) |id| if (c.helps.get(id)) |s| return s;
     return null;
 }

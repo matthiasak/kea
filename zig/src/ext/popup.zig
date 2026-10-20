@@ -254,6 +254,7 @@ fn place(self: *Popup) void {
 }
 
 fn view(self: *Popup, c: *ui.Context) void {
+    c.hand_cursor = false;
     if (!self.ready) return;
     const p = palette.get(c.theme.dark);
     if (self.applied == null or !std.meta.eql(self.applied.?, p.ground)) {
@@ -271,8 +272,15 @@ fn view(self: *Popup, c: *ui.Context) void {
 fn reveal(self: *Popup) void {
     if (self.shown) return;
     self.shown = true;
-    objc.msg(void, self.web, "setAlphaValue:", .{@as(f64, 1)});
     if (self.host) |h| h.setPage(self.web, false);
+    // Faded in over 0.12 s, as Swift's `web.animator().alphaValue = 1`
+    // (the stage shows a new page at once: from nothing again).
+    objc.msg(void, self.web, "setAlphaValue:", .{@as(f64, 0)});
+    const ctx = objc.class("NSAnimationContext");
+    objc.msg(void, ctx, "beginGrouping", .{});
+    objc.msg(void, objc.msg(objc.Object, ctx, "currentContext", .{}), "setDuration:", .{@as(f64, 0.12)});
+    objc.msg(void, objc.msg(objc.Object, self.web, "animator", .{}), "setAlphaValue:", .{@as(f64, 1)});
+    objc.msg(void, ctx, "endGrouping", .{});
     if (self.window.surface) |s| s.frame();
 }
 

@@ -14,6 +14,7 @@ const controls = @import("../chrome/controls.zig");
 const plate = @import("../chrome/controls_plate.zig");
 const ring = @import("../chrome/ring.zig");
 const sheet = @import("../chrome/sheet.zig");
+const disclose = @import("../chrome/disclose.zig");
 const tab_menu = @import("../chrome/tab_menu.zig");
 const when = @import("../chrome/when.zig");
 const sources = @import("sources.zig");
@@ -40,6 +41,9 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette) void {
     foot(b, c, p, s);
     pl.end(c);
 }
+
+const options_id: u64 = std.hash.Wyhash.hash(0, "kea.import.options");
+const said_id: u64 = std.hash.Wyhash.hash(0, "kea.import.said");
 
 fn content(b: *Browser, c: *ui.Context, p: *const Palette, s: *Session) void {
     ui.text(c, "Nothing in the other browser changes. Passwords go into your keychain.", .{ .size = 12.5, .color = p.muted, .wrap = true });
@@ -68,7 +72,11 @@ fn content(b: *Browser, c: *ui.Context, p: *const Palette, s: *Session) void {
         ui.end(c);
     }
     notes(c, p, s);
-    if (s.pick) |i| options(b, c, p, s, i);
+    // The picked browser's options arrive under `Motion.settle`, fading in.
+    if (disclose.begin(c, options_id, s.pick != null, motion.settle)) {
+        if (s.pick) |i| options(b, c, p, s, i);
+        disclose.end(c);
+    }
 }
 
 /// One browser to choose, and what it holds (`Row`).
@@ -87,7 +95,7 @@ fn row(c: *ui.Context, p: *const Palette, name: []const u8, detail_text: []const
     }, .none, null);
     ui.column(c, .{ .gap = 2, .grow = 1, .min_width = 0 });
     ui.text(c, name, .{ .size = 13, .color = p.ink });
-    ui.text(c, detail_text, .{ .size = 11.5, .color = p.muted, .tabular = true, .truncate = true });
+    ui.text(c, detail_text, .{ .size = 11.5, .color = p.muted, .tabular = true, .wrap = true });
     ui.end(c);
     return it.clicked;
 }
@@ -227,18 +235,10 @@ fn broughtBefore(a: std.mem.Allocator, r: record.Record) []const u8 {
 
 // MARK: the profile picker
 
-/// The `.menu` picker: the chosen profile and the up-down chevrons; its
-/// menu on a press.
+/// The `.menu` picker, drawn as AppKit's pop-up button; its menu on a press.
 fn profilePicker(b: *Browser, c: *ui.Context, p: *const Palette, s: *Session, i: usize) void {
     const title = profileTitle(c, s, i, s.chosen[i] orelse s.usual[i] orelse "");
-    const box = c.open(.{ .direction = .row, .gap = 6, .padding = .xy(8, 3), .radius = 6, .background = p.ground, .border = p.hairline, .align_items = .center, .control = true }, null);
-    const it = c.interact(box, .{});
-    c.addA11y(box, .menu_button, "Profile", title, false, true);
-    if (it.hovered) c.node(box).style.background = p.hover;
-    ui.text(c, title, .{ .size = 13, .color = p.ink });
-    ui.icon(c, "chevron.up.chevron.down", .{ .size = 9, .weight = .semibold, .color = p.muted });
-    c.end();
-    if (it.clicked and !s.bringing) if (it.rect) |r| tab_menu.later(b, .{ .x = r.x, .y = r.y + r.h + 4 }, i, profileMenu);
+    if (controls.popUpButton(c, p, "Profile", title)) |at| if (!s.bringing) tab_menu.later(b, at, i, profileMenu);
 }
 
 fn profileTitle(c: *ui.Context, s: *Session, i: usize, id: []const u8) []const u8 {
@@ -294,7 +294,9 @@ fn profileMenu(arena: std.mem.Allocator, b: *Browser, i: u64) anyerror![]const M
 fn foot(b: *Browser, c: *ui.Context, p: *const Palette, s: *Session) void {
     ui.column(c, .{ .gap = 10, .width = .fill });
     defer ui.end(c);
-    if (s.brought) {
+    // What came over fades in (`.transition(.opacity)`), the foot settling.
+    if (disclose.begin(c, said_id, s.brought, motion.settle)) {
+        defer disclose.end(c);
         ui.column(c, .{ .gap = 5, .width = .fill });
         for (s.said) |maybe| if (maybe) |said| {
             ui.row(c, .{ .gap = 8, .width = .fill });
@@ -308,14 +310,20 @@ fn foot(b: *Browser, c: *ui.Context, p: *const Palette, s: *Session) void {
     ui.row(c, .{ .gap = 8, .width = .fill, .align_items = .center });
     defer ui.end(c);
     if (s.brought) {
-        if (controls.pill(c, p, "Show bookmarks", .{}).clicked) sheet.show(b, .bookmarking);
+        if (controls.pill(c, p, "Show bookmarks", .{}).clicked) {
+            sheet.close(b, .bringing);
+            sheet.show(b, .bookmarking);
+        }
         // Bookmarks having just arrived is the one moment the bar is worth offering.
         if (s.marks_landed and !b.prefs.bookmarks_bar) if (controls.pill(c, p, "Show the bookmarks bar", .{}).clicked) {
             b.prefs.set("bookmarks_bar", true);
             sheet.close(b, .bringing);
         };
         if (comptime @hasField(sheet.Kind, "managing")) {
-            if (controls.pill(c, p, "Show passwords", .{}).clicked) sheet.show(b, .managing);
+            if (controls.pill(c, p, "Show passwords", .{}).clicked) {
+                sheet.close(b, .bringing);
+                sheet.show(b, .managing);
+            }
         }
     } else if (s.pick) |i| {
         const pv = s.preview(i);

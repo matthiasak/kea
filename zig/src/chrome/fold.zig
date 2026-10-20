@@ -63,6 +63,8 @@ pub const State = struct {
     /// An address was being typed into a tab last frame: done with, and
     /// the pointer elsewhere, the column goes the way it would have.
     editing: bool = false,
+    /// The bookmarks list was open last frame (`bookmarksOpen`): the same.
+    marks: bool = false,
 };
 
 /// ⌘S: the column, or the strip, out of the way or back.
@@ -74,7 +76,13 @@ pub fn toggleFold(b: *Browser) void {
 
 /// Folded, and not taken over by a page filling the screen.
 fn folding(b: *const Browser) bool {
-    return b.folded;
+    return b.folded and !immersed(b);
+}
+
+/// `browser.active?.immersed == true`.
+fn immersed(b: *const Browser) bool {
+    for (b.tabs.items) |t| if (t.id == b.active_id) return t.immersed;
+    return false;
 }
 
 fn onRight(b: *const Browser) bool {
@@ -124,12 +132,15 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette) void {
     const editing = b.editing_tab != null;
     if (st.editing and !editing and !st.inside and b.peeking) peek(b, false);
     st.editing = editing;
+    const marks = if (b.overlay) |o| o == .bookmarks_dropdown or o == .bookmark_card else false;
+    if (st.marks and !marks and !st.inside and b.peeking) peek(b, false);
+    st.marks = marks;
     watch(b);
     hideLights(b, c.reduce_motion);
 
     const side = b.prefs.sidebar;
     // The band too thin to be in a page's way that stands in for the title bar.
-    if (side or folding(b)) lights.dragStrip(b, c, .{ .absolute = true, .width = .fill, .height = px(top) }, .zoom);
+    if ((side or folding(b)) and !immersed(b)) lights.dragStrip(b, c, .{ .absolute = true, .width = .fill, .height = px(top) }, .zoom);
 
     const id = std.hash.Wyhash.hash(0, "kea.fold");
     const right = onRight(b);
@@ -137,12 +148,12 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette) void {
         const w = b.prefs.side_width;
         const t = presence(c, id, folding(b) and b.peeking, motion.glide, motion.glide) orelse return;
         const at = if (right) c.size.w - w + (1 - t) * w else -(1 - t) * w;
-        castShadow(c, p, .{ .x = at, .y = 0, .w = w, .h = c.size.h }, t, 0);
+        castShadow(c, p, .{ .x = at, .y = 0, .w = w, .h = c.size.h }, t, if (right) -4 else 4, 0);
         side_bar.sideBar(b, c, p, true, at);
     } else {
         const t = presence(c, id ^ 1, folding(b) and b.peeking, motion.glide, motion.glide) orelse return;
         const y = -(1 - t) * metrics.strip;
-        castShadow(c, p, .{ .x = 0, .y = y, .w = c.size.w, .h = metrics.strip }, t, 4);
+        castShadow(c, p, .{ .x = 0, .y = y, .w = c.size.w, .h = metrics.strip }, t, 0, 4);
         // The row has no ground of its own: out over the page it brings the window's.
         _ = c.open(.{ .absolute = true, .offset = .{ .y = y }, .width = .fill, .height = px(metrics.strip), .background = p.ground }, "fold-strip");
         tab_bar.tabBar(b, c, p);
@@ -152,15 +163,14 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette) void {
 
 /// `FoldShadow`: cast from a ground laid behind, full while out, nothing
 /// once gone.
-// ponytail: nanoui shadows have no x offset; the column's ±4 pt lean is dropped.
-fn castShadow(c: *ui.Context, p: *const Palette, r: ui.Rect, strength: f32, y: f32) void {
+fn castShadow(c: *ui.Context, p: *const Palette, r: ui.Rect, strength: f32, x: f32, y: f32) void {
     _ = c.leaf(.{
         .absolute = true,
         .offset = .{ .x = r.x, .y = r.y },
         .width = px(r.w),
         .height = px(r.h),
         .background = p.ground,
-        .shadow = .{ .color = ui.Color.black.alpha(0.14 * std.math.clamp(strength, 0, 1)), .blur = 40, .y = y },
+        .shadow = .{ .color = ui.Color.black.alpha(0.14 * std.math.clamp(strength, 0, 1)), .blur = 40, .x = x, .y = y },
     }, .none, null);
 }
 

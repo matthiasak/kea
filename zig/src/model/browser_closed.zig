@@ -98,8 +98,10 @@ pub fn close(self: *Browser, tab: *Tab) void {
     self.redraw();
 }
 
-/// ⌘W: what is in front — the sheet up, else the tab (`closeFront`).
+/// ⌘W: what is in front — a Peek, else the sheet up, else the tab
+/// (`Browser.swift` `close()`).
 pub fn closeFront(self: *Browser) void {
+    if (self.peek_tab != null) return self.closePeek();
     if (@import("../chrome/sheet.zig").closePanel(self)) return;
     if (self.activeTab()) |t| self.close(t);
 }

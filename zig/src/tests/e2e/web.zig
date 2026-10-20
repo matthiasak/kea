@@ -82,11 +82,17 @@ fn pushState(h: *Harness) !void {
     h.waitFor(t, pushed, 2, "the pushed address") catch return h.fail("url is '{s}'", .{t.url()});
 }
 
+fn helloTitled(t: *app.Tab) bool {
+    return std.mem.eql(u8, t.page_title, "Hello Fixture");
+}
+
 fn progressDone(h: *Harness) !void {
     const b = try h.start();
     const t = try open(h, b, "kea-test://site/f/hello.html");
     try h.expect(t.progress == 1 and !t.loading and !t.isBlank(), "progress {d}, loading {}", .{ t.progress, t.loading });
-    try h.expect(std.mem.eql(u8, t.title(), "Hello Fixture"), "title '{s}'", .{t.title()});
+    // WebKit tells the title in its own turn, which may come after the load
+    // ends (a loaded machine shows it).
+    h.waitFor(t, helloTitled, 5, "the title") catch return h.fail("title '{s}'", .{t.title()});
 }
 
 // MARK: questions

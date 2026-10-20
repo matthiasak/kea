@@ -193,8 +193,13 @@ fn titledContent(b: *Browser, c: *ui.Context, p: *const Palette, tab: *Tab, colo
     }
     // Quiet, and only on the tabs that keep nothing.
     if (tab.shy) ui.icon(c, "eye.slash", .{ .size = 9, .color = colour.alpha(0.7) });
-    // An extension recording from this page (RecordingIndicator).
-    if (tab.recording) ui.icon(c, "record.circle", .{ .size = 10, .color = colour.alpha(0.8) });
+    // An extension recording from this page (RecordingIndicator), saying so.
+    if (tab.recording) {
+        const dot = c.open(.{}, null);
+        c.help(dot, "Recording");
+        ui.icon(c, "record.circle", .{ .size = 10, .color = colour.alpha(0.8) });
+        c.end();
+    }
     ui.text(c, tab.label(), .{ .size = 12.5, .color = colour, .truncate = true });
     _ = c.leaf(.{ .grow = 1, .min_width = 2 }, .none, null);
 

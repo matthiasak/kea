@@ -3,6 +3,7 @@
 const std = @import("std");
 const regex = @import("regex.zig");
 const md = @import("markdown.zig");
+const white = @import("whitespace.zig");
 
 fn escape(a: std.mem.Allocator, text: []const u8) ![]u8 {
     var s = try std.mem.replaceOwned(u8, a, text, "&", "&amp;");
@@ -25,7 +26,7 @@ fn row(a: std.mem.Allocator, out: *std.ArrayList(u8), line: []const u8, tag: []c
     if (std.mem.endsWith(u8, inner, "|")) inner = inner[0 .. inner.len - 1];
     try out.appendSlice(a, "<tr>");
     var it = std.mem.splitScalar(u8, inner, '|');
-    while (it.next()) |cell| try out.print(a, "<{s}>{s}</{s}>", .{ tag, try inline_(a, std.mem.trim(u8, cell, " \t")), tag });
+    while (it.next()) |cell| try out.print(a, "<{s}>{s}</{s}>", .{ tag, try inline_(a, white.trim(cell)), tag });
     try out.appendSlice(a, "</tr>");
 }
 
@@ -49,7 +50,7 @@ pub fn html(a: std.mem.Allocator, text: []const u8) ![]u8 {
     var i: usize = 0;
     while (i < lines.items.len) : (i += 1) {
         const line = lines.items[i];
-        const trimmed = std.mem.trim(u8, line, " \t");
+        const trimmed = white.trim(line);
         if (std.mem.eql(u8, open, "pre")) {
             if (std.mem.startsWith(u8, trimmed, "```")) {
                 try out.appendSlice(a, "</code></pre>");

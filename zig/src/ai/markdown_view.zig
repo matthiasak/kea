@@ -18,21 +18,33 @@ pub const State = struct {
     sources: std.AutoHashMapUnmanaged(u64, void) = .empty,
     /// Code blocks just copied: until when (`c.time`) they say "Copied".
     copied: std.AutoHashMapUnmanaged(u64, f64) = .empty,
-    /// Drawn diagrams' PNGs, by source, look and zoom; owned.
-    pictures: std.AutoHashMapUnmanaged(u64, []u8) = .empty,
+    /// Drawn diagrams' PNGs, by source, look and zoom, with the frame
+    /// (`c.time`) that last showed each; owned.
+    pictures: std.AutoHashMapUnmanaged(u64, Picture) = .empty,
+
+    pub const Picture = struct { bytes: []u8, used: f64 };
 
     pub fn deinit(s: *State, gpa: std.mem.Allocator) void {
-        s.forgetPictures(gpa);
+        var it = s.pictures.valueIterator();
+        while (it.next()) |v| gpa.free(v.bytes);
         s.pictures.deinit(gpa);
         s.sources.deinit(gpa);
         s.copied.deinit(gpa);
         s.* = .{};
     }
 
-    pub fn forgetPictures(s: *State, gpa: std.mem.Allocator) void {
-        var it = s.pictures.valueIterator();
-        while (it.next()) |v| gpa.free(v.*);
-        s.pictures.clearRetainingCapacity();
+    /// Lets go of the picture shown longest ago, unless every one was
+    /// shown this frame (`now`): the renderer may still read those bytes.
+    pub fn forgetOldest(s: *State, gpa: std.mem.Allocator, now: f64) void {
+        var oldest: ?u64 = null;
+        var when = now;
+        var it = s.pictures.iterator();
+        while (it.next()) |e| if (e.value_ptr.used < when) {
+            when = e.value_ptr.used;
+            oldest = e.key_ptr.*;
+        };
+        const k = oldest orelse return;
+        gpa.free(s.pictures.fetchRemove(k).?.value.bytes);
     }
 };
 
@@ -141,7 +153,8 @@ fn table(x: *const Ctx, header: []const []const u8, rows: []const []const []cons
     ui.column(c, .{ .gap = 6 });
     defer ui.end(c);
     gridRow(x, header, widths, head_style);
-    _ = c.leaf(.{ .width = .{ .px = total }, .height = .{ .px = 1 }, .background = p.faint }, .none, null);
+    // `Divider()`: the system separator, not a Kea grey.
+    _ = c.leaf(.{ .width = .{ .px = total }, .height = .{ .px = 1 }, .background = @import("../design/menu.zig").separatorColor(c.theme.dark) }, .none, null);
     for (rows) |r| gridRow(x, r, widths, cell_style);
 }
 

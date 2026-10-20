@@ -111,6 +111,8 @@ pub const Options = struct {
     /// color (the accent).
     selection_color: ?types.Color = null,
     caret_color: ?types.Color = null,
+    /// The typed text's color (the theme's text when null).
+    color: ?types.Color = null,
     /// Gaining the focus selects all the text, as an address field.
     select_all_on_focus: bool = false,
 };
@@ -381,14 +383,14 @@ pub fn textField(c: *Context, buffer: *TextBuffer, opts: Options) Result {
     if (s.len == 0) {
         _ = c.leaf(.{ .offset = .{ .x = -e.scroll_x } }, .{ .text = .{ .str = opts.placeholder, .style = style, .color = th.muted } }, null);
     } else {
-        _ = c.leaf(.{ .offset = .{ .x = -e.scroll_x } }, .{ .text = .{ .str = shown, .style = style, .color = th.text } }, null);
+        _ = c.leaf(.{ .offset = .{ .x = -e.scroll_x } }, .{ .text = .{ .str = shown, .style = style, .color = opts.color orelse th.text } }, null);
         if (opts.suggestion.len > 0 and !opts.password and focused and e.caret == s.len)
             _ = c.leaf(.{ .offset = .{ .x = -e.scroll_x } }, .{ .text = .{ .str = opts.suggestion, .style = style, .color = th.muted.alpha(0.8) } }, null);
     }
     if (focused) if (e.marked) |m| {
         const x0 = c.text.caretX(shown, style, shownIndex(s, opts.password, m[0]));
         const x1 = c.text.caretX(shown, style, shownIndex(s, opts.password, m[1]));
-        _ = c.leaf(.{ .absolute = true, .width = .{ .px = x1 - x0 }, .height = .{ .px = 1.5 }, .background = th.text, .offset = .{ .x = x0 - e.scroll_x, .y = lh - 1 } }, .none, null);
+        _ = c.leaf(.{ .absolute = true, .width = .{ .px = x1 - x0 }, .height = .{ .px = 1.5 }, .background = opts.color orelse th.text, .offset = .{ .x = x0 - e.scroll_x, .y = lh - 1 } }, .none, null);
     };
     if (focused and hi == lo) {
         // Vim's normal mode: a block over the character under the caret.

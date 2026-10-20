@@ -41,7 +41,11 @@ pub fn received(t: *Tab, body: objc.Object) void {
             if (t.typing != f.typing) t.typing = f.typing;
             hang(t, if (f.rect) |r| forms.spot(r, t.zoom) else null, f.passwords, f.name);
         },
-        .fullscreen => |on| t.immersed = on,
+        // The stage lays a pair out round it (`PaneStage.immersed`).
+        .fullscreen => |on| if (t.immersed != on) {
+            t.immersed = on;
+            if (t.browser) |b| b.redraw();
+        },
     }
 }
 

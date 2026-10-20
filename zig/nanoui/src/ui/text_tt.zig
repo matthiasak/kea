@@ -173,6 +173,7 @@ pub const TextSystem = struct {
         h.update(s);
         h.update(std.mem.asBytes(&style.size));
         h.update(&.{ @intFromEnum(style.weight), @intFromBool(style.mono), @intFromBool(style.italic), @intFromBool(style.tabular) });
+        h.update(std.mem.asBytes(&style.tracking));
         return h.final();
     }
 
@@ -181,10 +182,11 @@ pub const TextSystem = struct {
         const k = key(s, style, 1);
         if (self.cached(k)) |l| return l;
         var glyphs: std.ArrayList(Glyph) = .empty;
-        const w = self.shapeInto(&glyphs, s, style, 0, 0) catch {
+        var w = self.shapeInto(&glyphs, s, style, 0, 0) catch {
             glyphs.deinit(self.gpa);
             return .{ .width = 0, .glyphs = &.{} };
         };
+        if (style.tracking != 0) w += utf8.track(glyphs.items, s, style.tracking);
         return self.keep(k, .{ .width = w, .glyphs = glyphs.toOwnedSlice(self.gpa) catch return .{ .width = w, .glyphs = &.{} } });
     }
 

@@ -135,3 +135,8 @@ test "user script and scripting files" {
     try std.testing.expect(std.mem.indexOf(u8, ut, "const __keaIn = [], __keaOut = [];\n") != null);
     try std.testing.expect(std.mem.endsWith(u8, ut, "break kea_user_script;\n\ngo()\n;\n\n}"));
 }
+
+test {
+    // install.zig's own tests (its Unicode word and blank checks).
+    _ = install;
+}
