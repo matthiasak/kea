@@ -28,8 +28,8 @@ Most browsers have become operating systems that want an account, a cloud sync, 
 <table>
   <tr>
     <td width="50%" valign="top">
-      <img src="Icon/new-tab.png" alt="Kea New Tab with sidebar, address field, and daily kea fact">
-      <p align="center"><sub><b>New Tab:</b> one field and a daily fact about the bird (switchable in Settings › General).</sub></p>
+      <img src="Icon/new-tab.gif" alt="Kea New Tab with pixel-art keas in flight, sidebar, address field, and daily kea fact">
+      <p align="center"><sub><b>New Tab:</b> pixel-art keas in flight, one field, and a daily fact about the bird (switchable in Settings › General).</sub></p>
     </td>
     <td width="50%" valign="top">
       <img src="Icon/home.png" alt="Kea reading Wikipedia with pinned tabs in the sidebar">
