@@ -100,7 +100,7 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette, area: ui.Rect, opts:
     defer ui.end(c);
     if (st.over) {
         scrim(b, c, p, area);
-    } else if (!b.kea.opts.headless and !b.kea.opts.hidden) {
+    } else if (!b.kea.opts.headless) {
         kea_flight.newTabArt(c, .{ .w = area.w, .h = area.h }, y);
     }
     field(b, c, p, st, x, y, w, showing);

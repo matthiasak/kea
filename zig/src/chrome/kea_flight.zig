@@ -172,8 +172,8 @@ fn extractSprites(source: cg.Source) ?Sprites {
     defer pool.pop();
     const gw = 132;
     const gh = 120;
-    const out_w = gw * 2;
-    const out_h = gh * 2;
+    const out_w = gw * 3;
+    const out_h = gh * 3;
     var raw_bmp = cg.Bitmap.init(gpa, 640, 360, 1) catch return null;
     defer raw_bmp.deinit(gpa);
     var bmp_l = cg.Bitmap.init(gpa, out_w, out_h, 1) catch return null;
@@ -254,10 +254,10 @@ fn extractSprites(source: cg.Source) ?Sprites {
                     255,
                 };
                 const rx = gw - 1 - gx;
-                for (0..2) |by| for (0..2) |bx| {
-                    const yl = gy * 2 + by;
-                    const xl = gx * 2 + bx;
-                    const xr = rx * 2 + bx;
+                for (0..3) |by| for (0..3) |bx| {
+                    const yl = gy * 3 + by;
+                    const xl = gx * 3 + bx;
+                    const xr = rx * 3 + bx;
                     @memcpy(bmp_l.bytes[(yl * out_w + xl) * 4 ..][0..4], &bgra);
                     @memcpy(bmp_r.bytes[(yl * out_w + xr) * 4 ..][0..4], &bgra);
                 };
@@ -301,13 +301,26 @@ const spark_colors = [_]ui.Color{
     ui.Color.hex(0x3EC9B0), // primary-shaft turquoise
 };
 
+fn warmSprites(c: *ui.Context, sp: *const Sprites) bool {
+    const side: u32 = @intFromFloat(@max(1, @ceil(@max(sprite_w, sprite_h) * c.scale)));
+    var all = true;
+    for (0..pose_count) |i| {
+        for ([_][2][]const u8{ .{ keys_left[i], sp.left[i] }, .{ keys_right[i], sp.right[i] } }) |pair| {
+            const k = std.hash.Wyhash.hash(0x1a9e, pair[0]);
+            _ = c.text.images.info(k, pair[1]);
+            if (c.text.images.get(k, pair[1], side) == null) all = false;
+        }
+    }
+    return all;
+}
+
 /// Dynamic pixel-art kea circus flying across a blank New Tab (`area`), behind
 /// the address field at `field_y`.
 pub fn newTabArt(c: *ui.Context, area: ui.Size, field_y: f32) void {
     if (area.w < 240 or area.h < 180) return;
     const sp = loadSprites() orelse return;
+    const warm = warmSprites(c, sp);
     const t: f32 = if (c.reduce_motion) 0 else @floatCast(c.time);
-
     _ = c.open(.{ .absolute = true, .width = .{ .px = area.w }, .height = .{ .px = area.h }, .clip = true }, "kea.newtab.art");
     defer c.end();
 
@@ -339,11 +352,12 @@ pub fn newTabArt(c: *ui.Context, area: ui.Size, field_y: f32) void {
         const step: usize = @intFromFloat(@floor(beat));
         const pose: usize = if (step < pose_count) step else 1;
         const bob = if (step < pose_count) -3.5 * @sin(beat * 0.785398) else 0;
-        var cy = area.h * b.y_frac + @sin(wave) * b.amp + bob;
-        // Keep the central address field & fact corridor clear.
-        if (cy > field_y - 36 and cy < field_y + 104) {
-            cy = if (b.y_frac < 0.5) field_y - 42 else field_y + 110;
-        }
+        const reach = b.amp + 6.0;
+        const base_y = if (b.y_frac < 0.5)
+            @min(area.h * b.y_frac, @max(reach + 24.0, field_y - 48.0 - reach))
+        else
+            @max(area.h * b.y_frac, @min(area.h - reach - 24.0, field_y + 114.0 + reach));
+        const cy = base_y + @sin(wave) * b.amp + bob;
         const dy = @cos(wave) * b.amp * b.freq;
         const slope = std.math.clamp(dy / @max(b.speed, 40), -0.20, 0.20);
         const tilt = if (b.dir == 1) slope else -slope;
@@ -383,11 +397,15 @@ pub fn newTabArt(c: *ui.Context, area: ui.Size, field_y: f32) void {
             .max_width = sprite_w,
             .max_height = sprite_h,
             .radius = 0,
-            .scale = 4.0 / 3.0,
+            .scale = 2,
         });
         c.end();
     }
-    if (!c.reduce_motion) c.frameIn(1.0 / 24.0);
+    if (!warm) {
+        c.animating = true;
+    } else if (!c.reduce_motion) {
+        c.frameIn(1.0 / 15.0);
+    }
 }
 
 test "kea.gif reads as timed frames that become PNG" {
