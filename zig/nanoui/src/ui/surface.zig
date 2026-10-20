@@ -127,8 +127,9 @@ pub const Surface = struct {
             for (events.drag_types) |t| objc.msg(void, arr, "addObject:", .{objc.nsString(t)});
             objc.msg(void, nsview, "registerForDraggedTypes:", .{arr});
         }
-        if (objc.msg(objc.BOOL, nsview, "respondsToSelector:", .{objc.sel("displayLinkWithTarget:selector:")})) {
-            const link = objc.retain(objc.msg(objc.Object, nsview, "displayLinkWithTarget:selector:", .{ nsview, objc.sel("displayLinkFired:") }));
+        {
+            const link = objc.msg(objc.Object, objc.alloc("CAMetalDisplayLink"), "initWithMetalLayer:", .{self.renderer.layer});
+            objc.msg(void, link, "setDelegate:", .{nsview});
             objc.msg(void, link, "setPaused:", .{objc.YES});
             const loop = objc.msg(objc.Object, objc.class("NSRunLoop"), "mainRunLoop", .{});
             objc.msg(void, link, "addToRunLoop:forMode:", .{ loop, NSRunLoopCommonModes });
@@ -143,7 +144,7 @@ pub const Surface = struct {
             });
         }
         self.refreshAppearance();
-        self.is_visible = objc.msg(objc.NSUInteger, window.nswindow, "occlusionState", .{}) & 2 != 0;
+        self.is_visible = objc.msg(objc.BOOL, window.nswindow, "isVisible", .{}) and (objc.msg(objc.NSUInteger, window.nswindow, "occlusionState", .{}) & 2 != 0);
         // Pictures go straight to the GPU: no copy of their atlas in memory.
         self.text.images.sink = .{ .ctx = &self.renderer, .upload = @import("metal.zig").Renderer.uploadImage };
         self.updateGeometry();
@@ -159,7 +160,9 @@ pub const Surface = struct {
             objc.msg(void, center, "removeObserver:", .{self.nsview});
         }
         if (self.display_link) |link| {
-            // The link retains its target, the view: break the cycle.
+            if (objc.msg(objc.BOOL, link, "respondsToSelector:", .{objc.sel("setDelegate:")})) {
+                objc.msg(void, link, "setDelegate:", .{@as(?objc.Object, null)});
+            }
             objc.msg(void, link, "invalidate", .{});
             objc.release(link);
         }
@@ -269,6 +272,7 @@ pub const Surface = struct {
         const fallback_dur = 1.0 / @as(f64, @max(60.0, self.max_fps));
         const dur: f64 = if (duration_in > 0) duration_in else fallback_dur;
         if (duration_in > 0) self.link_duration = duration_in;
+        const has_drawable = self.renderer.given_drawable != null;
         const now = if (target_in > 0) @max(target_in, self.last_frame_time) else @max(cf.CACurrentMediaTime(), self.last_frame_time);
         const dt: f32 = if (self.last_frame_time > 0)
             @floatCast(std.math.clamp(now - self.last_frame_time, 0, 0.5))
@@ -288,17 +292,13 @@ pub const Surface = struct {
         self.geometry_changed = false;
         self.pending_sync = false;
         self.afterFocus();
-        if (!vis and self.ctx.frame > 1) {
-            self.setPaced(false);
+        if (!vis or !has_drawable) {
+            self.pending_sync = sync;
+            self.updateCursor();
+            if (vis) self.requestFrame() else self.setPaced(false);
             return;
         }
         const wall_now = cf.CACurrentMediaTime();
-        if (kind == .input and vis and wall_now < self.last_present_target) {
-            self.pending_sync = sync;
-            self.updateCursor();
-            self.requestFrame();
-            return;
-        }
         self.renderer.setLiveResize(sync);
         const atlas_reset = self.text.atlas.reset_during_frame or self.text.images.reset_during_frame;
         if (atlas_reset) self.renderer.waitIdle();
@@ -345,7 +345,7 @@ pub const Surface = struct {
             self.requestFrame();
             return;
         }
-        const more = c.animating or r.hot_changed;
+        const more = c.animating or r.hot_changed or c.input.down;
         if (self.display_link != null) {
             if (more) {
                 self.setRate(null);
@@ -354,13 +354,16 @@ pub const Surface = struct {
                 self.setRate(fi);
                 self.setPaced(true);
             } else if (c.time_driven != .none) {
-                self.setRate(if (c.time_driven == .fast) null else 1.0 / 30.0);
+                self.setRate(if (c.time_driven == .fast) null else 1.0 / 24.0);
                 self.setPaced(true);
             } else {
                 self.setPaced(false);
             }
         } else if (more or c.frame_in != null or c.time_driven != .none) self.scheduleTick();
-        if (!c.animating) self.last_frame_time = 0;
+        if (!c.animating) {
+            self.last_frame_time = 0;
+            if (self.frame_log) |*fl| fl.last_t = 0;
+        }
     }
 
     pub fn redrawRetained(self: *Surface, target_in: f64, duration_in: f64) void {
@@ -402,7 +405,7 @@ pub const Surface = struct {
                 .nodes = c.stats.nodes,
                 .instances = self.instances.items.len,
                 .atlas_reset = false,
-                .animating = true,
+                .animating = c.time_driven == .fast,
             });
             const ds = self.renderer.drawLogged(self.instances.items, self.atlasTexture(), self.size, clear, fl, idx);
             presented = ds.presented;
@@ -453,14 +456,13 @@ pub const Surface = struct {
     }
 
     /// Draws a frame at the display's next refresh: for changes from
-    /// outside the view (a process's output, a network reply).
     pub fn requestFrame(self: *Surface) void {
         self.full_pending = true;
         if (!self.paced and !self.in_frame and cf.CACurrentMediaTime() >= self.last_present_target) {
             self.frame();
             return;
         }
-        if (self.display_link != null) {
+        if (self.display_link != null and self.visible()) {
             self.setRate(null);
             self.setPaced(true);
         } else self.scheduleTick();
@@ -472,11 +474,14 @@ pub const Surface = struct {
         const link = self.display_link orelse return;
         const fps: f32 = if (seconds) |s| (if (s < 0.009) 0 else std.math.clamp(1 / @max(s, 0.001), 1, 60)) else 0;
         if (fps == self.link_fps) return;
+        if (fps == 0 and self.link_fps > 0) {
+            if (self.frame_log) |*fl| fl.last_t = 0;
+        }
         self.link_fps = fps;
         const s = self.max_fps;
         const Range = extern struct { minimum: f32, maximum: f32, preferred: f32 };
         const range: Range = if (fps == 0)
-            .{ .minimum = if (s > 60) 80 else s, .maximum = s, .preferred = s }
+            .{ .minimum = s, .maximum = s, .preferred = s }
         else
             .{ .minimum = fps, .maximum = fps, .preferred = fps };
         objc.msg(void, link, "setPreferredFrameRateRange:", .{range});
@@ -484,7 +489,7 @@ pub const Surface = struct {
 
     pub fn visible(self: *Surface) bool {
         if (!self.is_visible) {
-            self.is_visible = objc.msg(objc.NSUInteger, self.window.nswindow, "occlusionState", .{}) & 2 != 0;
+            self.is_visible = objc.msg(objc.BOOL, self.window.nswindow, "isVisible", .{}) and (objc.msg(objc.NSUInteger, self.window.nswindow, "occlusionState", .{}) & 2 != 0);
         }
         return self.is_visible;
     }
@@ -492,12 +497,15 @@ pub const Surface = struct {
     fn setPaced(self: *Surface, on: bool) void {
         if (self.paced == on) return;
         self.paced = on;
+        if (!on) {
+            if (self.frame_log) |*fl| fl.last_t = 0;
+        }
         if (self.display_link) |link| objc.msg(void, link, "setPaused:", .{!on});
     }
 
     /// The window was shown, uncovered or covered.
     pub fn occlusionChanged(self: *Surface) void {
-        self.is_visible = objc.msg(objc.NSUInteger, self.window.nswindow, "occlusionState", .{}) & 2 != 0;
+        self.is_visible = objc.msg(objc.BOOL, self.window.nswindow, "isVisible", .{}) and (objc.msg(objc.NSUInteger, self.window.nswindow, "occlusionState", .{}) & 2 != 0);
         if (self.is_visible and self.pending) self.frame();
     }
 

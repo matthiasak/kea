@@ -266,10 +266,12 @@ pub fn main(init: std.process.Init) !void {
         return;
     }
     var failed: usize = 0;
+    var ran: usize = 0;
     // `KEAZIG_E2E=<text>`: only the cases whose names contain it.
     const only = init.environ_map.get("KEAZIG_E2E");
     for (cases) |case| {
         if (only) |o| if (std.mem.indexOf(u8, case.name, o) == null) continue;
+        ran += 1;
         const pool = objc.Pool.push();
         defer pool.pop();
         var h: Harness = .{ .gpa = gpa, .temp = try app.Temp.init(gpa), .handler = handler, .http = http };
@@ -291,6 +293,10 @@ pub fn main(init: std.process.Init) !void {
     }
     if (dbg.deinit() == .leak) {
         std.debug.print("e2e cases leaked memory\n", .{});
+        std.process.exit(1);
+    }
+    if (ran == 0) {
+        std.debug.print("no e2e cases matched '{s}'\n", .{only orelse ""});
         std.process.exit(1);
     }
     if (failed > 0) {

@@ -90,10 +90,10 @@ pub fn springFrom(c: *Context, id: u64, salt: u32, from: f32, target: f32, s: Sp
     const damping = 4 * std.math.pi * s.damping / s.response;
     if (e.stepped != c.frame) {
         e.stepped = c.frame;
-        const total = @min(c.dt, 0.5) + e.elapsed;
+        const total = @max(0, @min(c.dt, 0.5) + e.elapsed);
         const h: f32 = 1.0 / 480.0;
         const steps: u32 = @intFromFloat(@floor(total * 480.0));
-        e.elapsed = total - @as(f32, @floatFromInt(steps)) * h;
+        e.elapsed = @max(0, total - @as(f32, @floatFromInt(steps)) * h);
         for (0..steps) |_| {
             const a0 = -stiffness * (e.value - target) - damping * e.velocity;
             const vmid = e.velocity + 0.5 * a0 * h;

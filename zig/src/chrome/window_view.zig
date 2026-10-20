@@ -57,13 +57,8 @@ pub fn view(b: *Browser, c: *ui.Context) void {
     c.hand_cursor = false;
     // An extension's popup window: the page and its site, as a small window shows one.
     if (b.ext.popup != null) return @import("../web/little.zig").popupView(b, c);
-    const is_dark = switch (b.prefs.look) {
-        .light => false,
-        .dark => true,
-        .system => c.theme.dark,
-    };
-    const p = palette.get(is_dark);
-    b.kea.favicons.setDark(is_dark);
+    const p = palette.get(c.theme.dark);
+    b.kea.favicons.setDark(c.theme.dark);
     // The strip and the column say where the window is dragged from.
     c.title_bar_height = 0;
     // The bookmarks manager's start and end; its keys are the key monitor's.

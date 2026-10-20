@@ -45,7 +45,7 @@ pub const methods = [_]objc.Method{
     .{ .name = "cursorUpdate:", .imp = &cursorUpdate, .types = "v@:@" },
     .{ .name = "resetCursorRects", .imp = &resetCursorRects, .types = "v@:" },
     .{ .name = "draggingSession:sourceOperationMaskForDraggingContext:", .imp = &draggingSourceMask, .types = "Q@:@q" },
-    .{ .name = "displayLinkFired:", .imp = &displayLinkFired, .types = "v@:@" },
+    .{ .name = "metalDisplayLink:needsUpdate:", .imp = &metalDisplayLinkNeedsUpdate, .types = "v@:@@" },
     .{ .name = "viewWillStartLiveResize", .imp = &liveResizeStart, .types = "v@:" },
     .{ .name = "viewDidEndLiveResize", .imp = &liveResizeEnd, .types = "v@:" },
 } ++ textinput.methods ++ a11y.methods;
@@ -407,12 +407,14 @@ fn performDragOperation(obj: objc.Object, _: objc.SEL, info: objc.Object) callco
     return if (s.ctx.acceptsDropAt(p)) objc.YES else objc.NO;
 }
 
-fn displayLinkFired(obj: objc.Object, _: objc.SEL, link: objc.Object) callconv(.c) void {
+fn metalDisplayLinkNeedsUpdate(obj: objc.Object, _: objc.SEL, _: objc.Object, update: objc.Object) callconv(.c) void {
     const s = surfaceOf(obj) orelse return;
-    const target: f64 = if (s.link_fps == 0) objc.msg(f64, link, "targetTimestamp", .{}) else 0;
-    const duration: f64 = if (s.link_fps == 0) objc.msg(f64, link, "duration", .{}) else 0;
-    const now = if (target > 0) target else cf.CACurrentMediaTime();
-    const frame_in_due = s.ctx.frame_in != null and now >= s.frame_in_due - 0.001;
+    const drawable = objc.msg(objc.Object, update, "drawable", .{});
+    const target = objc.msg(f64, update, "targetPresentationTimestamp", .{});
+    const duration: f64 = if (s.link_fps > 0) 1.0 / @as(f64, s.link_fps) else 1.0 / @as(f64, @max(60.0, s.max_fps));
+    s.renderer.given_drawable = drawable;
+    defer s.renderer.given_drawable = null;
+    const frame_in_due = s.ctx.frame_in != null and target >= s.frame_in_due - 0.001;
     if (!s.full_pending and !frame_in_due and !s.ctx.animating and !s.in_live_resize and !s.geometry_changed and !s.pending_sync and s.ctx.time_driven != .none) {
         s.redrawRetained(target, duration);
         return;

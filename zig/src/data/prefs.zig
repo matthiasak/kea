@@ -431,6 +431,20 @@ pub const Prefs = struct {
         if (current == wanted) return;
         if (current != null and wanted != null and objc.msg(objc.BOOL, objc.msg(objc.Object, current.?, "name", .{}), "isEqualToString:", .{objc.msg(objc.Object, wanted.?, "name", .{})})) return;
         objc.msg(void, app, "setAppearance:", .{wanted});
+        const wins = objc.msg(?objc.Object, app, "windows", .{}) orelse return;
+        const sel = objc.sel("viewDidChangeEffectiveAppearance");
+        for (0..objc.msg(objc.NSUInteger, wins, "count", .{})) |i| {
+            const w = objc.msg(objc.Object, wins, "objectAtIndex:", .{i});
+            const cv = objc.msg(?objc.Object, w, "contentView", .{}) orelse continue;
+            objc.msg(void, cv, "viewDidChangeEffectiveAppearance", .{});
+            if (objc.msg(?objc.Object, cv, "subviews", .{})) |subs| {
+                for (0..objc.msg(objc.NSUInteger, subs, "count", .{})) |j| {
+                    const sub = objc.msg(objc.Object, subs, "objectAtIndex:", .{j});
+                    if (objc.msg(objc.BOOL, sub, "respondsToSelector:", .{sel}))
+                        objc.msg(void, sub, "viewDidChangeEffectiveAppearance", .{});
+                }
+            }
+        }
     }
 };
 

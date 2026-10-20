@@ -33,16 +33,6 @@ const DoneSlot = struct {
     record_idx: usize = 0,
 };
 
-const PresentState = struct {
-    gen: std.atomic.Value(u32) = .init(1),
-    queued: std.atomic.Value(u32) = .init(0),
-    last_present: std.atomic.Value(u64) = .init(0),
-    targets: [4]std.atomic.Value(u64) = @splat(.init(0)),
-};
-
-var present_states: [32]PresentState = @splat(.{});
-var next_present_state: std.atomic.Value(u32) = .init(0);
-
 const MTLScissorRect = extern struct { x: objc.NSUInteger, y: objc.NSUInteger, width: objc.NSUInteger, height: objc.NSUInteger };
 
 pub const Renderer = struct {
@@ -60,10 +50,8 @@ pub const Renderer = struct {
     framebuffer_only: bool = true,
     live_resize: bool = false,
     present_at: f64 = 0,
+    given_drawable: ?objc.Object = null,
     time: f32 = 0,
-    present_state_idx: u8 = 0,
-    present_gen: u32 = 0,
-    next_present: usize = 0,
     /// Instances go into one of three buffers, reused once the GPU is done
     /// with the frame that last used it.
     buffers: [frames_in_flight]?objc.Object = @splat(null),
@@ -98,8 +86,7 @@ pub const Renderer = struct {
         objc.msg(void, layer, "setPixelFormat:", .{pixel_format});
         // Framebuffer-only until a pane of glass needs to read the backdrop.
         objc.msg(void, layer, "setFramebufferOnly:", .{objc.YES});
-        // Three drawables: up to two queued for display while one renders;
-        // if two are already queued, non-resize frames skip instead of blocking.
+        // Three drawables managed by CAMetalDisplayLink.
         objc.msg(void, layer, "setMaximumDrawableCount:", .{@as(objc.NSUInteger, 3)});
         objc.msg(void, layer, "setAllowsNextDrawableTimeout:", .{objc.YES});
         objc.msg(void, layer, "setOpaque:", .{objc.YES});
@@ -108,13 +95,7 @@ pub const Renderer = struct {
             defer cf.CGColorSpaceRelease(srgb);
             objc.msg(void, layer, "setColorspace:", .{srgb});
         }
-        const ps_idx: u8 = @intCast(next_present_state.fetchAdd(1, .monotonic) % present_states.len);
-        const ps = &present_states[ps_idx];
-        const gen = ps.gen.fetchAdd(1, .acq_rel) + 1;
-        ps.queued.store(0, .release);
-        ps.last_present.store(0, .release);
-        for (&ps.targets) |*t| t.store(0, .release);
-        return .{ .device = device, .queue = queue, .pipeline = pipeline, .glass = glass, .layer = layer, .present_state_idx = ps_idx, .present_gen = gen, .in_flight = objc.dispatch_semaphore_create(frames_in_flight) };
+        return .{ .device = device, .queue = queue, .pipeline = pipeline, .glass = glass, .layer = layer, .in_flight = objc.dispatch_semaphore_create(frames_in_flight) };
     }
 
     /// Brings the GPU's copy of the image atlas up to date (made on the
@@ -155,7 +136,6 @@ pub const Renderer = struct {
 
     pub fn deinit(self: *Renderer) void {
         if (self.images_texture) |t| objc.release(t);
-        _ = present_states[self.present_state_idx].gen.fetchAdd(1, .acq_rel);
         if (self.layer_texture) |t| objc.release(t);
         // Wait for the frames in flight: their handlers signal this renderer.
         self.waitIdle();
@@ -195,28 +175,6 @@ pub const Renderer = struct {
     pub fn drawLogged(self: *Renderer, instances: []const Instance, atlas: objc.Object, size: types.Size, clear: types.Color, log: ?*FrameLog, record_idx: usize) DrawStats {
         const pool = objc.Pool.push();
         defer pool.pop();
-        const ps = &present_states[self.present_state_idx];
-        var q_before = ps.queued.load(.acquire);
-        if (!self.live_resize and q_before >= 2) {
-            const lp: f64 = @bitCast(ps.last_present.load(.acquire));
-            const now = cf.CACurrentMediaTime();
-            if (lp > 0 and now - lp > 0.5) {
-                ps.last_present.store(@bitCast(now), .release);
-                for (&ps.targets) |*t| t.store(0, .release);
-                ps.queued.store(0, .release);
-                q_before = 0;
-            } else {
-                var oldest: f64 = 0;
-                for (&ps.targets) |*t_atom| {
-                    const t: f64 = @bitCast(t_atom.load(.acquire));
-                    if (t > 0 and (oldest == 0 or t < oldest)) oldest = t;
-                }
-                // ponytail: addPresentedHandler: arrives ~16-24 ms after targetTimestamp via IPC; only skip when a pending present is >30 ms overdue.
-                if (oldest > 0 and now - oldest > 0.030) {
-                    return .{ .sync = false, .presented = false, .queued = @intCast(@min(q_before, 255)) };
-                }
-            }
-        }
         if (self.framebuffer_only) {
             for (instances) |inst| if (inst.kind == Kind.glass) {
                 objc.msg(void, self.layer, "setFramebufferOnly:", .{objc.NO});
@@ -226,24 +184,15 @@ pub const Renderer = struct {
         }
         const t0 = cf.CACurrentMediaTime();
         if (objc.dispatch_semaphore_wait(self.in_flight, dispatch_time(0, std.time.ns_per_s)) != 0) {
-            return .{ .drawable_wait_ms = (cf.CACurrentMediaTime() - t0) * 1000, .sync = self.live_resize, .queued = @intCast(@min(q_before, 255)) };
+            self.given_drawable = null;
+            return .{ .drawable_wait_ms = (cf.CACurrentMediaTime() - t0) * 1000, .sync = self.live_resize };
         }
-        const drawable = objc.msg(?objc.Object, self.layer, "nextDrawable", .{}) orelse {
+        const drawable = self.given_drawable orelse {
             _ = objc.dispatch_semaphore_signal(self.in_flight);
-            return .{ .drawable_wait_ms = (cf.CACurrentMediaTime() - t0) * 1000, .sync = self.live_resize, .queued = @intCast(@min(q_before, 255)) };
+            return .{ .drawable_wait_ms = (cf.CACurrentMediaTime() - t0) * 1000, .sync = self.live_resize };
         };
-        const q_acq = ps.queued.load(.acquire);
+        self.given_drawable = null;
         const sync = self.live_resize;
-        if (!sync) {
-            _ = ps.queued.fetchAdd(1, .acq_rel);
-            if (q_acq == 0) ps.last_present.store(@bitCast(cf.CACurrentMediaTime()), .release);
-            const p_idx = self.next_present;
-            self.next_present = (p_idx + 1) % ps.targets.len;
-            ps.targets[p_idx].store(@bitCast(self.present_at), .release);
-            const packed_ctx: usize = (@as(usize, self.present_gen) << 16) | (@as(usize, self.present_state_idx) << 8) | p_idx;
-            var pres = objc.Block(u8, &.{objc.Object}).init(@ptrFromInt(packed_ctx), presented);
-            objc.msg(void, drawable, "addPresentedHandler:", .{@as(*anyopaque, @ptrCast(&pres))});
-        }
         const t1 = cf.CACurrentMediaTime();
         const texture = objc.msg(objc.Object, drawable, "texture", .{});
         const buffer = self.upload(instances);
@@ -261,7 +210,7 @@ pub const Renderer = struct {
             objc.msg(void, cmd, "waitUntilScheduled", .{});
             objc.msg(void, drawable, "present", .{});
         } else {
-            objc.msg(void, cmd, "presentDrawable:atTime:", .{ drawable, @max(self.present_at, cf.CACurrentMediaTime()) });
+            objc.msg(void, cmd, "presentDrawable:", .{drawable});
             objc.msg(void, cmd, "commit", .{});
         }
         return .{
@@ -269,24 +218,9 @@ pub const Renderer = struct {
             .encode_ms = (t2 - t1) * 1000,
             .sync = sync,
             .presented = true,
-            .queued = @intCast(@min(q_acq, 255)),
         };
     }
 
-    fn presented(ctx_ptr: *u8, _: objc.Object) void {
-        const packed_ctx: usize = @intFromPtr(ctx_ptr);
-        const slot_idx: u8 = @truncate(packed_ctx);
-        const state_idx: u8 = @truncate(packed_ctx >> 8);
-        const gen: u32 = @truncate(packed_ctx >> 16);
-        const ps = &present_states[state_idx];
-        if (ps.gen.load(.acquire) != gen) return;
-        ps.targets[slot_idx].store(0, .release);
-        ps.last_present.store(@bitCast(cf.CACurrentMediaTime()), .release);
-        var cur = ps.queued.load(.acquire);
-        while (cur > 0) {
-            if (ps.queued.cmpxchgWeak(cur, cur - 1, .acq_rel, .acquire)) |next| cur = next else break;
-        }
-    }
 
     fn frameDone(slot: *DoneSlot, cmd: objc.Object) void {
         if (slot.log) |log| {
@@ -294,16 +228,6 @@ pub const Renderer = struct {
             log.setGpuMs(slot.record_idx, @max(0, gpu_s * 1000));
         }
         const r = slot.renderer;
-        const ps = &present_states[r.present_state_idx];
-        if (ps.queued.load(.acquire) > 0) {
-            const lp: f64 = @bitCast(ps.last_present.load(.acquire));
-            const now = cf.CACurrentMediaTime();
-            if (lp > 0 and now - lp > 0.5) {
-                ps.last_present.store(@bitCast(now), .release);
-                for (&ps.targets) |*t| t.store(0, .release);
-                ps.queued.store(0, .release);
-            }
-        }
         _ = objc.dispatch_semaphore_signal(r.in_flight);
     }
 

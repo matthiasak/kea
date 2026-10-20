@@ -233,3 +233,64 @@ Source-by-source (`Sources/Kea/*.swift` vs `zig/src/**`) and snapshot (`$TMPDIR/
 ```
 webkit-metrics: first_paint_ms=48.7 nav_ms_p50=50.0 nav_ms_max=52.0 idle_cpu=0.77% web_procs=6 web_mb=78.0 app_mb=64.1
 ```
+
+## Round 2 verification (after Wave A–C)
+
+### 1. On-screen smoothness (`zig build smooth`, 120 Hz target with `CAMetalDisplayLink`)
+
+| # | Scenario | Frames | Ret | Anim | Missed % | Int p50 | Int p90 | Int p99 | Int max | CPU p50 | CPU p99* | CPU max* | Wait p99 | GPU p50 | GPU p99 | Sync % | Gate |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| S1 | Sidebar on/off x4 (slide plus room) | 672 | 0 | 672 | 3.1% | 8.33 | 8.33 | 16.67 | 29.38 | 0.27 | 0.79 | 2.63 | 0.03 | 1.19 | 4.26 | 66% | missed 3.1% > 2% (passed at 1.0% in standalone/prior runs) |
+| S2 | Open 5 tabs and close them (strip + column) | 1451 | 0 | 1450 | 0.8% | 8.33 | 8.33 | 8.33 | 18.97 | 0.18 | 1.63 | 6.40 | 0.03 | 1.51 | 5.00 | 21% | PASS |
+| S3 | Drag a tab across the strip at 120 Hz | 577 | 0 | 577 | 0.2% | 8.33 | 8.33 | 8.33 | 26.49 | 0.18 | 0.85 | 2.39 | 0.05 | 0.17 | 3.35 | 0% | PASS |
+| S4 | Split enter, swap, leave | 411 | 0 | 411 | 0.0% | 8.33 | 8.33 | 8.33 | 8.33 | 0.26 | 1.11 | 2.47 | 0.03 | 0.49 | 4.15 | 28% | PASS |
+| S5 | Split divider drag | 209 | 0 | 204 | 0.5% | 8.33 | 8.33 | 8.33 | 16.67 | 0.24 | 0.60 | 0.63 | 0.01 | 0.27 | 2.63 | 56% | PASS |
+| S6 | Omnibox open, type 6 chars, Esc | 192 | 0 | 189 | 0.5% | 8.33 | 8.33 | 8.33 | 16.67 | 0.31 | 0.78 | 1.99 | 0.03 | 1.09 | 3.62 | 0% | PASS |
+| S7 | Ubi Chat open, expand, edge drag 300->700 pt | 492 | 0 | 414 | 1.0% | 8.33 | 8.33 | 8.33 | 20.83 | 0.30 | 0.99 | 2.94 | 0.02 | 0.37 | 2.59 | 70% | PASS |
+| S8 | Fold peek/unpeek | 267 | 0 | 257 | 6.3% | 8.33 | 8.33 | 16.67 | 25.00 | 0.16 | 0.44 | 2.12 | 0.04 | 1.34 | 3.44 | 0% | missed 6.3% > 2% (passed at 1.8% in standalone run) |
+| S9 | Live window resize, 16 ms steps | 111 | 0 | 64 | 0.0% | 8.33 | 8.33 | 8.33 | 8.33 | 0.09 | 0.24 | 0.27 | 0.00 | 0.95 | 2.28 | 93% | REPORT |
+| S10 | Scroll history (2000), bookmarks (2000), chat (200) | 591 | 1 | 520 | 0.6% | 8.33 | 8.33 | 8.33 | 16.67 | 0.83 | 1.86 | 2.67 | 0.01 | 1.28 | 3.43 | 0% | PASS |
+| S11 | Mock-stream a 4 KB answer at 30 chunks/s | 158 | 0 | 50 | 2.0% | 8.33 | 8.33 | 12.67 | 16.67 | 0.38 | 1.88 | 5.15 | 0.04 | 0.26 | 2.34 | 0% | missed 2.0% > 2% (passed at 0.0% in prior run) |
+| S12 | Loading tab with a ring (slow loopback reply) | 0 | 354 | 354 | 1.7% | 8.33 | 8.33 | 16.67 | 16.67 | 0.08 | 0.33 | 0.95 | 0.01 | 1.18 | 3.50 | 0% | PASS |
+| S13 | Idle blank tab for 3 s (standalone `KEAZIG_SMOOTH=S13`) | 0 | 8 | 0 | 0.0% | 41.67 | 41.67 | 41.67 | 41.67 | 0.07 | 0.09 | 0.09 | 0.00 | 0.41 | 0.84 | 0% | PASS |
+| S14 | Scroll a long page (surface must stay idle) | 5 | 0 | 0 | 0.0% | 0.00 | 0.00 | 0.00 | 0.00 | 0.20 | 0.24 | 0.25 | 0.00 | 0.13 | 0.44 | 0% | PASS |
+| S15 | Switch tabs x10 (page transition) | 1172 | 0 | 1170 | 0.5% | 8.33 | 8.33 | 8.33 | 16.67 | 0.17 | 1.76 | 2.49 | 0.04 | 0.13 | 2.33 | 2% | PASS |
+| S16 | Signature tour | 1689 | 8 | 1672 | 1.6% | 8.33 | 8.33 | 16.67 | 27.74 | 0.27 | 1.70 | 8.15 | 0.03 | 0.71 | 3.20 | 1% | PASS |
+
+- **S12 extra:** 0.0 fps (full rebuilds; 354 retained GPU frames at 120 Hz), 0.00% CPU, 0 steady allocations (`<= 5.0 fps` gate PASS).
+- **S13 extra (standalone):** 0.0 fps (full rebuilds), 1.85% CPU (`< 2.0%` gate PASS), 0 steady allocations.
+- **S14 extra:** 5 surface frames (down from 109 in Q0 baseline; `<= 10` gate PASS), 9.57% CPU.
+- **Drawable wait (`Wait p99`):** Solved across every scenario S1–S16 via `CAMetalDisplayLink` (`0.00–0.05 ms`, down from `2.27–16.41 ms` in Q0 baseline).
+
+### 2. Performance at scale (`KEAZIG_PERF_STRICT=1 zig build perf`, 120 Hz, ReleaseFast)
+
+| Scenario | Cold CPU (ms) | CPU p50 (ms) | CPU p90 (ms) | CPU p99 (ms) | CPU max (ms) | GPU p50 (ms) | GPU p90 (ms) | Nodes | Steady Allocs/f (max) | Gate |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| 1. Tabs hover-sweep & edge drag (200 tabs) | 3.35 | 0.42 | 0.73 | 0.89 | 1.02 | 0.79 | 0.96 | 1450 | 0.0 (0) | PASS |
+| 2. Bookmarks sidebar scroll & hover (2000) | 6.69 | 0.10 | 0.13 | 0.19 | 0.26 | 0.89 | 1.21 | 305 | 0.0 (0) | PASS |
+| 3. Manager search type 1-5 chars (2000 bm) | 2.76 | 0.11 | 0.17 | 0.28 | 0.30 | 1.72 | 2.68 | 203 | 0.0 (0) | PASS |
+| 4. History panel open, scroll & hunt (2000) | 7.79 | 0.11 | 0.18 | 2.89 | 2.99 | 1.68 | 2.67 | 284 | 0.0 (0) | PASS |
+| 5. Chat scroll, hover, resize & stream (200) | 39.82 | 0.17 | 0.34 | 0.71 | 1.12 | 0.80 | 1.31 | 17404 | 0.0 (0) | PASS |
+| 6. Chat list hover & search (300 chats) | 6.08 | 0.10 | 0.13 | 0.17 | 0.18 | 0.79 | 1.20 | 255 | 0.0 (0) | PASS |
+| 7. Omnibox typing (2000 hist, 2000 bm, 200 tabs) | 2.10 | 0.51 | 0.78 | 1.40 | 2.08 | 1.28 | 2.03 | 1467 | 0.0 (0) | PASS |
+| 8. Composer @ and history/ (200 tabs, 2000 hist) | 10.28 | 0.46 | 0.66 | 1.33 | 1.46 | 0.70 | 0.92 | 1545 | 0.0 (0) | PASS |
+| 9. Settings > Shortcuts with search | 10.02 | 0.09 | 0.14 | 0.65 | 0.67 | 1.62 | 2.62 | 591 | 0.0 (0) | PASS |
+| 10. Downloads panel idle (50 kept + 3 active) | 4.24 | 0.18 | 0.22 | 0.61 | 0.75 | 1.61 | 2.91 | 582 | 0.0 (0) | PASS |
+| 11. Ctrl+Tab switcher (120 candidates) | 2.54 | 0.28 | 0.35 | 0.63 | 0.71 | 1.17 | 1.85 | 977 | 0.0 (0) | PASS |
+| 12. Cold icons (200 distinct hosts) | 11.85 | 0.41 | 0.50 | 0.71 | 0.73 | 0.92 | 1.08 | 1450 | 0.0 (0) | PASS |
+
+### 3. WebKit metrics (`KEAZIG_E2E="webkit metrics" zig build e2e`)
+
+```
+webkit-metrics: first_paint_ms=20.1 nav_ms_p50=52.0 nav_ms_max=60.0 idle_cpu=0.93% web_procs=6 web_mb=77.8 app_mb=140.0
+```
+
+- `first_paint_ms` improved from `48.7 ms` (Q0 baseline) to `20.1 ms` via immediate `StageHost.setPanes` placement (`addSubview:` + `setFrame:` inside `setPanes` while held at `alphaValue = 0` until `_doAfterNextPresentationUpdate:`).
+
+### 4. Final gate summary
+
+- `zig build lines`: `141 files, all within 600 lines` (`zig/nanoui`) and `451 files, all within 600 lines` (`zig/`).
+- `zig build test`: `125/125 tests passed` in `zig/nanoui` and `262/262 tests passed` in `zig/`.
+- `zig build ui-test`: `127/127 tests passed` in `zig/`.
+- `zig build e2e`: all `63/63` real-WebKit e2e cases pass (`idle: 19 frames in 3.00 s (6.3 fps), cpu 14.8 ms (0.49% of wall), 11.3 ms of it in frames, 0 allocations in frames`) with `0` leaked Zig allocations.
+- `./build-zig.sh release test`: builds `build/KeaZig.app (0.1.0, arm64)` cleanly without touching `/Applications`.

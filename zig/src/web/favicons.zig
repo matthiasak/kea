@@ -548,11 +548,26 @@ fn landed(job: *Job) void {
         return;
     };
     removeSet(&f.busy, job.host);
-    const png = job.png orelse return putSet(&f.missing, job.host);
-    job.png = null;
-    const kept = f.remember(job.key, png) orelse return a.free(png);
-    if (!job.shy) f.keep(job.key, kept.png);
-    kea.iconsChanged();
+    const scheme_changed = job.dark != f.dark();
+    if (job.png) |png| {
+        job.png = null;
+        if (f.remember(job.key, png)) |kept| {
+            if (!job.shy) f.keep(job.key, kept.png);
+            kea.iconsChanged();
+        } else a.free(png);
+    } else if (!scheme_changed) {
+        putSet(&f.missing, job.host);
+    }
+    if (scheme_changed) {
+        for (kea.browsers.items) |b| {
+            for (b.tabs.items) |t| {
+                if (t.web == null or t.loading or t.asleep()) continue;
+                var sbuf: [300]u8 = undefined;
+                const th = site(&sbuf, t.url()) orelse continue;
+                if (std.mem.eql(u8, th, job.host)) f.fetch(t, false);
+            }
+        }
+    }
 }
 
 test {
