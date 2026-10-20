@@ -29,6 +29,7 @@ pub const methods = [_]objc.Method{
     .{ .name = "_webView:requestNotificationPermissionForSecurityOrigin:decisionHandler:", .imp = &@import("notifications.zig").asked, .types = "v@:@@@?" },
     .{ .name = "_webView:requestGeolocationPermissionForOrigin:initiatedByFrame:decisionHandler:", .imp = &askedForLocation, .types = "v@:@@@@?" },
     .{ .name = "_webView:printFrame:pdfFirstPageSize:completionHandler:", .imp = &printFrame, .types = "v@:@@{CGSize=dd}@?" },
+    .{ .name = "_webViewDidRequestPointerLock:completionHandler:", .imp = &pointerLock, .types = "v@:@@?" },
     .{ .name = "webViewDidClose:", .imp = &didClose, .types = "v@:@" },
     .{ .name = "webViewWebContentProcessDidTerminate:", .imp = &didTerminate, .types = "v@:@" },
 };
@@ -344,7 +345,7 @@ fn printFrame(self: objc.Object, _: objc.SEL, wv: objc.Object, frame: objc.Objec
         return dialogs.call(comp, .{});
     const copied = _Block_copy(comp) orelse return dialogs.call(comp, .{});
     const cls = objc.defineClass(.{
-        .name = "KeaZigPrintDelegate",
+        .name = "KeaPrintDelegate",
         .methods = &.{
             .{ .name = "printOperationDidRun:success:contextInfo:", .imp = &printDidRun, .types = "v@:@B^v" },
         },
@@ -360,4 +361,15 @@ fn printDidRun(self_obj: objc.Object, _: objc.SEL, _: objc.Object, _: objc.BOOL,
     const b: objc.Object = @ptrCast(ctx orelse return);
     dialogs.call(b, .{});
     _Block_release(b);
+}
+
+// MARK: the pointer
+
+/// A page's `requestPointerLock()`: games, WebGL scenes and 3D viewers
+/// steered with the mouse. Granted; WebKit hides the cursor and gives it
+/// back on Esc.
+/// ponytail: with one of Kea's panels open, the first Esc closes the
+/// panel (`keys.escape`) and the second frees the pointer.
+fn pointerLock(_: objc.Object, _: objc.SEL, _: objc.Object, comp: *const anyopaque) callconv(.c) void {
+    dialogs.call(comp, .{true});
 }
