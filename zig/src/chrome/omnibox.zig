@@ -17,6 +17,7 @@ const card = @import("../design/card.zig");
 const controls = @import("controls.zig");
 const omnibox_list = @import("omnibox_list.zig");
 const kea_fact = @import("kea_fact.zig");
+const kea_flight = @import("kea_flight.zig");
 
 const px = struct {
     fn v(n: f32) ui.Length {
@@ -97,7 +98,11 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette, area: ui.Rect, opts:
         .group = true,
     });
     defer ui.end(c);
-    if (st.over) scrim(b, c, p, area);
+    if (st.over) {
+        scrim(b, c, p, area);
+    } else if (!b.kea.opts.headless and !b.kea.opts.hidden) {
+        kea_flight.newTabArt(c, .{ .w = area.w, .h = area.h }, y);
+    }
     field(b, c, p, st, x, y, w, showing);
     if (!st.over and opts.facts and b.prefs.kea_facts) kea_fact.view(b, c, p, .{ .w = area.w, .h = area.h }, y, 1);
     if (omnibox_list.list(b, c, p, x, y + field_height + 8, w)) |click| switch (click) {
