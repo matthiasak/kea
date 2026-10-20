@@ -136,7 +136,11 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette) void {
             sheet.close(b, .recalling);
             if (b.activeTab()) |t| t.go(u);
         },
-        .forget => |k| b.kea.history.forget(k),
+        .forget => |k| {
+            // Other Macs forget it too (`Sync.historyForgot`); first, while `k` lives.
+            b.kea.sync.historyForgot(k);
+            b.kea.history.forget(k);
+        },
     }
 }
 

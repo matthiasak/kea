@@ -2,8 +2,9 @@
 //! `bars`): the announcement — a line that says one thing and leaves, and
 //! shows a file just saved in the Finder — a page asking for the camera,
 //! the microphone, where you are or to send notifications (`captureAsking`,
-//! answering the decision WebKit is holding), and the hint while the
-//! pointer is picking things to hide (`veiling`).
+//! answering the decision WebKit is holding), the offer to keep a password
+//! a page just sent (`keepAsking`), and the hint while the pointer is
+//! picking things to hide (`veiling`).
 const std = @import("std");
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
@@ -19,12 +20,40 @@ const keep_ops = @import("../web/downloads_keep.zig");
 const id_said: u64 = std.hash.Wyhash.hash(0, "kea.bar.announcement");
 const id_ask: u64 = std.hash.Wyhash.hash(0, "kea.bar.asking");
 const id_veil: u64 = std.hash.Wyhash.hash(0, "kea.bar.veiling");
+const id_keep: u64 = std.hash.Wyhash.hash(0, "kea.bar.keep-asking");
 
 /// `move(edge: .bottom)`: how far below its place a bar starts and ends.
 const rise: f32 = 60;
 
 /// The veiling hint's words.
 pub const veil_hint = "Click anything to hide it   ⌘Z undo   esc done";
+
+// MARK: Browser's announcements (`announce`, `announce(_:file:)`)
+
+pub fn announce(b: *Browser, msg: []const u8) void {
+    announceFile(b, msg, null);
+}
+
+/// `announce(_:file:)`: a line about a file stays long enough to be
+/// clicked; VoiceOver hears it too.
+pub fn announceFile(b: *Browser, msg: []const u8, file: ?[]const u8) void {
+    const text = b.gpa.dupe(u8, msg) catch return;
+    const copy = if (file) |f| b.gpa.dupe(u8, f) catch null else null;
+    hush(b);
+    b.announcement = text;
+    b.announced_file = copy;
+    b.announced_until = ui.clock.now() + @as(f64, if (file == null) 1.7 else 4);
+    if (b.window) |w| nanoui.a11y.announce(w.nswindow, msg);
+    b.redraw();
+}
+
+/// The announcement gone, and its file.
+pub fn hush(b: *Browser) void {
+    if (b.announcement) |old| b.gpa.free(old);
+    if (b.announced_file) |old| b.gpa.free(old);
+    b.announcement = null;
+    b.announced_file = null;
+}
 
 pub fn view(b: *Browser, c: *ui.Context, p: *const Palette) void {
     const now = ui.clock.now();
@@ -36,6 +65,7 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette) void {
         if (presence.presence(c, id_said, live, motion.settle, null)) |t| announcement(b, c, p, text, t) else b.hush();
     }
     if (b.asking) |asking| if (presence.presence(c, id_ask, true, motion.settle, null)) |t| captureAsking(b, c, p, asking, t);
+    if (b.passwords.offering) |offer| if (presence.presence(c, id_keep, true, motion.settle, null)) |t| keepAsking(b, c, p, offer, t);
     if (presence.presence(c, id_veil, b.veiling, motion.settle, null)) |t| hint(c, p, veil_hint, t);
 }
 
@@ -106,6 +136,39 @@ fn captureAsking(b: *Browser, c: *ui.Context, p: *const Palette, asking: dialogs
     const always = once and keeps and plain(c, "Always allow", p.ink);
     const deny = plain(c, "Don't allow", p.muted);
     if (allow_it.clicked) dialogs.answerBar(b, true, !once) else if (always) dialogs.answerBar(b, true, true) else if (deny) dialogs.answerBar(b, false, true);
+}
+
+/// `keepAsking`: offered once, answered once. The password is never shown
+/// back to you.
+fn keepAsking(b: *Browser, c: *ui.Context, p: *const Palette, offer: @import("../passwords/forms.zig").Offer, t: f32) void {
+    const login = offer.login;
+    var s = capsule(p, 0.12, 20, 6);
+    s.gap = 12;
+    s.padding = .{ .left = 16, .right = 12, .top = 9, .bottom = 9 };
+    const r = arriving(t);
+    s.offset = r.offset;
+    s.opacity = r.opacity;
+    const i = c.open(s, "kea.keep-asking");
+    defer c.end();
+    _ = c.interact(i, .{});
+    const said = if (offer.changed)
+        c.print("Update the password for {s} on {s}?", .{ login.user, login.host })
+    else if (login.user.len == 0)
+        c.print("Save this password for {s}?", .{login.host})
+    else
+        c.print("Save the password for {s} on {s}?", .{ login.user, login.host });
+    ui.text(c, said, .{ .size = 12.5, .color = p.ink, .truncate = true });
+    const keep_label = if (offer.changed) "Update" else "Save";
+    const keep = c.open(.{ .padding = .xy(11, 5), .radius = controls.capsule, .background = p.ink, .control = true }, "kea.keep-save");
+    const keep_it = c.interact(keep, .{});
+    c.addA11y(keep, .button, keep_label, "", false, true);
+    ui.text(c, keep_label, .{ .size = 12, .color = p.ground });
+    c.end();
+    const later = plain(c, "Not now", p.muted);
+    const never = !offer.changed and plain(c, "Never here", p.muted);
+    // Answered last: each answer frees the offer drawn above.
+    const keeping = @import("../passwords/browser_passwords.zig");
+    if (keep_it.clicked) keeping.keepOffer(b) else if (later) keeping.dropOffer(b) else if (never) keeping.neverOffer(b);
 }
 
 fn knockout(s: ui.Shadow) ui.Shadow {

@@ -1,0 +1,6 @@
+{
+  "manifest_version": 3,
+  "name": "Kea Fixture",
+  "version": "1.0",
+  "content_scripts": [{ "matches": ["kea-test://site/*"], "js": ["content.js"], "run_at": "document_idle" }]
+}

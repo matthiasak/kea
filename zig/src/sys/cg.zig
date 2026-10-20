@@ -1,5 +1,5 @@
 //! CoreGraphics and ImageIO externs for what Kea draws by hand into
-//! pictures (the ring, later Mermaid and the Welcome flight), and an sRGB
+//! pictures (the ring, Mermaid's diagrams), and an sRGB
 //! bitmap that becomes PNG bytes for `ui.image`.
 const std = @import("std");
 const nanoui = @import("nanoui");
@@ -63,6 +63,31 @@ pub extern "c" fn CGImageSourceCreateImageAtIndex(source: Source, index: usize, 
 pub extern "c" const kCGImagePropertyGIFDictionary: CFStringRef;
 pub extern "c" const kCGImagePropertyGIFDelayTime: CFStringRef;
 
+// Paths, fills, dashes and text, for Mermaid's diagrams (ai/mermaid/draw.zig).
+pub const Path = *opaque {};
+pub const AffineTransform = extern struct { a: f64 = 1, b: f64 = 0, c: f64 = 0, d: f64 = 1, tx: f64 = 0, ty: f64 = 0 };
+pub const line_join_round: i32 = 1;
+pub extern "c" fn CGContextTranslateCTM(ctx: Context, tx: f64, ty: f64) void;
+pub extern "c" fn CGContextSetRGBFillColor(ctx: Context, r: f64, g: f64, b: f64, a: f64) void;
+pub extern "c" fn CGContextSetLineJoin(ctx: Context, join: i32) void;
+pub extern "c" fn CGContextSetLineDash(ctx: Context, phase: f64, lengths: ?[*]const f64, count: usize) void;
+pub extern "c" fn CGContextBeginPath(ctx: Context) void;
+pub extern "c" fn CGContextMoveToPoint(ctx: Context, x: f64, y: f64) void;
+pub extern "c" fn CGContextAddLineToPoint(ctx: Context, x: f64, y: f64) void;
+pub extern "c" fn CGContextClosePath(ctx: Context) void;
+pub extern "c" fn CGContextAddEllipseInRect(ctx: Context, rect: objc.CGRect) void;
+pub extern "c" fn CGContextAddPath(ctx: Context, path: Path) void;
+pub extern "c" fn CGContextFillPath(ctx: Context) void;
+pub extern "c" fn CGContextSetTextMatrix(ctx: Context, t: AffineTransform) void;
+pub extern "c" fn CGContextSetTextPosition(ctx: Context, x: f64, y: f64) void;
+pub extern "c" fn CGPathCreateWithRoundedRect(rect: objc.CGRect, corner_width: f64, corner_height: f64, transform: ?*const AffineTransform) ?Path;
+pub extern "c" fn CGPathRelease(path: Path) void;
+pub const Line = *opaque {};
+pub extern "c" fn CTLineCreateWithAttributedString(string: objc.Object) ?Line;
+pub extern "c" fn CTLineGetTypographicBounds(line: Line, ascent: ?*f64, descent: ?*f64, leading: ?*f64) f64;
+pub extern "c" fn CTLineDraw(line: Line, ctx: Context) void;
+pub extern "c" const kCTForegroundColorFromContextAttributeName: CFStringRef;
+
 /// An sRGB picture of `w`×`h` points at `scale` pixels a point, drawn in
 /// points with y up (CoreGraphics' own way).
 pub const Bitmap = struct {
@@ -91,6 +116,10 @@ pub const Bitmap = struct {
 
     pub fn stroke(b: Bitmap, color: ui.Color) void {
         CGContextSetRGBStrokeColor(b.ctx, color.r, color.g, color.b, color.a);
+    }
+
+    pub fn fill(b: Bitmap, color: ui.Color) void {
+        CGContextSetRGBFillColor(b.ctx, color.r, color.g, color.b, color.a);
     }
 
     /// The PNG of what is drawn (ImageIO's, `public.png`), on `gpa`.

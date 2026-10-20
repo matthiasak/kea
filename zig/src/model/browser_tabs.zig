@@ -66,8 +66,11 @@ pub fn prepare(self: *Browser, t: *Tab) void {
 
 /// A tab in this window's space, its page built: blank, or loading `url`.
 pub fn make(self: *Browser, url: []const u8, shy: bool) *Tab {
+    // An extension's own page is served only to a view built from that
+    // extension's configuration (`Browser.extensionConfiguration`).
+    const page = @import("../ext/controller.zig").configurationFor(self.kea, url);
     const store = if (shy) null else self.kea.dataStore(self.space_id);
-    const t = Tab.create(self.gpa, self.kea.tabId(), shy, store, self.kea) catch @panic("OOM");
+    const t = (if (page) |c| Tab.createWith(self.gpa, self.kea.tabId(), false, c, self.kea) else Tab.create(self.gpa, self.kea.tabId(), shy, store, self.kea)) catch @panic("OOM");
     // Heard before its first load, so the visit is the browser's to record.
     self.prepare(t);
     if (url.len > 0) t.go(url);
@@ -131,7 +134,7 @@ pub const OpenOptions = struct {
 /// next to the page it came from.
 pub fn open(self: *Browser, url: []const u8, o: OpenOptions) *Tab {
     const shy = if (o.from) |s| s.shy else false;
-    const t = if (o.may_wait and !o.foreground and self.prefs.lazy_tabs) blk: {
+    const t = if (o.may_wait and !o.foreground and self.prefs.lazy_tabs and @import("../ext/ext.zig").idOf(url) == null) blk: {
         const asleep = self.makeAsleep(url, "", null, self.space_id);
         asleep.shy = shy;
         break :blk asleep;
@@ -155,6 +158,13 @@ pub fn open(self: *Browser, url: []const u8, o: OpenOptions) *Tab {
 /// in the row comes to its end and is the one opened.
 pub fn newTab(self: *Browser) void {
     if (self.tabById(self.active_id)) |a| if (a.shy) return self.newShyTab();
+    // An extension's new tab page, if one asked and you said yes.
+    if (self.kea.ext) |e| if (e.newTabPage(self.gpa)) |page| {
+        defer self.gpa.free(page);
+        _ = self.open(page, .{ .foreground = true });
+        self.summoning = false;
+        return;
+    };
     var i = self.tabs.items.len;
     while (i > 0) {
         i -= 1;
@@ -172,6 +182,7 @@ pub fn newTab(self: *Browser) void {
     self.freshField(t);
     self.rememberSession();
     self.redraw();
+    if (self.kea.ext) |e| e.offerNewTabPage(t);
 }
 
 /// ⌘⇧N. A tab that keeps nothing; never two empty ones.
@@ -246,6 +257,7 @@ pub fn select(self: *Browser, tab: *Tab) void {
     };
     self.cancelTabEdit();
     self.summoning = false;
+    self.passwords.accounts.away();
     if (tab.id == self.active_id) return self.redraw();
     // The tab whose video is out comes home first; the one left may float.
     @import("../web/float.zig").selecting(self, tab);
@@ -397,9 +409,17 @@ pub fn insert(self: *Browser, tab: *Tab, index: usize) void {
 // MARK: a tab to another space
 
 /// `move(_:toSpace:)`: out of this row and into the space's, reopening with
-/// its sign-ins. Swift first asks when the page has unsaved form entries;
-/// that needs the form relay, which arrives with P10.
+/// its sign-ins. A page whose sign-ins change asks first when it holds
+/// unsaved form entries (passwords/form_relay.zig `moveAsking`).
 pub fn moveToSpace(self: *Browser, tab: *Tab, id: Uuid) void {
+    if (!self.prefs.uses_spaces or id.eql(self.space_id)) return;
+    if (self.kea.spaceIndex(id) == null or self.indexOf(tab) == null) return;
+    if (tab.shy or tab.data_store == self.kea.dataStore(id)) return finishMove(self, tab, id);
+    @import("../passwords/form_relay.zig").moveAsking(self, tab, id);
+}
+
+/// `finishMove`: the move itself, once nothing is left to ask.
+pub fn finishMove(self: *Browser, tab: *Tab, id: Uuid) void {
     if (!self.prefs.uses_spaces or id.eql(self.space_id)) return;
     const at = self.kea.spaceIndex(id) orelse return;
     const index = self.indexOf(tab) orelse return;

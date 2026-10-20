@@ -1,7 +1,7 @@
-//! Settings › General (Settings.swift:174-393): the default browser, the
-//! engine, site shortcuts, appearance, zoom and the page switches, in
-//! Swift's order and words. The bench switch isn't here (Bench.swift isn't
-//! ported); Bring things over joins with the import (P11).
+//! Settings › General (Settings.swift:174-393): the default browser, Bring
+//! things over, the engine, site shortcuts, appearance, zoom and the page
+//! switches, in Swift's order and words. The bench switch isn't here
+//! (Bench.swift isn't ported).
 const std = @import("std");
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
@@ -69,6 +69,12 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette) void {
     if (is_default) {
         ui.icon(c, "checkmark", .{ .size = 12, .weight = .medium, .frame = 24, .color = p.ink });
     } else if (controls.pill(c, p, "Make default", .{ .filled = true }).clicked) becomeDefault(b);
+    ui.end(c);
+    frame.rule(c, p);
+    // Coming from another browser, now or any time later: the same sheet as
+    // File › Bring Things Over… and the Welcome's.
+    plate.line(c, p, "Bring things over", "Bookmarks, history, passwords and extensions from another browser on this Mac, or from a file it exported");
+    if (controls.pill(c, p, "Bring Things Over…", .{}).clicked) @import("../sheet.zig").show(b, .bringing);
     ui.end(c);
     frame.rule(c, p);
 

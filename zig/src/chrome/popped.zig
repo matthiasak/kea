@@ -125,13 +125,16 @@ fn closed(ctx: *anyopaque, _: *nanoui.Window) void {
     const kea = self.kea;
     self.saveFrame();
     if (kea.marks_window == self) kea.marks_window = null;
+    if (self.browser) |b| if (b.chat.window == self) {
+        b.chat.window = null;
+    };
     if (!self.quiet) switch (self.panel) {
         .bookmarks => {
             kea.prefs.set("bookmarks_sidebar", false);
             side_panels.redrawAll(kea);
         },
-        // P9: the chat's window closing closes the chat (`closeAssistant`).
-        .chat => {},
+        // Closed by its button, the chat closes (`closeAssistant`).
+        .chat => if (self.browser) |b| b.closeAssistant(),
     };
     kea.gpa.destroy(self);
 }
@@ -139,15 +142,17 @@ fn closed(ctx: *anyopaque, _: *nanoui.Window) void {
 /// `NSWindowDidMove` / `DidResize` for some window (app/browsers.zig's
 /// watch): a panel's keeps its frame.
 pub fn framed(kea: *Kea, nswindow: ?objc.Object) void {
-    const m = kea.marks_window orelse return;
-    const w = m.window orelse return;
-    if (nswindow == w.nswindow) m.saveFrame();
+    if (kea.marks_window) |m| if (m.window) |w| if (nswindow == w.nswindow) m.saveFrame();
+    for (kea.browsers.items) |b| if (b.chat.window) |m| if (m.window) |w| if (nswindow == w.nswindow) m.saveFrame();
 }
 
-/// The panel's window, if it has one on screen.
-pub fn windowOf(kea: *Kea, panel: SidePanel) ?*nanoui.Window {
-    if (panel == .bookmarks) if (kea.marks_window) |m| return m.window;
-    return null;
+/// `b`'s panel's window, if it has one on screen.
+pub fn windowOf(b: *Browser, panel: SidePanel) ?*nanoui.Window {
+    const m = switch (panel) {
+        .bookmarks => b.kea.marks_window,
+        .chat => b.chat.window,
+    } orelse return null;
+    return m.window;
 }
 
 /// `followBookmarks`: the bookmarks' window follows the sidebar being

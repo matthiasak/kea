@@ -132,14 +132,12 @@ const act = struct {
         b.welcoming = true;
         b.redraw();
     }
-    // Passwords (P10) and Bring Things Over (P11) do something once their panels exist.
+    // Bring Things Over (P11) does something once its panel exists.
     fn passwords(b: *Browser) void {
-        if (comptime @hasField(Browser, "managing")) b.managing = true;
-        b.redraw();
+        sheet.show(b, .managing);
     }
     fn bringIn(b: *Browser) void {
-        if (comptime @hasField(Browser, "bringing_in")) b.bringing_in = "";
-        b.redraw();
+        sheet.show(b, .bringing);
     }
     fn newWindow(b: *Browser) void {
         _ = browsers.newWindow(b.kea) catch {};
@@ -165,12 +163,11 @@ const act = struct {
     fn stop(b: *Browser) void {
         if (b.activeTab()) |t| if (t.loading) t.stopLoading();
     }
-    // Ubi Chat's (P9), once the Browser has them.
     fn summarize(b: *Browser) void {
-        if (comptime @hasDecl(Browser, "summarizePage")) b.summarizePage();
+        b.summarizePage();
     }
     fn chat(b: *Browser) void {
-        if (comptime @hasDecl(Browser, "toggleChat")) b.toggleChat();
+        b.toggleChat();
     }
     fn zoomIn(b: *Browser) void {
         if (b.activeTab()) |t| t.magnifyBy(1.1);

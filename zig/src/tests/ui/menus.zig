@@ -32,10 +32,8 @@ test "menu bar menus and the File menu in App.swift's order" {
     try expectLabels(&.{ app.kea.app_name, "File", "Edit", "View", "Tabs", "Bookmarks", "History", "Window" }, try labels(a, bar));
     // App.swift:47-78: `.newItem` replaced, then `.printItem`.
     const file = bar[1].submenu.?;
-    const bring: []const []const u8 = if (@hasField(app.Browser, "bringing_in")) &.{ "Bring Things Over…", "─" } else &.{};
-    const want = [_][]const u8{ "New Window", "New Tab", "New Private Tab", "Reopen Closed Tab", "─", "Open Address…", "─" } ++
-        bring ++ [_][]const u8{ "Close Tab", "─", "Share…", "Print…" };
-    try expectLabels(want, try labels(a, file));
+    const want = [_][]const u8{ "New Window", "New Tab", "New Private Tab", "Reopen Closed Tab", "─", "Open Address…", "─", "Bring Things Over…", "─", "Close Tab", "─", "Share…", "Print…" };
+    try expectLabels(&want, try labels(a, file));
     // Nothing to share or print from a blank tab; nothing closed to reopen.
     try t.expect(file[3].disabled);
     try t.expect(file[file.len - 1].disabled and file[file.len - 2].disabled);

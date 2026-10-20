@@ -2,7 +2,8 @@
 //! a floor of black at .10 that closes it when pressed, and the panel in
 //! the middle, arriving at .97 scale and fading in under `Motion.settle`
 //! and leaving the same way. One at a time: Settings (`tuning`), the
-//! bookmarks manager, History and Downloads, each a `Browser` flag opened
+//! bookmarks manager, Passwords (`managing`), Bring things over
+//! (`bringing_in`), History and Downloads, each a `Browser` field opened
 //! through `show`. The floor owns the cursor (`CursorGround`): the arrow.
 const std = @import("std");
 const ui = @import("nanoui").ui;
@@ -11,29 +12,44 @@ const Palette = @import("../design/palette.zig").Palette;
 const motion = @import("../design/motion.zig");
 const presence = @import("presence.zig");
 
-/// Each is the `Browser` field of its name, in `Browser.closePanel`'s order.
-pub const Kind = enum { tuning, bookmarking, recalling, hoarding };
+/// Each is the `Browser` field of its name (`bringing` is `bringing_in`,
+/// the browser it starts on), in `Browser.closePanel`'s order.
+pub const Kind = enum { tuning, bookmarking, managing, bringing, recalling, hoarding };
 
 pub const State = struct {
     /// The sheet last shown, drawn until it has left.
     last: ?Kind = null,
 };
 
+fn field(comptime k: Kind) []const u8 {
+    return if (k == .bringing) "bringing_in" else @tagName(k);
+}
+
+fn isOn(b: *const Browser, comptime k: Kind) bool {
+    const v = @field(b, field(k));
+    return if (@TypeOf(v) == bool) v else v != null;
+}
+
+fn set(b: *Browser, comptime k: Kind, on: bool) void {
+    const f = &@field(b, field(k));
+    if (@TypeOf(f.*) == bool) f.* = on else if (!on) f.* = null else if (f.* == null) f.* = "";
+}
+
 /// The sheet up now.
 pub fn current(b: *const Browser) ?Kind {
-    inline for (@typeInfo(Kind).@"enum".field_names) |name| if (@field(b, name)) return @field(Kind, name);
+    inline for (comptime std.enums.values(Kind)) |k| if (isOn(b, k)) return k;
     return null;
 }
 
 /// Opens `kind` and closes any other.
 pub fn show(b: *Browser, kind: Kind) void {
-    inline for (@typeInfo(Kind).@"enum".field_names) |name| @field(b, name) = @field(Kind, name) == kind;
+    inline for (comptime std.enums.values(Kind)) |k| set(b, k, k == kind);
     b.redraw();
 }
 
 pub fn close(b: *Browser, kind: Kind) void {
     switch (kind) {
-        inline else => |k| @field(b, @tagName(k)) = false,
+        inline else => |k| set(b, k, false),
     }
     b.redraw();
 }
@@ -90,6 +106,14 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette) void {
 fn fresh(b: *Browser, kind: Kind) void {
     if (kind == .tuning) b.settings.reset(b.gpa);
     if (kind == .recalling and b.recalling) @import("history_panel.zig").opened(b);
+    if (kind == .managing) {
+        // `managing`'s didSet: the list read again each time it opens.
+        b.passwords.panel.deinit(b.gpa);
+        b.passwords.panel = .{};
+        if (b.managing) @import("../passwords/browser_passwords.zig").relist(b);
+    }
+    // The import's sheet begins afresh, looking again; gone, its jobs let go.
+    if (kind == .bringing) @import("../import/bring.zig").closePanel(b);
 }
 
 /// What each sheet shows: the panel draws itself (`controls_plate.plate`
@@ -100,5 +124,7 @@ fn panel(b: *Browser, c: *ui.Context, p: *const Palette, kind: Kind) void {
         .recalling => @import("history_panel.zig").view(b, c, p),
         .hoarding => @import("downloads_panel.zig").view(b, c, p),
         .bookmarking => @import("bookmarks/manager.zig").view(b, c, p),
+        .managing => @import("../passwords/passwords_panel.zig").view(b, c, p),
+        .bringing => @import("../import/panel.zig").view(b, c, p),
     }
 }

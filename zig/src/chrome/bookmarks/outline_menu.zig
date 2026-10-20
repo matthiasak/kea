@@ -24,7 +24,7 @@ pub const Pick = struct {
     to: ?Uuid = null,
     list: state.List = .dropdown,
 
-    pub const What = enum { open, open_tab, open_tabs, open_window, group, copy, move, remove, rename, new_inside, sort_name, sort_site, edit, new_folder_top, card_folder, dupes, export_file };
+    pub const What = enum { open, open_tab, open_tabs, open_window, group, copy, move, remove, rename, new_inside, sort_name, sort_site, edit, new_folder_top, card_folder, dupes, export_file, organize };
 
     pub fn fire(self: *Pick, _: *nanoui.menu.Item) void {
         const b = self.b;
@@ -51,6 +51,7 @@ pub const Pick = struct {
             .card_folder => if (self.ids.len > 0) ask.cardFolder(b, self.ids[0]),
             .dupes => ask.duplicates(b),
             .export_file => @import("files.zig").exportFile(b),
+            .organize => @import("proposal.zig").organizeBookmarks(b),
         }
         b.redraw();
     }

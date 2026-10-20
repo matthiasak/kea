@@ -7,6 +7,8 @@ const Browser = @import("browser.zig").Browser;
 /// from sites, which are lists of where you have been too.
 pub fn clearHistory(b: *Browser) void {
     b.kea.history.forgetAll();
+    // Other Macs clear theirs too (History.clear → `Sync.historyCleared`).
+    b.kea.sync.historyCleared();
     b.kea.favicons.forgetAll();
     b.kea.site_search.forget();
     b.announce("History cleared — no footprints left");

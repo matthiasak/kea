@@ -8,6 +8,7 @@ const json = @import("../data/json.zig");
 var hour: ?objc.Object = null;
 var plain: ?objc.Object = null;
 var ago: ?objc.Object = null;
+var brief: ?objc.Object = null;
 
 fn date(at: json.SwiftDate) objc.Object {
     return objc.msg(objc.Object, objc.class("NSDate"), "dateWithTimeIntervalSinceReferenceDate:", .{at});
@@ -60,6 +61,17 @@ pub fn day(alloc: std.mem.Allocator, at: json.SwiftDate) []const u8 {
     const f = made(&plain, "NSDateFormatter");
     objc.msg(void, f, "setDateFormat:", .{objc.nsString("d MMMM")});
     return copy(alloc, objc.msg(?objc.Object, f, "stringFromDate:", .{d}));
+}
+
+/// `.formatted(.dateTime.day().month())`: "27 Sep", in the Mac's own order.
+pub fn dayMonth(alloc: std.mem.Allocator, at: json.SwiftDate) []const u8 {
+    const pool = objc.Pool.push();
+    defer pool.pop();
+    const f = made(&brief, "NSDateFormatter");
+    const locale = objc.msg(objc.Object, objc.class("NSLocale"), "currentLocale", .{});
+    const format = objc.msg(?objc.Object, objc.class("NSDateFormatter"), "dateFormatFromTemplate:options:locale:", .{ objc.nsString("dMMM"), @as(objc.NSUInteger, 0), locale });
+    objc.msg(void, f, "setDateFormat:", .{format orelse objc.nsString("d MMM")});
+    return copy(alloc, objc.msg(?objc.Object, f, "stringFromDate:", .{date(at)}));
 }
 
 /// `Calendar.current.startOfDay(for:)`.

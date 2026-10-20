@@ -15,6 +15,8 @@ const links = @import("../app/links.zig");
 const controls = @import("controls.zig");
 const presence = @import("presence.zig");
 const kea_flight = @import("kea_flight.zig");
+const ring = @import("ring.zig");
+const importing = @import("../import/bring.zig");
 
 pub const State = struct {
     page: u8 = 0,
@@ -32,7 +34,11 @@ const panel_id: u64 = std.hash.Wyhash.hash(0, "kea.welcome");
 
 pub fn view(b: *Browser, c: *ui.Context, p: *const Palette) void {
     const s = &b.welcome;
-    if (b.welcoming and !s.shown) s.* = .{};
+    if (b.welcoming and !s.shown) {
+        s.* = .{};
+        // What is on this Mac is looked for again.
+        importing.closeWelcome(b);
+    }
     s.shown = b.welcoming;
     // There as the window opens (no fade in); out under `Motion.settle`.
     const t = presence.presenceFrom(c, panel_id, if (b.welcoming) 1 else 0, b.welcoming, motion.settle, null) orelse return;
@@ -98,10 +104,50 @@ fn bring(b: *Browser, c: *ui.Context, p: *const Palette) void {
     ui.column(c, .{ .gap = 22, .width = .fill });
     defer ui.end(c);
     heading(c, p, "Bring things over.", "Passwords go into your keychain, bookmarks into the menu, and history means the address field already knows where you go. Nothing in the other browser changes.");
-    // The browsers found, what to bring and the file pill come with the import (P11).
-    if (comptime @hasDecl(Browser, "importFile")) {
-        if (controls.pill(c, p, "From a file another browser exported…", .{}).clicked) b.importFile();
+    if (importing.welcomeSession(b)) |s| found(c, p, s);
+    // Safari, a browser on another Mac, one this can't read: what it
+    // exported, bookmarks, passwords or Safari's own ZIP.
+    if (controls.pill(c, p, "From a file another browser exported…", .{}).clicked) b.importFile();
+}
+
+/// The browsers found, what to bring of the chosen one, and Bring them in.
+fn found(c: *ui.Context, p: *const Palette, s: *importing.Session) void {
+    if (s.found.len == 0) {
+        ui.column(c, .{ .width = .fill });
+        if (s.unreadable.len == 0) ui.text(c, "No other browser found on this Mac — nothing to bring.", .{ .size = 13, .color = p.muted, .wrap = true });
+        for (s.unreadable) |l| ui.text(c, l, .{ .size = 13, .color = p.muted, .wrap = true });
+        ui.end(c);
+        return;
     }
+    ui.column(c, .{ .gap = 14, .width = .fill });
+    if (s.found.len > 1) {
+        const names = c.alloc().alloc([]const u8, s.found.len) catch return ui.end(c);
+        for (names, s.found) |*n, src| n.* = src.name();
+        _ = controls.segmented(c, p, names, &s.choice, false);
+    } else ui.text(c, c.print("From {s}", .{s.found[0].name()}), .{ .size = 13, .color = p.muted });
+    choice(c, p, "Passwords", "macOS will ask once for that browser's keychain key", &s.wants_passwords);
+    choice(c, p, "Bookmarks", "Folders and all, behind the bookmark button", &s.wants_bookmarks);
+    choice(c, p, "History", "The last few thousand places, for finishing addresses", &s.wants_history);
+    ui.end(c);
+    ui.row(c, .{ .gap = 12, .align_items = .center });
+    defer ui.end(c);
+    const enabled = !s.bringing and s.welcome_said == null and (s.wants_passwords or s.wants_history or s.wants_bookmarks);
+    ui.column(c, .{ .opacity = if (enabled) 1 else 0.5 });
+    if (big(c, p, if (s.bringing) "Bringing…" else "Bring them in", true) and enabled) importing.bringAll(s);
+    ui.end(c);
+    if (s.bringing) ring.ring(c, 10);
+    if (s.welcome_said) |said| ui.text(c, said, .{ .size = 13, .color = p.muted });
+}
+
+/// `Choice`: what it is, a word about it, and its switch.
+fn choice(c: *ui.Context, p: *const Palette, title: []const u8, detail: []const u8, on: *bool) void {
+    ui.row(c, .{ .gap = 12, .width = .fill, .align_items = .center });
+    defer ui.end(c);
+    ui.column(c, .{ .gap = 2, .grow = 1, .min_width = 0 });
+    ui.text(c, title, .{ .size = 13.5, .color = p.ink });
+    ui.text(c, detail, .{ .size = 11.5, .color = p.muted });
+    ui.end(c);
+    _ = controls.switch_(c, p, on, title);
 }
 
 fn hold(b: *Browser, c: *ui.Context, p: *const Palette) void {

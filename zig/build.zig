@@ -17,6 +17,9 @@ const frameworks = [_][]const u8{
     "SystemConfiguration",
     "AuthenticationServices",
     "LocalAuthentication",
+    "IOKit",
+    "AVFoundation",
+    "NaturalLanguage",
 };
 
 fn linkMacFrameworks(mod: *std.Build.Module, b: *std.Build, target: std.Build.ResolvedTarget) void {

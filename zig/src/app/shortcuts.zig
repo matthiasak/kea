@@ -10,6 +10,7 @@ const json = @import("../data/json.zig");
 const Store = @import("../data/store.zig").Store;
 const commands = @import("commands.zig");
 const Command = commands.Command;
+const ext_commands = @import("../ext/commands.zig");
 
 pub const defaults_key = "shortcuts";
 
@@ -155,6 +156,11 @@ pub const Shortcuts = struct {
     recording: bool = false,
     /// Told after every change, saved (the menu bar's keys follow, app/menus.zig).
     on_change: ?*const fn (*const Shortcuts) void = null,
+    /// The keys loaded extensions' manifests asked for, by `ext:` id, kept
+    /// for this run (`manifest`, Shortcuts.swift:253).
+    manifest: std.StringArrayHashMapUnmanaged(Override) = .empty,
+    /// The extensions, while there are (ext/commands.zig hands keys to WebKit).
+    ext: ?*@import("../ext/controller.zig").Extensions = null,
 
     pub fn init(gpa: std.mem.Allocator, store: *const Store) Shortcuts {
         var s: Shortcuts = .{ .gpa = gpa, .store = store };
@@ -165,6 +171,29 @@ pub const Shortcuts = struct {
     pub fn deinit(self: *Shortcuts) void {
         self.clearAll();
         self.changed.deinit(self.gpa);
+        for (self.manifest.keys(), self.manifest.values()) |id, o| {
+            self.gpa.free(id);
+            if (o.key) |kc| self.gpa.free(kc.key);
+        }
+        self.manifest.deinit(self.gpa);
+    }
+
+    /// `manifest[id] = Override(key:)`: what an extension's command came with.
+    pub fn noteManifest(self: *Shortcuts, id: []const u8, kc: ?KeyCombo) void {
+        var copy: Override = .{ .key = kc };
+        if (kc) |k| copy.key.?.key = self.gpa.dupe(u8, k.key) catch return;
+        const got = self.manifest.getOrPut(self.gpa, id) catch {
+            if (copy.key) |k| self.gpa.free(k.key);
+            return;
+        };
+        if (got.found_existing) {
+            if (got.value_ptr.key) |old| self.gpa.free(old.key);
+        } else got.key_ptr.* = self.gpa.dupe(u8, id) catch {
+            self.manifest.swapRemoveAt(got.index);
+            if (copy.key) |k| self.gpa.free(k.key);
+            return;
+        };
+        got.value_ptr.* = copy;
     }
 
     pub fn reload(self: *Shortcuts) void {
@@ -215,12 +244,16 @@ pub const Shortcuts = struct {
     /// `key(for:)`: the key `id` has as things stand.
     pub fn effective(self: *const Shortcuts, id: []const u8) ?KeyCombo {
         if (self.changed.get(id)) |o| return o.key;
-        return defaultKey(id);
+        return self.defaultKey(id);
     }
 
-    // ponytail: extension commands (`ext:` ids, their manifests' keys) arrive with P13.
-    fn defaultKey(id: []const u8) ?KeyCombo {
-        return if (commands.named(id)) |cmd| cmd.default_key else null;
+    /// An extension command's is what its manifest asked for, while no key
+    /// of Kea's is in the way: checked each time, so moving or resetting
+    /// one of Kea's commands frees or takes an extension's key at once.
+    fn defaultKey(self: *const Shortcuts, id: []const u8) ?KeyCombo {
+        if (!std.mem.startsWith(u8, id, "ext:")) return if (commands.named(id)) |cmd| cmd.default_key else null;
+        const kc = (self.manifest.get(id) orelse return null).key orelse return null;
+        return if (self.keepsFromExtensions(kc)) null else kc;
     }
 
     pub fn isChanged(self: *const Shortcuts, id: []const u8) bool {
@@ -244,13 +277,19 @@ pub const Shortcuts = struct {
         return false;
     }
 
-    /// A key the menus had that no command has now: the page's again.
+    /// A key the menus had that no command has now: the page's again —
+    /// unless you gave it to an extension's command.
     pub fn isFreed(self: *const Shortcuts, kc: KeyCombo) bool {
         var moved = false;
         for (commands.all) |cmd| {
             if (same(cmd.default_key, kc) and self.changed.contains(cmd.id)) moved = true;
             if (same(self.effective(cmd.id), kc)) return false;
         }
+        if (moved) if (self.ext) |e| if (ext_commands.owner(e, kc, "")) |c| {
+            self.gpa.free(c.id);
+            self.gpa.free(c.title);
+            return false;
+        };
         return moved;
     }
 
@@ -268,7 +307,11 @@ pub const Shortcuts = struct {
         @memcpy(buf[0..kc.key.len], kc.key);
         var own = kc;
         own.key = buf[0..kc.key.len];
-        if (self.owner(own, id)) |other| self.setOverride(other.id, null);
+        if (self.owner(own, id)) |other| self.setOverride(other.id, null) else if (self.ext) |e| if (ext_commands.owner(e, own, id)) |c| {
+            defer self.gpa.free(c.id);
+            defer self.gpa.free(c.title);
+            self.setOverride(c.id, null);
+        };
         self.setOverride(id, own);
     }
 
@@ -278,7 +321,7 @@ pub const Shortcuts = struct {
 
     /// `set(_:for:)`: only a difference from the default is kept.
     pub fn setOverride(self: *Shortcuts, id: []const u8, kc: ?KeyCombo) void {
-        if (sameOpt(kc, defaultKey(id))) self.drop(id) else self.put(id, .{ .key = kc }) catch return;
+        if (sameOpt(kc, self.defaultKey(id))) self.drop(id) else self.put(id, .{ .key = kc }) catch return;
         self.save();
     }
 
@@ -293,6 +336,7 @@ pub const Shortcuts = struct {
     }
 
     fn save(self: *const Shortcuts) void {
+        defer if (self.ext) |e| ext_commands.applyAll(e);
         defer if (self.on_change) |f| f(self);
         if (self.changed.count() == 0) return self.store.remove(defaults_key);
         const bytes = json.encode(self.gpa, json.Map(Override){ .map = self.changed }) catch return;
@@ -323,4 +367,20 @@ test "reserved keys and display" {
     try std.testing.expectEqualStrings("⇧⌘⌫", try std.fmt.bufPrint(&buf, "{f}", .{combo("delete", .{ .shift = true })}));
     try std.testing.expect(!combo("a", .{ .command = false, .shift = true }).isUsable());
     try std.testing.expect(combo("f5", .{ .command = false }).isUsable());
+}
+
+test "an extension command keeps its manifest key unless Kea has it" {
+    var s: Shortcuts = .{ .gpa = std.testing.allocator, .store = undefined };
+    defer s.deinit();
+    const free_a = combo("j", .{ .command = false, .control = true, .shift = true });
+    const free_b = combo("k", .{ .command = false, .control = true, .shift = true });
+    s.noteManifest("ext:a:go", free_a);
+    s.noteManifest("ext:a:new", combo("t", .{}));
+    s.noteManifest("ext:a:none", null);
+    try std.testing.expect(s.effective("ext:a:go").?.eql(free_a));
+    // ⌘T is New Tab's: the extension doesn't get it.
+    try std.testing.expect(s.effective("ext:a:new") == null);
+    try std.testing.expect(s.effective("ext:a:none") == null);
+    s.noteManifest("ext:a:go", free_b);
+    try std.testing.expect(s.effective("ext:a:go").?.eql(free_b));
 }

@@ -251,7 +251,13 @@ pub fn restoreSession(self: *Browser) void {
         return;
     };
     self.active_id = first.id;
-    // Only the ones you were looking at actually load.
+    // Only the ones you were looking at actually load. Started hidden, they
+    // wait for the extensions, whose early scripts should run (#199).
+    if (self.kea.ext) |e| if (e.holdsLaunch()) return e.whenStarted(1.5, self, wakeVisible);
+    wakeVisible(self);
+}
+
+fn wakeVisible(self: *Browser) void {
     for (self.visibleTabIDs()) |id| if (self.tabById(id)) |t| {
         _ = t.wake();
     };

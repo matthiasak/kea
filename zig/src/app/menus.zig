@@ -22,6 +22,7 @@ const Glyph = @import("../data/prefs.zig").Glyph;
 const substitutions = @import("../web/substitutions.zig");
 const Substitution = substitutions.Substitution;
 const bookmarks_menu = @import("../chrome/bookmarks/menu.zig");
+const send = @import("../sync/send.zig");
 
 /// The bar's own menus, in its order.
 pub const Top = enum { app, file, edit, view, tabs, bookmarks, history, window };
@@ -266,8 +267,7 @@ pub fn items(a: std.mem.Allocator, kea: *Kea, b: *Browser, top: Top) ![]const Me
             try m.line();
             try m.command("app.settings", .{});
             try m.command("app.welcome", .{});
-            // Passwords (P10) once its panel is there.
-            if (comptime @hasField(Browser, "managing")) try m.command("app.passwords", .{});
+            try m.command("app.passwords", .{});
             try m.line();
             try m.role(.hide);
             try m.role(.hide_others);
@@ -287,11 +287,8 @@ pub fn items(a: std.mem.Allocator, kea: *Kea, b: *Browser, top: Top) ![]const Me
             try m.line();
             try m.command("file.openAddress", .{});
             try m.line();
-            // Bring Things Over (P11) once its sheet is there.
-            if (comptime @hasField(Browser, "bringing_in")) {
-                try m.command("file.import", .{});
-                try m.line();
-            }
+            try m.command("file.import", .{});
+            try m.line();
             try m.command("file.closeTab", .{});
             try m.line();
             try m.command("file.share", .{ .disabled = blank });
@@ -332,8 +329,8 @@ pub fn items(a: std.mem.Allocator, kea: *Kea, b: *Browser, top: Top) ![]const Me
             try m.command("view.stop", .{});
             try m.command("view.reader", .{});
             try m.command("view.float", .{});
-            // The AI add-on's, only once it is on (and Ubi Chat is there, P9).
-            if (p.ai and @hasDecl(Browser, "toggleChat")) {
+            // The AI add-on's, only once it is on.
+            if (p.ai) {
                 try m.line();
                 try m.command("view.summarize", .{ .disabled = blank });
                 try m.command("view.ask", .{});
@@ -382,7 +379,7 @@ pub fn items(a: std.mem.Allocator, kea: *Kea, b: *Browser, top: Top) ![]const Me
                     try m.page(label, g.url, .{ .ghost = i });
                 }
             }
-            // ponytail: Tabs from Other Macs comes with Sync (P12).
+            try send.otherMacs(a, b, &m.out);
             try m.line();
             try m.command("history.show", .{});
             try m.command("history.downloads", .{});
@@ -429,7 +426,7 @@ fn tabs(m: *Build, active: ?*@import("../web/tab.zig").Tab, blank: bool) !void {
     try m.command("tabs.duplicate", .{ .disabled = blank });
     try m.command("tabs.copyAddress", .{ .disabled = blank });
     try m.command("tabs.copyMarkdown", .{ .disabled = blank });
-    // ponytail: Send to Device comes with Sync (P12).
+    if (active) |t| try m.add(try send.menu(m.a, b, t));
     try m.command("tabs.pasteAndGo", .{});
     try m.line();
     try m.command("tabs.closeOthers", .{ .disabled = b.tabs.items.len < 2 });

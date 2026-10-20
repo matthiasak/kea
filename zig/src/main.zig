@@ -7,6 +7,7 @@ const browsers = @import("app/browsers.zig");
 const links = @import("app/links.zig");
 const menus = @import("app/menus.zig");
 const keys = @import("app/keys.zig");
+const importing = @import("model/browser_import.zig");
 
 pub fn main(init: std.process.Init) !void {
     // Closing the last window keeps the app, as Safari and Chrome do (#327).
@@ -15,6 +16,8 @@ pub fn main(init: std.process.Init) !void {
     const k = try kea.Kea.create(app.gpa, app, .{});
     defer k.destroy();
     links.watchForTrouble(k);
+    // What an import left half done when the app last stopped (Links.swift:105).
+    importing.sweepLater();
     app.options.ctx = k;
     app.options.on_terminate = onTerminate;
     app.options.on_reopen = onReopen;
@@ -27,6 +30,8 @@ pub fn main(init: std.process.Init) !void {
     menus.install(k);
     keys.install(k);
     browsers.restore(k);
+    // Keys and timers, once the windows are up (Links.swift:191).
+    k.sync.start();
     // Addresses from other apps have somewhere to go from here on.
     links.hand(k);
     try app.run();
@@ -34,6 +39,8 @@ pub fn main(init: std.process.Init) !void {
 
 fn onTerminate(ctx: ?*anyopaque) void {
     const k: *kea.Kea = @ptrCast(@alignCast(ctx.?));
+    // A file still being brought in stops, given up to five seconds.
+    importing.waitForImports();
     k.flush();
 }
 
@@ -42,10 +49,22 @@ fn onReopen(ctx: ?*anyopaque) void {
 }
 
 fn onActive(ctx: ?*anyopaque, active: bool) void {
-    browsers.appActive(@ptrCast(@alignCast(ctx.?)), active);
+    const k: *kea.Kea = @ptrCast(@alignCast(ctx.?));
+    browsers.appActive(k, active);
+    // Sync's didBecomeActive observer, from `start()` on.
+    if (active and k.sync.started) k.sync.syncNow();
 }
 
 test {
+    _ = @import("ext/controller.zig");
+    _ = @import("ext/controller_updates.zig");
+    _ = @import("ext/controller_delegate_frames.zig");
+    _ = @import("ext/controller_fence.zig");
+    _ = @import("ext/crx_tests.zig");
+    _ = @import("ext/store_relay.zig");
+    _ = @import("ext/downloads.zig");
+    _ = @import("ext/shims/install_tests.zig");
+    _ = @import("ext/shims/answer_tests.zig");
     _ = @import("data/json.zig");
     _ = @import("data/disk.zig");
     _ = @import("data/store.zig");
@@ -114,13 +133,26 @@ test {
     _ = @import("ai/catalog.zig");
     _ = @import("ai/shell.zig");
     _ = @import("ai/ubi_chat.zig");
+    _ = @import("passwords/passwords_tests.zig");
     _ = @import("ai/organize.zig");
     _ = @import("ai/chat_sections.zig");
     _ = @import("ai/mermaid/mermaid.zig");
+    _ = @import("ai/markdown_view.zig");
     _ = @import("sys/keychain.zig");
     _ = @import("sys/urlsession.zig");
     _ = @import("sync/core.zig");
     _ = @import("sync/sigv4.zig");
     _ = @import("sync/drop.zig");
     _ = @import("sync/sync_tests.zig");
+    _ = @import("ext/ext.zig");
+    _ = @import("ext/value.zig");
+    _ = @import("ext/capture.zig");
+    _ = @import("ext/capture_watch.zig");
+    _ = @import("ext/offscreen.zig");
+    _ = @import("ext/native_pipe.zig");
+    _ = @import("ext/native.zig");
+    _ = @import("ext/redirect.zig");
+    _ = @import("ext/files.zig");
+    _ = @import("ext/external.zig");
+    _ = @import("import/tests.zig");
 }

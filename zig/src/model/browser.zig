@@ -41,6 +41,7 @@ const omni_ops = @import("omni.zig");
 const marks_ops = @import("../chrome/bookmarks/actions.zig");
 const split_ops = @import("split.zig");
 const clear_ops = @import("browser_clear.zig");
+const chat_ops = @import("browser_chat.zig");
 
 pub const TabSplit = split_ops.TabSplit;
 pub const TabGroup = groups_ops.TabGroup;
@@ -64,6 +65,7 @@ pub const Browser = struct {
     record_rows: std.StringArrayHashMapUnmanaged([]u8) = .empty,
     /// The last window, closed with the app running: kept, tabs and all.
     shut: bool = false,
+    ext: @import("browser_ext.zig").State = .{},
 
     // Shared with every window, owned by `kea`.
     store: *Store,
@@ -144,13 +146,16 @@ pub const Browser = struct {
     reviewing: bool = false,
     hidden_panel: @import("../chrome/hidden_panel.zig").State = .{},
 
-    // The sheets over the window (chrome/sheet.zig), one at a time: open
-    // them with `sheet.show`. Settings (`tuning`), the bookmarks manager,
-    // History, Downloads; and the Welcome over everything (`welcoming`).
+    // The sheets over the window (chrome/sheet.zig), one at a time: open them with `sheet.show`.
+    // Settings (`tuning`), the bookmarks manager, History, Downloads, Passwords (`managing`), Bring
+    // things over (`bringing_in`, import/bring.zig); and the Welcome over everything (`welcoming`).
     tuning: bool = false,
     bookmarking: bool = false,
     recalling: bool = false,
     hoarding: bool = false,
+    managing: bool = false,
+    bringing_in: ?[]const u8 = null,
+    importing: @import("../import/bring.zig").State = .{},
     welcoming: bool = false,
     sheet: @import("../chrome/sheet.zig").State = .{},
     settings: @import("../chrome/settings/frame.zig").State = .{},
@@ -205,6 +210,11 @@ pub const Browser = struct {
     peek_tab: ?*Tab = null,
     peek_ui: @import("../chrome/peek.zig").State = .{},
     switcher: @import("../chrome/tab_switcher.zig").TabSwitcher = .{},
+    /// Ubi Chat, while open (`assisting`), and its panel's state.
+    assisting: ?*@import("../ai/assistant.zig").Assistant = null,
+    chat: @import("../ai/chat_view.zig").State = .{},
+    /// The keychain's offer, the accounts under a sign-in box, the Passwords list (passwords/browser_passwords.zig).
+    passwords: @import("../passwords/browser_passwords.zig").State,
 
     // MARK: peek and ⌃Tab's switcher (chrome/peek.zig, chrome/tab_switcher.zig)
     pub const peek = @import("../chrome/peek.zig").peek;
@@ -219,6 +229,7 @@ pub const Browser = struct {
     pub const pickBookmark = marks_ops.pickBookmark;
     pub const openBookmarks = marks_ops.openBookmarks;
     pub const pageKept = marks_ops.pageKept;
+    pub const importFile = @import("../chrome/bookmarks/files.zig").importFile;
 
     // MARK: tabs (browser_tabs.zig)
     pub const displayedTabs = tabs_ops.displayedTabs;
@@ -414,6 +425,7 @@ pub const Browser = struct {
             // Asked to stay out of the way: it starts that way (see Fold.swift).
             .folded = kea.prefs.sidebar and kea.prefs.side_hides,
             .omni = omni_ops.Omni.init(kea.gpa),
+            .passwords = .{ .accounts = .{ .gpa = kea.gpa } },
             // The first window of the run, until the Welcome has been seen.
             .welcoming = kea.browsers.items.len == 0 and !kea.prefs.welcomed,
         };
@@ -443,9 +455,12 @@ pub const Browser = struct {
     /// Its tabs let go, and every other space's (`closeAll`); what's kept
     /// was written by whoever closed it.
     pub fn destroy(self: *Browser) void {
+        @import("browser_ext.zig").destroy(self);
         if (self.remembering) |t| t.browser = null;
         sleep_ops.unwatch(self);
         self.kea.fetches.unbind(self);
+        chat_ops.deinit(self);
+        @import("../import/bring.zig").deinit(self);
         self.hush();
         // A page still waiting on the bar is refused, never left holding.
         if (self.asking) |a| {
@@ -490,6 +505,7 @@ pub const Browser = struct {
         self.marks_ui.deinit(self.gpa);
         self.link_status.deinit(self.gpa);
         self.switcher.deinit(self.gpa);
+        self.passwords.deinit(self.gpa);
         handoff_ops.forget(self);
         self.gpa.destroy(self);
     }
@@ -532,6 +548,7 @@ pub const Browser = struct {
     }
 
     pub fn redraw(self: *Browser) void {
+        if (self.kea.ext) |e| e.follow(self);
         const w = self.window orelse return;
         self.syncStageHost();
         if (w.surface) |s| s.requestFrame();
@@ -565,30 +582,16 @@ pub const Browser = struct {
         return null;
     }
 
-    pub fn announce(self: *Browser, msg: []const u8) void {
-        self.announceFile(msg, null);
-    }
+    // MARK: announcements (chrome/bars.zig)
+    pub const announce = @import("../chrome/bars.zig").announce;
+    pub const announceFile = @import("../chrome/bars.zig").announceFile;
+    pub const hush = @import("../chrome/bars.zig").hush;
 
-    /// `announce(_:file:)`: a line about a file stays long enough to be
-    /// clicked; VoiceOver hears it too.
-    pub fn announceFile(self: *Browser, msg: []const u8, file: ?[]const u8) void {
-        const text = self.gpa.dupe(u8, msg) catch return;
-        const copy = if (file) |f| self.gpa.dupe(u8, f) catch null else null;
-        self.hush();
-        self.announcement = text;
-        self.announced_file = copy;
-        self.announced_until = ui.clock.now() + @as(f64, if (file == null) 1.7 else 4);
-        if (self.window) |w| nanoui.a11y.announce(w.nswindow, msg);
-        self.redraw();
-    }
-
-    /// The announcement gone, and its file.
-    pub fn hush(self: *Browser) void {
-        if (self.announcement) |old| self.gpa.free(old);
-        if (self.announced_file) |old| self.gpa.free(old);
-        self.announcement = null;
-        self.announced_file = null;
-    }
+    // MARK: Ubi Chat (browser_chat.zig)
+    pub const toggleChat = chat_ops.toggleChat;
+    pub const openChat = chat_ops.openChat;
+    pub const summarizePage = chat_ops.summarizePage;
+    pub const closeAssistant = chat_ops.closeAssistant;
 
     // MARK: what is kept, and getting rid of it (browser_clear.zig)
     pub const clearHistory = clear_ops.clearHistory;

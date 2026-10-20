@@ -19,6 +19,7 @@ const state = @import("tab_state.zig");
 const scripts = @import("tab_scripts.zig");
 const dialogs = @import("dialogs.zig");
 const ui_half = @import("delegates_ui.zig");
+const ext_nav = @import("../ext/nav.zig");
 
 pub const Change = enum { address, title, state };
 
@@ -39,7 +40,7 @@ fn class() objc.Class {
             .{ .name = "webView:didFailNavigation:withError:", .imp = &didFail, .types = "v@:@@@" },
             .{ .name = "webView:didFailProvisionalNavigation:withError:", .imp = &didFail, .types = "v@:@@@" },
             .{ .name = "userContentController:didReceiveScriptMessage:", .imp = &didReceiveMessage, .types = "v@:@@" },
-        } ++ ui_half.methods),
+        } ++ ui_half.methods ++ ext_nav.methods),
     });
 }
 
@@ -164,6 +165,8 @@ fn decide(self: objc.Object, wv: objc.Object, action: objc.Object) objc.NSIntege
     const t = tabOf(self) orelse return allow;
     const b = t.browser;
     const main = objc.msg(?objc.Object, action, "targetFrame", .{}) != null and isMainTarget(action);
+    // An extension's OAuth sign-in coming back: the answer, never loaded.
+    if (ext_nav.signIn(t, url, main)) return cancel;
     // 0.0.0.0, as a dev server prints it: this Mac, as localhost.
     if (main) if (address.reachable(t.gpa, url) catch null) |local| {
         defer t.gpa.free(local);
@@ -173,6 +176,9 @@ fn decide(self: objc.Object, wv: objc.Object, action: objc.Object) objc.NSIntege
     const kind = objc.msg(objc.NSInteger, action, "navigationType", .{});
     const flags = objc.msg(objc.NSUInteger, action, "modifierFlags", .{});
     const web = std.mem.eql(u8, scheme, "http") or std.mem.eql(u8, scheme, "https");
+    // A website returning to an extension page, or an extension's page
+    // going to a website: the tab is swapped where it stands.
+    if (ext_nav.returning(t, wv, action, url, web, isMainTarget(action))) return cancel;
     // A middle-click's link was opened by MiddleRelay already.
     if (kind == link_activated and objc.msg(objc.NSInteger, action, "buttonNumber", .{}) == 4) return cancel;
     if (b) |br| {
@@ -239,12 +245,15 @@ fn dropEmpty(b: *Browser, t: *Tab) void {
 
 // MARK: arriving
 
-fn didCommit(self: objc.Object, _: objc.SEL, wv: objc.Object, _: ?objc.Object) callconv(.c) void {
+fn didCommit(self: objc.Object, _: objc.SEL, wv: objc.Object, navigation: ?objc.Object) callconv(.c) void {
     const t = tabOf(self) orelse return;
     const pool = objc.Pool.push();
     defer pool.pop();
-    // `didCommit()`: the page on screen is the new one.
+    // `didCommit()`: the page on screen is the new one; what the old one
+    // waited for under its field went with it.
+    t.kea.passkeys.forget(wv);
     if (tab_mod.currentUrl(wv)) |u| if (u.len > 0 and !std.mem.eql(u8, u, "about:blank")) t.own(&t.committed, u);
+    ext_nav.ended(t, wv, navigation, true);
     if (t.browser) |b| if (t.id == b.active_id) @import("../chrome/link_bubble.zig").dismiss(b);
     if (t.browser) |b| if (t.id == b.active_id) @import("page_find.zig").invalidatePage(b, false);
     t.setFailure(null);
@@ -268,6 +277,9 @@ fn didFinish(self: objc.Object, _: objc.SEL, wv: objc.Object, _: ?objc.Object) c
     if (t.favicons) |f| f.fetch(t, false);
     // The find bar still open over a page that has just come in.
     @import("page_find.zig").arrived(t);
+    @import("../ext/store_relay.zig").tellStore(t);
+    // A page that arrived after a password went out: did the sign-in take?
+    @import("../passwords/form_relay.zig").settle(t, true);
     const b = t.browser orelse return;
     if (t.shy or b.restoring) return;
     b.history.record(page, t.page_title);
@@ -286,8 +298,9 @@ fn learned(t: *Tab, value: ?objc.Object, _: ?objc.Object, _: usize) void {
     _ = b.kea.site_search.learn(t.url(), objc.fromNSString(v));
 }
 
-fn didFail(self: objc.Object, _: objc.SEL, _: objc.Object, _: ?objc.Object, err: objc.Object) callconv(.c) void {
+fn didFail(self: objc.Object, _: objc.SEL, wv: objc.Object, navigation: ?objc.Object, err: objc.Object) callconv(.c) void {
     const t = tabOf(self) orelse return;
+    ext_nav.ended(t, wv, navigation, false);
     state.uncover(t, 0);
     const code = objc.msg(objc.NSInteger, err, "code", .{});
     // Cancelled: a redirect, a stopped load, a second Return.

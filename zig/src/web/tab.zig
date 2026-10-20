@@ -47,6 +47,8 @@ pub const Tab = struct {
     delegate: ?objc.Object = null,
     /// Its KVO observer (`watch`, `AudioWatch`, the capture states).
     observer: ?objc.Object = null,
+    /// An extension page's UI delegate in front of `delegate` (Tab.swift:266).
+    page_delegate: ?objc.Object = null,
     /// What the page view keeps (swipes, keys handed to the page).
     page: ?*page_view.Page = null,
     /// What its next view is made with (`configuration`), retained.
@@ -72,7 +74,7 @@ pub const Tab = struct {
     muted: bool = false,
     /// Something on the page is making noise (`noisy`, AudioWatch).
     noisy: bool = false,
-    /// The page is using the camera or microphone (`recording`).
+    /// An extension is recording from this tab's page (RecordingIndicator).
     recording: bool = false,
     /// How far down its page, 0…1 in hundredths (`reading`, keaScroll).
     reading: f32 = 0,
@@ -94,6 +96,9 @@ pub const Tab = struct {
     /// The hidden-things stylesheet its next page is armed with (`veils`),
     /// and what was armed last (`armedKey`; 0: nothing yet).
     veils: []u8 = &.{},
+    /// The extension whose store page has its own "Add to Kea" in place
+    /// (`storePlaced`), so the bottom bar doesn't offer it twice.
+    store_placed: ?[]u8 = null,
     armed_key: u64 = 0,
 
     /// A slept tab's history and scroll (`memory`, retained), its picture
@@ -104,6 +109,9 @@ pub const Tab = struct {
     cover_serial: u32 = 0,
     /// A sideways swipe in progress (`pull`), for the disc.
     pull: ?swipe.Pull = null,
+    /// A sign-in in flight (`sent`, `named`; Forms), and the page in full screen (`immersed`).
+    sign_in: @import("../passwords/forms.zig").SignIn = .{},
+    immersed: bool = false,
 
     /// Questions shown and waiting (the pane card; a hidden run's, answered
     /// with `answerQuestion`), and those held until the tab is in front.
@@ -134,6 +142,12 @@ pub const Tab = struct {
     built: bool = false,
     /// Its space's sign-ins; null for the default.
     data_store: ?objc.Object = null,
+    /// Where an extension return comes from (`extensionReturn`, Tab.swift 248).
+    ext_return: @import("../ext/return_nav.zig").ReturnNavigation = .{},
+    /// An address shown and reported to extensions without loading it, and
+    /// the page under it (`held`, `heldOver`; `ext/auth.zig` `hold`).
+    held_url: ?[]u8 = null,
+    held_over: ?[]u8 = null,
 
     fn make(gpa: std.mem.Allocator, id: u64, kea: *Kea) !*Tab {
         const self = try gpa.create(Tab);
@@ -186,12 +200,15 @@ pub const Tab = struct {
         dialogs.dropAll(self);
         self.discard();
         _ = live.remove(self.serial);
-        for ([_]?[]u8{ self.pin, self.home, self.name, self.pending, self.address, self.committed, self.failure, self.picture, self.cover, self.draft }) |s| if (s) |owned| self.gpa.free(owned);
+        for ([_]?[]u8{ self.pin, self.home, self.name, self.pending, self.address, self.committed, self.failure, self.picture, self.cover, self.draft, self.held_url, self.held_over }) |s| if (s) |owned| self.gpa.free(owned);
+        self.ext_return.deinit(self.gpa);
         self.gpa.free(self.page_title);
         self.gpa.free(self.veils);
+        if (self.store_placed) |s| self.gpa.free(s);
         self.crashes.deinit(self.gpa);
         self.questions.deinit(self.gpa);
         self.held.deinit(self.gpa);
+        self.sign_in.deinit(self.gpa);
         if (self.memory) |m| objc.release(m);
         if (self.configuration) |c| objc.release(c);
         self.gpa.destroy(self);
@@ -215,7 +232,9 @@ pub const Tab = struct {
         config.inspector(objc.msg(objc.Object, objc.msg(objc.Object, view, "configuration", .{}), "preferences", .{}), true);
         const delegate = delegates.makeDelegate(self);
         objc.msg(void, view, "setNavigationDelegate:", .{delegate});
-        objc.msg(void, view, "setUIDelegate:", .{delegate});
+        const capture = @import("../ext/capture.zig");
+        objc.msg(void, view, "setUIDelegate:", .{if (self.kea.ext != null) capture.uiDelegate(self.kea, self.configuration.?, delegate, &self.page_delegate) else delegate});
+        if (self.kea.ext != null) capture.watchScreen(view);
         self.web = view;
         self.delegate = delegate;
         page_view.holdForFirstFrame(self);
@@ -237,6 +256,7 @@ pub const Tab = struct {
             if (self.floating) @import("float.zig").dropped(self);
             const pool = objc.Pool.push();
             defer pool.pop();
+            self.kea.passkeys.forget(wv);
             scripts.uninstall(self, wv);
             objc.msg(void, wv, "stopLoading", .{});
             objc.msg(void, wv, "setNavigationDelegate:", .{@as(?objc.Object, null)});
@@ -249,11 +269,14 @@ pub const Tab = struct {
             objc.setZig(d, null);
             objc.release(d);
         }
+        if (self.page_delegate) |d| objc.release(d);
+        self.page_delegate = null;
         self.web = null;
         self.delegate = null;
         self.loading = false;
         self.noisy = false;
         self.recording = false;
+        self.immersed = false;
     }
 
     // MARK: what the row reads
@@ -346,7 +369,11 @@ pub const Tab = struct {
     /// `go(to:)`: set straight away, so the tab stops being blank in the
     /// frame the field goes; a sleeping tab is simply awake again.
     pub fn go(self: *Tab, target: []const u8) void {
+        // From the web into an extension's page or back: another view, swapped
+        // in next turn (`onCross` → `Browser.replace`).
+        if (self.kea.ext != null and @import("../model/browser_ext.zig").crosses(self, target)) return;
         self.own(&self.address, target);
+        self.own(&self.held_url, null);
         self.setTitle("");
         self.setFailure(null);
         self.reading = 0;

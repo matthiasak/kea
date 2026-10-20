@@ -64,7 +64,7 @@ pub fn waiting(m: *const ai.Ai) bool {
 
 pub fn start(m: *ai.Ai, b: *Browser) void {
     var bytes: [32]u8 = undefined;
-    std.crypto.random.bytes(&bytes);
+    std.c.arc4random_buf(&bytes, bytes.len);
     var vb: [43]u8 = undefined;
     var cb: [43]u8 = undefined;
     const verifier = verifierFor(bytes, &vb);

@@ -16,4 +16,12 @@ test {
     _ = @import("recall.zig");
     _ = @import("bookmarks.zig");
     _ = @import("menus.zig");
+    _ = @import("markdown.zig");
+    _ = @import("organize.zig");
+    _ = @import("chat.zig");
+    _ = @import("sync.zig");
+    _ = @import("settings_ai.zig");
+    _ = @import("import_arc.zig");
+    _ = @import("import.zig");
+    _ = @import("passwords.zig");
 }

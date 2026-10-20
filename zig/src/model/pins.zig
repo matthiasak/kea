@@ -2,7 +2,7 @@
 //! window" (1917-2010). A pin is a tab with a letter, kept at the head of
 //! the row — squares, then rows — put down by ⌘W rather than closed, and
 //! the same in every window: what makes it a pin is `kea.pins`'s, each
-//! window keeping its own tab for it. Arc's import (`takeArc`) comes with P11.
+//! window keeping its own tab for it. Arc's import (`takeArc`) is `browser_arc.zig`.
 const std = @import("std");
 const Browser = @import("browser.zig").Browser;
 const Tab = @import("../web/tab.zig").Tab;

@@ -14,7 +14,7 @@ pub const Case = struct {
     run: *const fn (*Harness) anyerror!void,
 };
 
-const cases = @import("smoke.zig").cases ++ @import("windows.zig").cases ++ @import("favicons.zig").cases ++ @import("web.zig").cases ++ @import("links.zig").cases ++ @import("downloads.zig").cases ++ @import("page_features.zig").cases ++ @import("page_b.zig").cases ++ @import("side_panels.zig").cases ++ @import("peek_switch.zig").cases ++ @import("split.zig").cases ++ @import("find_bar.zig").cases ++ @import("menus.zig").cases;
+const cases = @import("smoke.zig").cases ++ @import("windows.zig").cases ++ @import("favicons.zig").cases ++ @import("web.zig").cases ++ @import("links.zig").cases ++ @import("downloads.zig").cases ++ @import("page_features.zig").cases ++ @import("page_b.zig").cases ++ @import("side_panels.zig").cases ++ @import("peek_switch.zig").cases ++ @import("split.zig").cases ++ @import("find_bar.zig").cases ++ @import("menus.zig").cases ++ @import("chat.zig").cases ++ @import("passwords.zig").cases ++ @import("extensions.zig").cases;
 
 pub const Harness = struct {
     gpa: std.mem.Allocator,
@@ -154,7 +154,10 @@ pub fn main(init: std.process.Init) !void {
         h.temp.deinit(gpa);
         if (result) |_| {
             std.debug.print("ok   {s}\n", .{case.name});
-        } else |err| {
+        } else |err| if (err == error.Skipped) {
+            // A case for what this Mac lacks (extensions below macOS 15.4).
+            std.debug.print("ok   {s} (skipped: <15.4)\n", .{case.name});
+        } else {
             failed += 1;
             const why = if (err == error.CaseFailed) h.reason else @errorName(err);
             std.debug.print("FAIL {s}: {s}\n", .{ case.name, why });

@@ -31,3 +31,13 @@ pub fn bar(f: *Fixture) void {
     keep(f);
     f.browser.prefs.set("bookmarks_bar", true);
 }
+
+/// P9: the manager showing Organize with AI's proposal.
+pub fn organize(f: *Fixture) void {
+    keep(f);
+    const b = f.browser;
+    @import("ui/organize.zig").ready(b);
+    app.sheet.show(b, .bookmarking);
+    f.tester.frame();
+    app.bookmarks_proposal.send(b, "");
+}

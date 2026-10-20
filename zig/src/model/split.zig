@@ -233,6 +233,7 @@ pub fn focusPane(self: *Browser, tab: *Tab) void {
     if (comptime @hasDecl(Browser, "closePeek")) if (self.peek_tab != null) self.closePeek();
     self.cancelTabEdit();
     self.summoning = false;
+    self.passwords.accounts.away();
     self.setEditing(false);
     self.setTyped("");
     self.setActive(tab.id);

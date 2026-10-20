@@ -24,6 +24,7 @@ const outline = @import("outline.zig");
 const row_menu = @import("outline_menu.zig");
 const files = @import("files.zig");
 const found = @import("manager_found.zig");
+const proposal = @import("proposal.zig");
 
 const px = struct {
     fn v(n: f32) ui.Length {
@@ -45,9 +46,10 @@ pub fn frame(b: *Browser) void {
         // What was done here can't be undone from a page's text field.
         s.manager_seen = false;
         b.bookmarks.stopUndo();
-        s.picks.reset();
+        s.picks.reset(b.gpa);
     }
     if (!b.bookmarking) return;
+    proposal.frame(b);
     // A row taken away, by anything, is no longer picked.
     if (s.revision != b.bookmarks.revision) {
         s.revision = b.bookmarks.revision;
@@ -112,8 +114,12 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette) void {
     }
     const hunted = plate.hunt(c, p, &picks.query, "Search bookmarks");
     if (hunted.submitted) openFirst(b, c);
-    if (picks.ids.items.items.len > 0) bar(b, c, p);
-    if (b.bookmarks.isEmpty()) {
+    if (picks.organizing) |says| {
+        proposal.asking(b, c, p, says);
+    } else if (picks.proposal == null and picks.ids.items.items.len > 0) bar(b, c, p);
+    if (picks.proposal) |pr| {
+        proposal.view(b, c, p, pr);
+    } else if (b.bookmarks.isEmpty()) {
         plate.cardBox(c, p);
         plate.nothing(c, p, "Nothing pocketed yet. Add this page with \u{21E7}\u{2318}B, or bring yours in below.");
         ui.end(c);
@@ -194,11 +200,7 @@ fn foot(b: *Browser, c: *ui.Context, p: *const Palette) void {
     ui.row(c, .{ .width = .fill, .gap = 8, .align_items = .center });
     defer ui.end(c);
     ui.text(c, "Bring in from", .{ .size = 12, .color = p.muted });
-    // Bring in… opens Bring Things Over (P11's `bringingIn`) once it exists.
-    if (comptime @hasField(Browser, "bringing_in")) if (controls.pill(c, p, "Bring in\u{2026}", .{}).clicked) {
-        sheet.close(b, .bookmarking);
-        b.bringing_in = "";
-    };
+    if (controls.pill(c, p, "Bring in\u{2026}", .{}).clicked) sheet.show(b, .bringing);
     if (controls.pill(c, p, "File\u{2026}", .{}).clicked) files.importFile(b);
     ui.spacer(c);
     if (controls.pill(c, p, "New Folder\u{2026}", .{}).clicked) ask.newFolder(b, null, null);
@@ -224,7 +226,10 @@ fn organizeMenu(a: std.mem.Allocator, b: *Browser, _: u64) anyerror![]const Menu
     try out.append(a, try row_menu.item(a, b, "Sort Top Level by Site", .sort_site, &.{}, null, .manager));
     try out.append(a, .separator);
     try out.append(a, try row_menu.item(a, b, "Remove Duplicates\u{2026}", .dupes, &.{}, null, .manager));
-    // Organize with AI… comes with P9 (`organizeBookmarks`).
+    try out.append(a, .separator);
+    var ai = try row_menu.item(a, b, "Organize with AI\u{2026}", .organize, &.{}, null, .manager);
+    ai.disabled = b.marks_ui.picks.organizing != null;
+    try out.append(a, ai);
     // Not in Swift: the list written out as a bookmarks page (P8.7's export).
     try out.append(a, .separator);
     try out.append(a, try row_menu.item(a, b, "Export Bookmarks\u{2026}", .export_file, &.{}, null, .manager));

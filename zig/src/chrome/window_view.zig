@@ -54,8 +54,9 @@ pub fn view(b: *Browser, c: *ui.Context) void {
     if (b.editing_tab == null) b.tab_field.claimed = null;
     space_swipe.frame(b, c);
     groups_view.beginFrame(b);
-    // The bookmarks' own window follows the prefs, before anything is laid out.
+    // The panels' own windows follow the prefs, before anything is laid out.
     @import("popped.zig").followBookmarks(b.kea);
+    @import("../model/browser_chat.zig").followChatWindow(b);
 
     const r = room(b, c);
     applyGround(b, p, r);
@@ -78,6 +79,8 @@ pub fn view(b: *Browser, c: *ui.Context) void {
     }
     if (!b.prefs.sidebar and !r.folded and !r.fullscreen) tab_bar.tabBar(b, c, p);
     if (r.barShown()) drawBookmarksBar(b, c, p, r);
+    // On the page, as Swift's `Page` overlay: under the fold, bars and sheets.
+    @import("../passwords/accounts_view.zig").view(b, c, p);
     if (!r.fullscreen) fold.view(b, c, p);
     bars.view(b, c, p);
     // Over the page only: the column, the strip and the bookmarks bar stay uncovered.
@@ -97,6 +100,7 @@ pub fn view(b: *Browser, c: *ui.Context) void {
     // No dimming for this one: the page stays in view while it offers to put things back.
     hidden_panel.view(b, c, p);
     tab_switcher_view.view(b, c, p);
+    @import("../import/progress.zig").view(b, c, p);
     drawOverlay(b, c, p);
 }
 
@@ -113,6 +117,7 @@ fn room(b: *Browser, c: *ui.Context) Room {
         .marks_asked = prefs.bookmarks_sidebar,
         .marks_popped = prefs.marks_popped,
         .marks_expanded = b.expanded_panel == .bookmarks,
+        .chat_asked = b.assisting != null,
         .chat_expanded = b.expanded_panel == .chat,
         .chat_popped = prefs.chat_popped,
         .chat_width_pref = prefs.chat_width,

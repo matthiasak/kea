@@ -110,11 +110,11 @@ test "right click opens tab menu" {
     defer arena.deinit();
     const items = try app.tab_menu.items(arena.allocator(), f.browser, t);
     // TabMenu's order for a plain tab: groups, spaces and Split View off,
-    // one window. Send to Device (between the copies and Mute) comes with Sync.
+    // one window.
     const want = [_][]const u8{
         "Pin",          "Move to New Window", "-",          "Rename",           "Duplicate",
-        "Site Information…", "Copy Address", "Copy as Markdown Link", "Mute Tab", "Put to Sleep",
-        "-",            "Close Tab",          "Close Other Tabs", "Reopen Closed Tab",
+        "Site Information…", "Copy Address", "Copy as Markdown Link", "Send to Device", "Mute Tab",
+        "Put to Sleep", "-",                  "Close Tab",  "Close Other Tabs", "Reopen Closed Tab",
     };
     try std.testing.expectEqual(want.len, items.len);
     for (want, items) |w, it| {

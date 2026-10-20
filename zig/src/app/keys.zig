@@ -197,7 +197,12 @@ pub fn take(b: *Browser, event: objc.Object) bool {
         }
         if (sc.isFreed(kc)) return false;
     };
-    // ponytail: extensions' own keys come here, before ours, with P13.
+    // A shortcut an extension registered — ⌥⇧D, ⌃⇧Y — before ours, since
+    // none of ours use those. Never one of ours, nor one of the Mac's.
+    if (flags & (command | option | control) != 0) if (b.kea.ext) |x| {
+        const free = if (combo) |kc| !sc.keepsFromExtensions(kc) else true;
+        if (free and @import("../ext/controller_buttons.zig").take(x, event)) return true;
+    };
 
     if (flags & command == 0) return false;
     const shifted = flags & shift != 0;
@@ -245,7 +250,7 @@ pub fn take(b: *Browser, event: objc.Object) bool {
             t.stopLoading();
         },
         'y' => if (!shifted) history_panel.toggle(b) else {
-            if (!b.prefs.ai or !@hasDecl(Browser, "toggleChat")) return false;
+            if (!b.prefs.ai) return false;
             commands.named("view.ask").?.run(b);
         },
         'j' => if (shifted) downloads_panel.toggle(b) else return arrows(b, event, code, shifted),
@@ -308,9 +313,9 @@ pub fn escape(b: *Browser) bool {
     if (b.making_space) return done(spaces_view.cancel(b));
     // The same panels in the same order as ⌘W (`closeFront`).
     if (sheet.closePanel(b)) return true;
-    if (comptime @hasField(Browser, "suggesting")) if (b.suggesting != null) return done(b.dropChoice());
+    if (b.passwords.accounts.suggesting != null) return done(@import("../passwords/browser_passwords.zig").dropChoice(b));
     if (side_panels.collapse(b)) return true;
-    if (comptime @hasField(Browser, "assisting")) if (b.assisting != null) return done(b.closeAssistant());
+    if (b.assisting != null) return done(b.closeAssistant());
     if (b.veiling) return done(curtain_js.toggleHiding(b));
     if (b.reviewing) return done(hidden_panel.setReviewing(b, false));
     if (b.finder.finding) return done(page_find.closeFind(b));

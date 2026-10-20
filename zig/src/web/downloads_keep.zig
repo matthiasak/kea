@@ -14,6 +14,7 @@ const json = @import("../data/json.zig");
 const appkit = @import("../sys/appkit.zig");
 const dialogs = @import("dialogs.zig");
 const dl = @import("downloads.zig");
+const ext_downloads = @import("../ext/downloads.zig");
 const Fetches = dl.Fetches;
 const Entry = dl.Entry;
 const Op = dl.Op;
@@ -106,12 +107,15 @@ fn sayName(owner: ?*Browser, comptime fmt: []const u8, name: []const u8, file: ?
 
 // MARK: WKDownloadDelegate
 
-fn decideDestination(self: objc.Object, _: objc.SEL, download: objc.Object, _: objc.Object, suggested: ?objc.Object, handler: *const anyopaque) callconv(.c) void {
+fn decideDestination(self: objc.Object, _: objc.SEL, download: objc.Object, response: objc.Object, suggested: ?objc.Object, handler: *const anyopaque) callconv(.c) void {
     const f = objc.getZig(Fetches, self) orelse return dialogs.call(handler, .{@as(?objc.Object, null)});
     const pool = objc.Pool.push();
     defer pool.pop();
-    const name = dl.fileName(ca, objc.fromNSString(suggested)) catch @panic("OOM");
     const owner = if (f.item(download)) |it| it.owner else null;
+    // The name an extension asked for (`namedDownloads`), else WebKit's.
+    const asked = if (owner) |b| ext_downloads.takeName(b, objc.fromNSString(objc.msg(?objc.Object, objc.msg(?objc.Object, response, "URL", .{}), "absoluteString", .{}))) else null;
+    defer if (asked) |a| owner.?.gpa.free(a);
+    const name = dl.fileName(ca, asked orelse objc.fromNSString(suggested)) catch @panic("OOM");
     const op = f.hold(.{ .fetches = f, .owner = owner, .download = objc.retain(download), .handler = _Block_copy(handler), .name = name });
     if (f.destination(download)) |chosen| {
         op.chosen = true;
@@ -158,6 +162,7 @@ fn didFinish(self: objc.Object, _: objc.SEL, download: objc.Object) callconv(.c)
     const ended = f.finish(download, file) orelse return;
     const path = file orelse return say(ended.owner, "Download finished");
     if (!listed) return sayName(ended.owner, "Saved {s}", std.fs.path.basename(path), null);
+    if (source) |u| ext_downloads.finished(objc.fromNSString(objc.msg(?objc.Object, u, "absoluteString", .{})), path);
     saved(f, ended.owner, path, host);
 }
 

@@ -21,12 +21,8 @@ test "folder sync between two Kea instances" {
     defer ka.destroy();
     const kb = try Kea.create(gpa, null, .{ .root = tb.root, .suite = tb.suite, .headless = true });
     defer kb.destroy();
-    var sa: Sync = undefined;
-    sa.init(ka);
-    defer sa.deinit();
-    var sb: Sync = undefined;
-    sb.init(kb);
-    defer sb.deinit();
+    const sa = &ka.sync;
+    const sb = &kb.sync;
     try testing.expect(!sa.device.eql(sb.device));
 
     try testing.expectEqualStrings("Fill in the bucket details first", sa.use("correct horse", null).?);

@@ -167,7 +167,10 @@ pub fn awake(b: *Browser, t: *Tab) ?[]const u8 {
     if (t.loading) return "still loading";
     if (t.noisy) return "playing sound";
     if (t.floating) return "its video is out";
-    if (t.recording) return "on a call";
+    // WKMediaCaptureStateNone = 0.
+    if (objc.msg(objc.NSInteger, t.web.?, "cameraCaptureState", .{}) != 0 or
+        objc.msg(objc.NSInteger, t.web.?, "microphoneCaptureState", .{}) != 0) return "on a call";
+    if (b.kea.ext != null and @import("../ext/capture.zig").screen(t.web.?)) return "recording the screen";
     if (@import("downloads.zig").busy(b.kea, t.web.?)) return "downloading";
     if (t.held.items.len > 0 or t.questions.items.len > 0) return "a question waiting";
     // A sign-in window hands its answer back to the page that opened it.

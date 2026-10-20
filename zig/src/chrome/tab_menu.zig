@@ -175,12 +175,10 @@ const Pick = struct {
 
 // The items whose work lands with a later phase show once it has: Split
 // View's with P7 (`TabSplit`), Rename and Site Information with the tab's
-// own address field (P6), Put to Sleep with Sleep.swift (P5), Send to
-// Device with Sync (P12).
+// own address field (P6), Put to Sleep with Sleep.swift (P5).
 const split = @hasDecl(Browser, "openInSplit");
 const editing = @hasDecl(Browser, "beginTabEdit");
 const sleeps = @hasDecl(Browser, "sleep");
-const syncs = @hasField(Kea, "sync");
 
 fn extensionPage(url: []const u8) bool {
     return std.mem.startsWith(u8, url, "chrome-extension:");
@@ -274,7 +272,7 @@ pub fn items(arena: std.mem.Allocator, b: *Browser, tab: *Tab) ![]MenuItem {
     try out.append(arena, try add.plain("Site Information…", .site_info, !editing or tab.isBlank() or tab.pin != null));
     try out.append(arena, try add.plain("Copy Address", .copy_address, tab.isBlank()));
     try out.append(arena, try add.plain("Copy as Markdown Link", .copy_link, tab.isBlank()));
-    if (comptime syncs) try out.append(arena, try b.kea.sync.sendMenu(arena, b, tab));
+    try out.append(arena, try @import("../sync/send.zig").menu(arena, b, tab));
     try out.append(arena, try add.plain(if (tab.muted) "Unmute Tab" else "Mute Tab", .mute, false));
     // Let go of now, as after ten minutes unseen; not the tab on screen,
     // nor one that has to stay awake.

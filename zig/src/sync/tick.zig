@@ -263,7 +263,7 @@ fn publish(s: *Sync, da: std.heap.ArenaAllocator, devices: []const sync_mod.Devi
 }
 
 /// `RelativeDateTimeFormatter().localizedString(for:relativeTo: Date())`.
-fn relative(a: Allocator, date: SwiftDate) ![]const u8 {
+pub fn relative(a: Allocator, date: SwiftDate) ![]const u8 {
     const pool = objc.Pool.push();
     defer pool.pop();
     const f = objc.msg(objc.Object, objc.class("NSRelativeDateTimeFormatter"), "new", .{});

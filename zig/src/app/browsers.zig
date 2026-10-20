@@ -110,6 +110,9 @@ pub fn open(kea: *Kea, record: ?*const WindowRecord, frame: ?CGRect) !*Browser {
         objc.msg(void, ns, "setFrameTopLeftPoint:", .{top_left});
     };
     try b.bindWindow(win);
+    // Extensions see every window; the first one starts them (`register`,
+    // `Extensions.start(for:)`, Browser.swift:1544).
+    if (kea.ext) |e| e.start(b);
     if (!kea.opts.hidden) {
         win.show();
         if (full) win.setFullScreen(true);
@@ -230,6 +233,20 @@ fn onClose(ctx: *anyopaque, _: *nanoui.Window) void {
     if (quitting) return;
     if (was_primary and kea.browsers.items.len > 0) becomePrimary(kea.browsers.items[0]);
     save(kea, true);
+}
+
+/// `closePopups(of:)`: an extension unloaded, turned off or removed — the
+/// popup windows it opened go with it.
+pub fn closePopups(kea: *Kea, id: []const u8) void {
+    // Closing one takes it out of the list: from the end.
+    var i = kea.browsers.items.len;
+    while (i > 0) {
+        i -= 1;
+        if (i >= kea.browsers.items.len) continue;
+        const b = kea.browsers.items[i];
+        const p = b.ext.popup orelse continue;
+        if (std.mem.eql(u8, p, id)) if (b.window) |w| w.close();
+    }
 }
 
 fn remember(kea: *Kea, b: *Browser) void {
@@ -362,6 +379,7 @@ fn onKey(ctx: *anyopaque, w: *nanoui.Window) void {
     b.shut = false;
     b.kea.windows.front = b;
     b.handOff();
+    if (b.kea.ext) |e| e.focused(b);
 }
 
 // MARK: watching frames (`Browsers.watchFrames`)

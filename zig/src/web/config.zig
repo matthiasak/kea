@@ -107,6 +107,11 @@ pub fn configuration(kea: *Kea, shy: bool, data_store: ?objc.Object) objc.Object
     // A test run's hidden pages keep running (WKInactiveSchedulingPolicyNone).
     if (kea.opts.root != null and objc.msg(objc.BOOL, prefs, "respondsToSelector:", .{objc.sel("setInactiveSchedulingPolicy:")}))
         objc.msg(void, prefs, "setInactiveSchedulingPolicy:", .{@as(objc.NSInteger, 2)});
+    // A test run's pretend camera and microphone (see ext/capture_watch.zig).
+    if (kea.ext != null) @import("../ext/capture.zig").mockDevices(kea, prefs);
+    // Chrome extensions see every page but a private one, unless Settings ›
+    // Extensions says they may; the controller can't be added later.
+    @import("../ext/controller.zig").attachTo(kea, config, shy);
     inspector(prefs, true);
     return config;
 }

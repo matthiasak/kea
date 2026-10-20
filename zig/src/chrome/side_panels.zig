@@ -99,8 +99,8 @@ pub fn toggleBookmarks(kea: *Kea) void {
 /// back to its column, when it is open at all.
 pub fn collapse(b: *Browser) bool {
     const panel = b.expanded_panel orelse return false;
-    // ponytail: Ubi Chat's "open" (`assisting != nil`) arrives with P9.
-    if (panel == .chat or !b.prefs.bookmarks_sidebar) return false;
+    const open = if (panel == .chat) b.assisting != null else b.prefs.bookmarks_sidebar;
+    if (!open) return false;
     toggleExpanded(b, panel);
     return true;
 }
@@ -143,8 +143,7 @@ pub fn letOut(b: *Browser, c: *ui.Context, p: *const Palette, r: Room) void {
 pub fn panelView(b: *Browser, c: *ui.Context, p: *const Palette, panel: SidePanel, on_left: bool, width: ?f32, expanded: bool, is_popped: bool) void {
     switch (panel) {
         .bookmarks => bookmarksView(b, c, p, on_left, width, expanded, is_popped),
-        // P9: `AssistantPanel` (ai/chat_view.zig) with the same frame.
-        .chat => {},
+        .chat => @import("../ai/chat_view.zig").view(b, c, p, on_left, width, expanded, is_popped),
     }
 }
 
@@ -237,7 +236,7 @@ pub fn panelMenu(b: *Browser, c: *ui.Context, p: *const Palette, panel: SidePane
 /// The menu's items, in PanelMenu's order (titles static).
 pub fn menuItems(arena: std.mem.Allocator, b: *Browser, panel: SidePanel, is_popped: bool) ![]MenuItem {
     var out: std.ArrayList(MenuItem) = .empty;
-    // P9: Ubi Chat's own items (`extra`) go first.
+    if (panel == .chat) try out.appendSlice(arena, try @import("../ai/chat_view.zig").menuExtra(arena, b));
     if (!is_popped) {
         const left = panelOnLeft(b, panel);
         try out.append(arena, try pick(arena, b, panel, if (left) .right else .left, if (left) "Move to Right Side" else "Move to Left Side"));
@@ -288,7 +287,7 @@ const Later = struct {
         const b = for (l.kea.browsers.items) |x| {
             if (x.record_id.eql(l.window)) break x;
         } else return;
-        const win = if (l.is_popped) popped.windowOf(l.kea, l.panel) else b.window;
+        const win = if (l.is_popped) popped.windowOf(b, l.panel) else b.window;
         const s = (win orelse return).surface orelse return;
         var arena = std.heap.ArenaAllocator.init(b.gpa);
         defer arena.deinit();

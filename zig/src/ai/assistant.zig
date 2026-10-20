@@ -131,9 +131,12 @@ pub const Assistant = struct {
         if (self.browser) |b| b.announce(text);
     }
 
-    /// The window drawn again, as a `@Published` change does.
+    /// The window drawn again, as a `@Published` change does: the
+    /// browser's, and the chat's own when it is popped out.
     pub fn changed(self: *Assistant) void {
-        if (self.browser) |b| b.redraw();
+        const b = self.browser orelse return;
+        b.redraw();
+        if (b.chat.window) |w| w.redraw();
     }
 
     fn active(self: *Assistant) ?*Tab {

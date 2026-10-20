@@ -77,6 +77,15 @@ pub const Kea = struct {
     key_monitor: ?objc.Object = null,
     /// The menu bar's menus as last made (app/menus.zig).
     menus: @import("menus.zig").State = .{},
+    /// Ubi Chat and the AI: providers, keys, the chats (`AI`, `Chats.shared`).
+    ai: *@import("../ai/ai.zig").Ai = undefined,
+    /// Your Macs in step, and Send to Device (`Sync.shared`, sync/sync.zig).
+    sync: @import("../sync/sync.zig").Sync = undefined,
+    /// Sites' passkey requests, carried out by Kea (`Passkeys.shared`).
+    passkeys: @import("../passwords/passkeys.zig").Passkeys = undefined,
+    /// Chrome extensions (`Extensions.shared`, ext/controller.zig): only on
+    /// macOS 15.4 and later, never headless.
+    ext: ?*@import("../ext/controller.zig").Extensions = null,
 
     pub fn create(gpa: std.mem.Allocator, ui_app: ?*nanoui.App, opts: Options) !*Kea {
         const self = try gpa.create(Kea);
@@ -99,6 +108,10 @@ pub const Kea = struct {
             .testing = opts.root != null,
             .app = if (ui_app) |a| a.nsapp else null,
         });
+        self.passkeys = .init(self);
+        self.passkeys.on_changed = .{ .ctx = self, .func = @import("../passwords/form_relay.zig").passkeysOffered };
+        self.ai = try @import("../ai/ai.zig").Ai.create(gpa, &self.store, &self.prefs, opts.root != null);
+        self.ai.open_settings = @import("../model/browser_chat.zig").openAISettings;
         self.history.init(gpa, &self.store);
         self.shortcuts = .init(gpa, &self.store);
         self.bookmarks = Bookmarks.init(gpa, &self.store);
@@ -114,16 +127,26 @@ pub const Kea = struct {
         if (!opts.headless) self.shield.compile();
         self.loot = Loot.init(gpa, &self.store);
         self.fetches = .{ .kea = self, .gpa = gpa };
+        // Before any tab is built: every page view is handed its controller.
+        // Failing that, the browser opens without extensions.
+        if (@import("../ext/ext.zig").available() and !opts.headless)
+            self.ext = @import("../ext/controller.zig").Extensions.create(self) catch null;
         // Hidden runs get no Dock icon and never take focus.
         if (opts.hidden) if (ui_app) |a| {
             _ = objc.msg(objc.BOOL, a.nsapp, "setActivationPolicy:", .{@as(objc.NSInteger, 2)});
         };
+        // After the stores it reads and changes.
+        self.sync.init(self);
+        self.sync.chats = &self.ai.chats;
+        self.sync.shortcuts_changed = shortcutsChanged;
         // AppleScript reads this app's windows (app/scripting.zig).
         if (ui_app != null) @import("scripting.zig").install(self);
         return self;
     }
 
     pub fn destroy(self: *Kea) void {
+        // Its queue waited out while every store it reaches is still here.
+        self.sync.deinit();
         self.flush();
         // Nothing of this `Kea`'s is clicked or keyed into from here on.
         @import("keys.zig").uninstall(self);
@@ -138,6 +161,13 @@ pub const Kea = struct {
             m.close();
         }
         browsers.closeAll(self);
+        // After the tabs, which let their pages' requests go as they close.
+        self.passkeys.deinit();
+        // Every window detached from it as it closed (app/browsers.zig).
+        if (self.ext) |e| {
+            self.ext = null;
+            e.destroy();
+        }
         @import("../web/notifications.zig").forgetKea(self);
         self.browsers.deinit(self.gpa);
         self.browsers = .empty;
@@ -153,6 +183,8 @@ pub const Kea = struct {
         self.site_search.deinit();
         self.bookmarks.deinit();
         self.history.deinit();
+        // After every browser's assistant went with its window.
+        self.ai.destroy();
         self.shortcuts.deinit();
         self.prefs.deinit();
         self.store.deinit();
@@ -166,6 +198,13 @@ pub const Kea = struct {
         browsers.flush(self);
         self.history.flush();
         self.store.disk.drain();
+    }
+
+    /// Another Mac's shortcuts landed in defaults (`ShortcutStore.reload`):
+    /// read again, and the menu bar wears them.
+    fn shortcutsChanged(self: *Kea) void {
+        self.shortcuts.reload();
+        if (self.shortcuts.on_change) |f| f(&self.shortcuts);
     }
 
     /// The list of spaces changed (`Spaces.changed`, written by

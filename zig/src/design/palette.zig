@@ -26,6 +26,15 @@ pub const Palette = struct {
     feather: ui.Color,
     /// SwiftUI's `Color.red` (the system red): a refused address, a find miss.
     red: ui.Color,
+    /// SwiftUI's `.blue`, `.orange`, `.purple`, `.teal`, `.pink`, `.gray`
+    /// (the system colours, as AppKit resolves them for the appearance):
+    /// Mermaid's pie slices (`DiagramView.palette`); blue is the accent links wear.
+    blue: ui.Color,
+    orange: ui.Color,
+    purple: ui.Color,
+    teal: ui.Color,
+    pink: ui.Color,
+    gray: ui.Color,
 };
 
 /// `[light, dark]`, made on first use (main thread).
@@ -61,11 +70,34 @@ fn make(dark: bool) Palette {
         .sunset = if (d) rgb(1.0, 0.604, 0.522) else rgb(0.788, 0.271, 0.184),
         .feather = if (d) rgb(0.522, 0.725, 0.318) else rgb(0.369, 0.604, 0.227),
         .red = if (d) rgb(1.0, 0.271, 0.227) else rgb(1.0, 0.231, 0.188),
+        .blue = system("systemBlueColor", d),
+        .orange = system("systemOrangeColor", d),
+        .purple = system("systemPurpleColor", d),
+        .teal = system("systemTealColor", d),
+        .pink = system("systemPinkColor", d),
+        .gray = system("systemGrayColor", d),
     };
 }
 
 fn rgb(r: f32, g: f32, b: f32) ui.Color {
     return .{ .r = r, .g = g, .b = b };
+}
+
+/// The system colour `name` in sRGB, as AppKit resolves it for a light or
+/// a dark appearance.
+fn system(comptime name: [:0]const u8, dark: bool) ui.Color {
+    const appearance = objc.class("NSAppearance");
+    const was = objc.msg(?objc.Object, appearance, "currentAppearance", .{});
+    const look = objc.msg(?objc.Object, appearance, "appearanceNamed:", .{objc.nsString(if (dark) "NSAppearanceNameDarkAqua" else "NSAppearanceNameAqua")});
+    objc.msg(void, appearance, "setCurrentAppearance:", .{look});
+    defer objc.msg(void, appearance, "setCurrentAppearance:", .{was});
+    const srgb = objc.msg(objc.Object, objc.class("NSColorSpace"), "sRGBColorSpace", .{});
+    const c = objc.msg(?objc.Object, objc.msg(objc.Object, objc.class("NSColor"), name, .{}), "colorUsingColorSpace:", .{srgb}) orelse return rgb(0.5, 0.5, 0.5);
+    return rgb(
+        @floatCast(objc.msg(f64, c, "redComponent", .{})),
+        @floatCast(objc.msg(f64, c, "greenComponent", .{})),
+        @floatCast(objc.msg(f64, c, "blueComponent", .{})),
+    );
 }
 
 /// `NSColor(white: v, alpha: 1)` in sRGB, as AppKit converts it.
@@ -93,4 +125,6 @@ test "palette white 1.0 is 1.0 and 0.0 is 0.0" {
     const p = get(false);
     try t.expectApproxEqAbs(p.muted.r, p.muted.b, 1e-3);
     try t.expect(get(true).ground.r < p.ground.r);
+    // System colours resolve for each appearance, not the host's.
+    try t.expect(@abs(get(true).gray.r - p.gray.r) > 0.01 or @abs(get(true).blue.g - p.blue.g) > 0.01);
 }

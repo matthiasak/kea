@@ -188,6 +188,16 @@ pub const Favicons = struct {
         kea.store.disk.write(path, owned, false);
     }
 
+    /// Another browser's icon for `host` (PNG on the C heap, taken), kept as
+    /// if the site had handed it over, unless one is already here (`adopt`).
+    pub fn adopt(self: *Favicons, host: []const u8, png: []u8) void {
+        var buf: [304]u8 = undefined;
+        if (host.len == 0 or host.len > buf.len or self.cached(host) != null) return a.free(png);
+        const key = std.ascii.lowerString(&buf, host);
+        const kept = self.remember(key, png) orelse return a.free(png);
+        self.keep(key, kept.png);
+    }
+
     /// Clear History (`forgetAll`): every icon kept on disk goes, and what
     /// was known missing; the tabs open now keep theirs until they close.
     pub fn forgetAll(self: *Favicons) void {
@@ -202,6 +212,8 @@ pub const Favicons = struct {
             freeSet(s);
             s.* = .empty;
         }
+        // Extensions' favIconUrl data: URLs go with them (Icons.swift:35).
+        if (kea.ext) |e| @import("../ext/shims/answer.zig").forgetIcons(e);
     }
 };
 

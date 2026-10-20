@@ -206,9 +206,11 @@ pub fn handOff(t: *Tab, wv: objc.Object, url: objc.Object, scheme: []const u8, a
 /// asked (`capture.<site>|<type>`), never for a private tab; otherwise asked
 /// on the bar over its own page, as a page's other questions are (`ask`).
 /// An extension's own page is named as the extension, remembered for it.
-fn askedForCapture(self: objc.Object, _: objc.SEL, wv: objc.Object, origin: objc.Object, frame: objc.Object, kind: objc.NSInteger, decide: *const anyopaque) callconv(.c) void {
+pub fn askedForCapture(self: objc.Object, _: objc.SEL, wv: objc.Object, origin: objc.Object, frame: objc.Object, kind: objc.NSInteger, decide: *const anyopaque) callconv(.c) void {
     const deny: objc.NSInteger = 2;
     const t = nav.tabOf(self) orelse return dialogs.call(decide, .{deny});
+    // An extension capturing, however it went about it: the pill says so.
+    if (t.kea.ext != null) @import("../ext/capture.zig").watchCapture(wv, frame);
     const pool = objc.Pool.push();
     defer pool.pop();
     const asker = objc.msg(objc.Object, frame, "securityOrigin", .{});
@@ -217,8 +219,7 @@ fn askedForCapture(self: objc.Object, _: objc.SEL, wv: objc.Object, origin: objc
     const origin_host = objc.fromNSString(objc.msg(?objc.Object, origin, "host", .{}));
     const extension = std.ascii.eqlIgnoreCase(asker_scheme, "chrome-extension") or std.ascii.eqlIgnoreCase(asker_scheme, "webkit-extension");
     const page_host = if (Parts.parse(t.url())) |p| p.hostName() orelse "This page" else "This page";
-    // ponytail: an extension is "An extension" until P13 names installed ones.
-    const host = if (extension) "An extension" else if (origin_host.len == 0) page_host else origin_host;
+    const host = if (extension) @import("../ext/controller.zig").extensionName(t.kea, originHost(frame)) else if (origin_host.len == 0) page_host else origin_host;
     const site = if (extension)
         std.fmt.bufPrint(&site_buf, "{s}://{s}", .{ asker_scheme, originHost(frame) }) catch return dialogs.call(decide, .{deny})
     else if (origin_host.len == 0) page_host else blk: {
@@ -282,7 +283,11 @@ fn askedForLocation(self: objc.Object, _: objc.SEL, wv: objc.Object, origin: obj
     if (!t.shy) if (t.kea.store.bool(key)) |remembered| return giveLocation(t, decide, remembered);
     // One question at a time, as for the camera.
     if (b.asking != null) return giveLocation(t, decide, false);
-    const a = dialogs.make(t, .location, host, "location", decide) orelse return giveLocation(t, decide, false);
+    // An extension's page is named as the extension (Browser.swift:4763).
+    const scheme = objc.fromNSString(objc.msg(?objc.Object, origin, "protocol", .{}));
+    const extension = std.ascii.eqlIgnoreCase(scheme, "chrome-extension") or std.ascii.eqlIgnoreCase(scheme, "webkit-extension");
+    const named = if (extension) @import("../ext/controller.zig").extensionName(t.kea, host) else host;
+    const a = dialogs.make(t, .location, named, "location", decide) orelse return giveLocation(t, decide, false);
     if (!t.shy) dialogs.keepAs(a, about);
     dialogs.bar(t, a);
 }

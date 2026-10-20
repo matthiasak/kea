@@ -74,11 +74,10 @@ fn observe(self: objc.Object, _: objc.SEL, path: ?objc.Object, object: ?objc.Obj
     } else if (std.mem.eql(u8, key, audio)) {
         const new = if (change) |c| objc.msg(?objc.Object, c, "objectForKey:", .{objc.nsString("new")}) else null;
         t.noisy = if (new) |n| objc.msg(objc.BOOL, n, "respondsToSelector:", .{objc.sel("boolValue")}) and objc.msg(objc.BOOL, n, "boolValue", .{}) else false;
-    } else {
-        // WKMediaCaptureStateNone = 0.
-        t.recording = objc.msg(objc.NSInteger, wv, "cameraCaptureState", .{}) != 0 or
-            objc.msg(objc.NSInteger, wv, "microphoneCaptureState", .{}) != 0;
     }
+    // The capture states: the row's recording mark is an extension's
+    // (ext/capture_watch.zig `marks`, RecordingIndicator.update); a page's
+    // own call keeps it awake (sleep.zig) and only redraws here.
     t.changed(.state);
 }
 
@@ -87,6 +86,8 @@ fn observe(self: objc.Object, _: objc.SEL, path: ?objc.Object, object: ?objc.Obj
 fn moved(t: *Tab, wv: objc.Object) void {
     const fresh = currentUrl(wv) orelse return;
     if (fresh.len == 0 or std.mem.eql(u8, fresh, "about:blank")) return;
+    // The page under a held address coming back is no move (ext/auth.zig).
+    if (@import("../ext/auth.zig").heldStays(t, fresh)) return;
     if (t.committed) |now| if (sameOrigin(now, fresh)) t.own(&t.committed, fresh);
     t.own(&t.address, fresh);
     t.changed(.address);

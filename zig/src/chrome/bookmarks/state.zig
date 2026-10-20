@@ -6,6 +6,7 @@ const ui = @import("nanoui").ui;
 const json = @import("../../data/json.zig");
 const bm = @import("../../data/bookmarks.zig");
 const Bookmark = bm.Bookmark;
+const organize = @import("../../ai/organize.zig");
 const Uuid = json.Uuid;
 
 /// A set of ids, in no order (on the window's allocator).
@@ -84,6 +85,14 @@ pub const Picks = struct {
     /// To scroll to `shown` once its row is laid out (`outline` notes where).
     reveal: bool = false,
     shown_rect: ?ui.Rect = null,
+    /// The AI's proposal for the list, shown in place of it until applied
+    /// or discarded; what the manager says while it is asked (gpa), and the run.
+    proposal: ?*organize.Proposal = null,
+    organizing: ?[]u8 = null,
+    organize_task: ?*organize.Organizing = null,
+    /// Apply, Discard or Stop pressed: done as the next frame starts, since
+    /// this frame's text still points into what they free.
+    pressed: enum { none, apply, discard, stop } = .none,
 
     /// A click on a row: ⇧ takes the rows from the last one clicked to this
     /// one, ⌘ adds it or takes it away, a plain click is that row alone.
@@ -101,20 +110,44 @@ pub const Picks = struct {
         self.anchor = id;
     }
 
-    pub fn reset(self: *Picks) void {
+    pub fn reset(self: *Picks, gpa: std.mem.Allocator) void {
         self.ids.clear();
         self.query.clear();
         self.expanded.clear();
         self.anchor = null;
         self.shown = null;
+        self.stopOrganizing(gpa);
+        self.dropProposal();
+    }
+
+    /// The run stopped (its answer never comes) and its words gone.
+    pub fn stopOrganizing(self: *Picks, gpa: std.mem.Allocator) void {
+        if (self.organize_task) |o| {
+            // A run still waiting on its key frees itself later: its hold
+            // moves off this window, which may be gone by then.
+            self.organize_task = null;
+            o.slot = &orphan;
+            o.cancel();
+        }
+        if (self.organizing) |s| gpa.free(s);
+        self.organizing = null;
+    }
+
+    pub fn dropProposal(self: *Picks) void {
+        if (self.proposal) |p| p.destroy();
+        self.proposal = null;
     }
 
     fn deinit(self: *Picks, gpa: std.mem.Allocator) void {
+        self.stopOrganizing(gpa);
+        self.dropProposal();
         self.ids.deinit(gpa);
         self.expanded.deinit(gpa);
         self.query.deinit();
     }
 };
+
+var orphan: ?*organize.Organizing = null;
 
 fn indexOf(order: []const Uuid, id: Uuid) ?usize {
     for (order, 0..) |x, i| if (x.eql(id)) return i;

@@ -12,8 +12,9 @@ extern "c" fn exit(code: c_int) noreturn;
 
 const kea_bundle = "app.kea.browser";
 const zig_bundle = "app.kea.zig";
-/// Left in Kea's folder: its bench socket, its crash log, its AI cache.
-const skipped = [_][]const u8{ "bench.sock", "crash.log", "AI" };
+/// Left in Kea's folder: its bench socket, its crash log, its AI cache, and
+/// its sync state (KeaZig is another device in the store, with its own id).
+const skipped = [_][]const u8{ "bench.sock", "crash.log", "AI", "sync.json" };
 
 /// Offers the import when KeaZig's folder doesn't exist and Kea's does.
 /// `suite` is the defaults KeaZig will use (null: its standard defaults).
@@ -74,8 +75,9 @@ pub fn copyTree(src_root: []const u8, dst_root: []const u8, skip: []const []cons
     }
 }
 
-/// Every key of Kea's defaults domain but the system's own (`NS…`, `Apple…`),
-/// save the first window's frame, which KeaZig autosaves under the same name.
+/// Every key of Kea's defaults domain but the system's own (`NS…`, `Apple…`)
+/// and Kea's sync device id, save the first window's frame, which KeaZig
+/// autosaves under the same name.
 fn copyDefaults(suite: ?[]const u8) void {
     const pool = objc.Pool.push();
     defer pool.pop();
@@ -96,6 +98,7 @@ fn copyDefaults(suite: ?[]const u8) void {
 
 pub fn carried(key: []const u8) bool {
     if (std.mem.eql(u8, key, "NSWindow Frame kea")) return true;
+    if (std.mem.eql(u8, key, "sync.device")) return false;
     return !std.mem.startsWith(u8, key, "NS") and !std.mem.startsWith(u8, key, "Apple");
 }
 
@@ -164,6 +167,7 @@ test "copyTree copies and skips" {
     put(src, "chats/index.json", "{}");
     put(src, "crash.log", "boom");
     put(src, "bench.sock", "");
+    put(src, "sync.json", "{\"joined\":true}");
     put(src, "AI/cache/x", "x");
     put(src, "pins.json", "{\"theirs\":1}");
     // Already there: kept as is.
@@ -183,7 +187,7 @@ test "copyTree copies and skips" {
         defer gpa.free(got);
         try std.testing.expectEqualStrings(w.data, got);
     }
-    for ([_][]const u8{ "crash.log", "bench.sock", "AI" }) |gone| try std.testing.expect(!exists(nsPath(dst, gone)));
+    for ([_][]const u8{ "crash.log", "bench.sock", "AI", "sync.json" }) |gone| try std.testing.expect(!exists(nsPath(dst, gone)));
     // Copied, not moved.
     try std.testing.expect(exists(nsPath(src, "history.json")));
     try std.testing.expect(exists(nsPath(src, "AI/cache/x")));
@@ -200,4 +204,7 @@ test "kea import carries app keys and the first window's frame" {
     try std.testing.expect(carried("NSWindow Frame kea"));
     try std.testing.expect(!carried("NSWindow Frame other"));
     try std.testing.expect(!carried("AppleLanguages"));
+    // KeaZig is its own device in the sync store.
+    try std.testing.expect(!carried("sync.device"));
+    try std.testing.expect(carried("sync.folder"));
 }

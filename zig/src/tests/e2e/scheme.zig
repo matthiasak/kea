@@ -1,7 +1,8 @@
 //! What the e2e pages are served from: `KeaTestScheme`, a WKURLSchemeHandler
 //! for `kea-test://site/<path>`, and a loopback HTTP listener for cases that
 //! need http (History only records http and https, as Swift's does; WebKit
-//! downloads nothing from a custom scheme, so `/download?name=N` there too).
+//! downloads nothing from a custom scheme, so `/download?name=N` there too;
+//! `/words/a-b-c` there has the body "a b c", any other path itself).
 //!
 //! Routes: `/page?title=T&body=B`, `/slow` (first bytes now, the rest after
 //! 8 s), `/download?name=N` (a 4 KiB attachment), `/f/<file>` (fixtures/),
@@ -17,6 +18,7 @@ const fixtures = [_]struct { []const u8, []const u8 }{
     .{ "links.html", @embedFile("fixtures/links.html") },
     .{ "article.html", @embedFile("fixtures/article.html") },
     .{ "float.html", @embedFile("fixtures/float.html") },
+    .{ "login.html", @embedFile("fixtures/login.html") },
 };
 
 /// Tasks `/slow` still owes a finish; a stopped task leaves the list.
@@ -169,8 +171,16 @@ fn answer(client: c_int) void {
         _ = sock.write(client, &file, file.len);
         return;
     }
+    // `/words/a-b-c`: its body is "a b c", words neither its address nor its title has.
+    var words_buf: [256]u8 = undefined;
+    const words_route = "/words/";
+    const shown = if (std.mem.startsWith(u8, path, words_route) and path.len - words_route.len <= words_buf.len) blk: {
+        const w = words_buf[0 .. path.len - words_route.len];
+        _ = std.mem.replace(u8, path[words_route.len..], "-", " ", w);
+        break :blk w;
+    } else path;
     var body_buf: [1024]u8 = undefined;
-    const body = std.fmt.bufPrint(&body_buf, "<html><head><title>Local {s}</title></head><body>{s}</body></html>", .{ path, path }) catch return;
+    const body = std.fmt.bufPrint(&body_buf, "<html><head><title>Local {s}</title></head><body>{s}</body></html>", .{ path, shown }) catch return;
     var head_buf: [256]u8 = undefined;
     const head = std.fmt.bufPrint(&head_buf, "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {d}\r\nConnection: close\r\n\r\n", .{body.len}) catch return;
     _ = sock.write(client, head.ptr, head.len);

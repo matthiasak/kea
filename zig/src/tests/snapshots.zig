@@ -12,6 +12,8 @@ const State = struct {
     opts: Options,
     /// Brings the fixture to the state before it is drawn.
     setup: ?*const fn (*Fixture) void = null,
+    /// Lets go of what `setup` kept, before the fixture goes.
+    teardown: ?*const fn (*Fixture) void = null,
 };
 
 const states = [_]State{
@@ -32,6 +34,7 @@ const states = [_]State{
     .{ .name = "p8-settings-shortcuts", .opts = .{ .sidebar = true, .tabs = 2 }, .setup = settingsOn(.shortcuts) },
     .{ .name = "p8-settings-downloads", .opts = .{ .sidebar = true, .tabs = 2 }, .setup = settingsOn(.downloads) },
     .{ .name = "p8-settings-privacy", .opts = .{ .sidebar = true, .tabs = 2 }, .setup = settingsOn(.privacy) },
+    .{ .name = "p8-settings-ai", .opts = .{ .sidebar = true, .tabs = 2 }, .setup = settingsOn(.ai) },
     .{ .name = "p8-settings-about", .opts = .{ .sidebar = true, .tabs = 2 }, .setup = settingsOn(.about) },
     .{ .name = "p8-welcome", .opts = .{ .sidebar = true, .welcome = true } },
     .{ .name = "p8-history", .opts = .{ .sidebar = true, .tabs = 2 }, .setup = @import("snapshots_recall.zig").history },
@@ -39,7 +42,16 @@ const states = [_]State{
     .{ .name = "p8-find", .opts = .{ .sidebar = false, .tabs = 2 }, .setup = @import("snapshots_recall.zig").find },
     .{ .name = "p8-bars", .opts = .{ .sidebar = false, .tabs = 2 }, .setup = @import("snapshots_recall.zig").bars },
     .{ .name = "p8-bookmarks-manager", .opts = .{ .sidebar = true, .tabs = 2 }, .setup = @import("snapshots_bookmarks.zig").manager },
+    .{ .name = "p9-markdown", .opts = .{ .width = 560, .height = 860 }, .setup = @import("snapshots_markdown.zig").markdown, .teardown = @import("snapshots_markdown.zig").done },
+    .{ .name = "p9-mermaid", .opts = .{ .width = 560, .height = 860 }, .setup = @import("snapshots_markdown.zig").mermaid, .teardown = @import("snapshots_markdown.zig").done },
     .{ .name = "p8-bookmarks-bar", .opts = .{ .sidebar = false, .tabs = 2 }, .setup = @import("snapshots_bookmarks.zig").bar },
+    .{ .name = "p9-organize", .opts = .{ .sidebar = true, .tabs = 2 }, .setup = @import("snapshots_bookmarks.zig").organize },
+    .{ .name = "p9-chat", .opts = .{ .sidebar = true, .tabs = 2 }, .setup = @import("snapshots_chat.zig").chat },
+    .{ .name = "p12-sync-settings", .opts = .{ .sidebar = true, .tabs = 2 }, .setup = syncSettings },
+    .{ .name = "p10-passwords", .opts = .{ .sidebar = true, .tabs = 2 }, .setup = @import("snapshots_passwords.zig").panel },
+    .{ .name = "p10-keep-asking", .opts = .{ .sidebar = false, .tabs = 2 }, .setup = @import("snapshots_passwords.zig").keepAsking },
+    .{ .name = "p10-settings-passwords", .opts = .{ .sidebar = true, .tabs = 2 }, .setup = settingsOn(.passwords) },
+    .{ .name = "p11-import", .opts = .{ .sidebar = true, .tabs = 2 }, .setup = @import("snapshots_import.zig").sheet },
 };
 
 /// Settings open on `page`.
@@ -49,6 +61,18 @@ fn settingsOn(comptime page: @import("kea").settings.Page) *const fn (*Fixture) 
             @import("kea").settings.open(f.browser, page);
         }
     }.setup;
+}
+
+/// Settings › Sync with a folder chosen, waiting for the passphrase. A
+/// fixed name and folder (only the path is kept; nothing is written), so
+/// every run draws the same.
+fn syncSettings(f: *Fixture) void {
+    const s = &f.kea.sync;
+    const name = s.gpa.dupe(u8, "Kea A") catch return;
+    s.gpa.free(s.name);
+    s.name = name;
+    s.chooseFolder("/Volumes/Shared/Kea Sync");
+    @import("kea").settings.open(f.browser, .sync);
 }
 
 /// Split View on: the two opened tabs a pair, the right with the keys.
@@ -146,6 +170,7 @@ pub fn main(init: std.process.Init) !void {
             var f: Fixture = undefined;
             try f.init(gpa, opts);
             defer f.deinit();
+            defer if (s.teardown) |down| down(&f);
             if (s.setup) |setup| setup(&f);
             f.tester.settle(2);
             // The window's ground, which the hosted window paints behind the view.

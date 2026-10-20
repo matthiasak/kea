@@ -51,7 +51,7 @@ fn offered(b: *Browser) ?objc.Object {
 }
 
 /// `isPrivatePage`: a private tab, or a page that keeps nothing.
-fn isPrivatePage(t: *const Tab) bool {
+pub fn isPrivatePage(t: *const Tab) bool {
     if (t.shy) return true;
     const wv = t.web orelse return false;
     const store = objc.msg(objc.Object, objc.msg(objc.Object, wv, "configuration", .{}), "websiteDataStore", .{});

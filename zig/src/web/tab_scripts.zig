@@ -2,8 +2,8 @@
 //! tab (Tab.swift 632-652 and `arm` 733-819; `ScrollRelay`, `MiddleRelay`,
 //! `HoveredLink`, `ImageRelay`, `VeilRelay`, `IconRelay`), all in
 //! `Web.world`, with Curtain's picker (`curtain_js.zig`) and AutoScroll.
-//! LiveRate's runs in the page's own world. Forms, passkeys and the store
-//! arrive with their own phases.
+//! LiveRate's runs in the page's own world. Forms (`FormRelay`) and the
+//! passkeys' bridge are Kea's too; the passkeys' page script the page's.
 const std = @import("std");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;
@@ -15,6 +15,9 @@ const page_view = @import("page_view.zig");
 const state = @import("tab_state.zig");
 const image_menu = @import("image_menu.zig");
 const curtain_js = @import("curtain_js.zig");
+const store_relay = @import("../ext/store_relay.zig");
+const forms = @import("../passwords/forms.zig");
+const passkeys = @import("../passwords/passkeys.zig");
 
 const scroll_script = @embedFile("js/scroll_relay.js");
 const middle_script = @embedFile("js/middle_relay.js");
@@ -29,7 +32,7 @@ pub const auto_scroll_script = @embedFile("js/auto_scroll.js");
 pub const auto_scroll_off = "window.__keaAutoScrollOff = true;";
 
 /// The handlers this tab's delegate answers, in Kea's world.
-const handled = [_][]const u8{ "keaScroll", "keaVeil", "keaImages", "keaMiddle", config.link_relay };
+const handled = [_][]const u8{ "keaScroll", "keaVeil", forms.name, "keaImages", "keaMiddle", config.link_relay };
 
 fn controller(wv: objc.Object) objc.Object {
     return objc.msg(objc.Object, objc.msg(objc.Object, wv, "configuration", .{}), "userContentController", .{});
@@ -44,6 +47,9 @@ pub fn install(t: *Tab) void {
     config.release(ucc);
     for (handled) |name| objc.msg(void, ucc, "addScriptMessageHandler:contentWorld:name:", .{ delegate, config.world(), objc.nsString(name) });
     favicons.install(ucc, delegate);
+    if (t.kea.ext != null) objc.msg(void, ucc, "addScriptMessageHandler:contentWorld:name:", .{ delegate, config.world(), objc.nsString(store_relay.name) });
+    // Passkeys answer the page (Tab.swift 644): a handler with a reply.
+    objc.msg(void, ucc, "addScriptMessageHandlerWithReply:contentWorld:name:", .{ t.kea.passkeys.relayObject(), config.world(), objc.nsString(passkeys.name) });
     t.kea.shield.protect(ucc);
     // A new view: armed whatever was armed before.
     t.armed_key = 0;
@@ -79,7 +85,11 @@ pub fn arm(t: *Tab, css: []const u8) void {
     const prefs = &t.kea.prefs;
     var h = std.hash.Wyhash.init(0);
     h.update(t.veils);
-    h.update(&.{ @intFromBool(prefs.auto_scroll), @intFromBool(prefs.shows_links) });
+    h.update(&.{ @intFromBool(prefs.auto_scroll), @intFromBool(prefs.shows_links), @intFromBool(prefs.passkeys) });
+    // A page an extension lists reaches it as chrome.runtime (ext/external.zig).
+    const external = if (t.kea.ext) |x| @import("../ext/external.zig").script(x, t.gpa) else null;
+    defer if (external) |e| t.gpa.free(e);
+    h.update(external orelse "");
     const key = h.final() | 1;
     if (t.armed_key == key) return;
     t.armed_key = key;
@@ -90,6 +100,7 @@ pub fn arm(t: *Tab, css: []const u8) void {
     objc.msg(void, ucc, "removeAllUserScripts", .{});
     add(ucc, scroll_script, false, true, w);
     add(ucc, curtain_js.picker_script, true, true, w);
+    add(ucc, forms.script, false, true, w);
     add(ucc, favicons.relay_script, false, true, w);
     if (prefs.auto_scroll) add(ucc, auto_scroll_script, false, true, w);
     // Every frame: a swipe over an embedded map is the map's.
@@ -98,8 +109,15 @@ pub fn arm(t: *Tab, css: []const u8) void {
     if (prefs.shows_links) add(ucc, link_script, true, false, w);
     // The main frame only: a middle-click inside an ad's frame is its own.
     add(ucc, middle_script, true, true, w);
+    // The store's "Add to Kea" only where Kea can add extensions.
+    if (t.kea.ext != null) add(ucc, store_relay.script, false, true, w);
     // Every frame, in the page's own world and ahead of its scripts.
     add(ucc, live_rate_script, true, false, config.pageWorld());
+    if (external) |e| add(ucc, e, true, false, config.pageWorld());
+    // Passkeys stand in the page's own world, replacing its functions, and
+    // reach Kea through a bridge in Kea's, off or on (Tab.swift 799-814).
+    add(ucc, if (prefs.passkeys) passkeys.pageScript() else forms.without_passkeys, true, false, config.pageWorld());
+    add(ucc, passkeys.bridge_script, true, false, w);
     if (t.veils.len > 0) {
         const style = veilStyle(t.gpa, t.veils) catch return;
         defer t.gpa.free(style);
@@ -185,6 +203,8 @@ pub fn received(t: *Tab, message: objc.Object) void {
         return;
     }
     if (!isKind(body, "NSDictionary")) return;
+    if (std.mem.eql(u8, name, store_relay.name)) return store_relay.received(t, body);
+    if (std.mem.eql(u8, name, forms.name)) return @import("../passwords/form_relay.zig").received(t, body);
     if (std.mem.eql(u8, name, "keaScroll")) {
         if (string(body, "side")) |side| return page_view.answer(t, std.mem.eql(u8, side, "free"));
         const y = number(body, "y") orelse return;

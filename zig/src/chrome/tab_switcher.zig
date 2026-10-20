@@ -124,9 +124,10 @@ pub const TabSwitcher = struct {
 /// Kept by the browser with nothing over the page it would have to cover
 /// (`canSwitchTabs`); otherwise ⌃Tab walks the row. The find bar isn't one.
 pub fn canSwitch(b: *Browser) bool {
-    inline for (.{ "tuning", "recalling", "hoarding", "bookmarking", "welcoming", "managing", "reviewing", "asking", "offering", "suggesting" }) |f| {
+    inline for (.{ "tuning", "recalling", "hoarding", "bookmarking", "welcoming", "managing", "bringing_in", "reviewing", "asking" }) |f| {
         if (@hasField(Browser, f)) if (truthy(@field(b, f))) return false;
     }
+    if (b.passwords.offering != null or b.passwords.accounts.suggesting != null) return false;
     // `bookmarksOpen`: the bookmarks' dropdown.
     if (b.overlay) |o| if (o == .bookmarks_dropdown) return false;
     return !b.veiling and !b.summoning and !b.making_space and

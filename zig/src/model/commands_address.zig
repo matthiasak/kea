@@ -48,13 +48,11 @@ pub const Command = enum {
         };
     }
 
-    /// Some only mean something once the feature behind them is on — and,
-    /// here, once the panel it opens has been ported (P10's passwords):
-    /// until then the word is not offered rather than doing nothing.
+    /// Some only mean something once the feature behind them is on: until
+    /// then the word is not offered rather than doing nothing.
     pub fn available(self: Command, b: *const Browser) bool {
         return switch (self) {
             .new_space => b.prefs.uses_spaces,
-            .passwords => @hasField(Browser, "managing"),
             else => true,
         };
     }
@@ -68,9 +66,7 @@ pub const Command = enum {
             .bookmarks => sheet.show(b, .bookmarking),
             .history => sheet.show(b, .recalling),
             .downloads => sheet.show(b, .hoarding),
-            .passwords => if (comptime @hasField(Browser, "managing")) {
-                b.managing = true;
-            },
+            .passwords => sheet.show(b, .managing),
             .toggle_sidebar => {
                 b.prefs.set("sidebar", !b.prefs.sidebar);
                 b.syncStageHost();
