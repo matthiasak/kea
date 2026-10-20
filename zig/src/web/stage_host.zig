@@ -95,7 +95,7 @@ pub const StageHost = struct {
         self.card_radius = if (framed) 10 else 0;
         // A page no pane holds any more leaves the stage.
         for (self.slots.items) |slot| if (slot.webview) |old| {
-            if (std.mem.indexOfScalar(?objc.Object, pages, old) == null) objc.msg(void, old, "removeFromSuperview", .{});
+            if (std.mem.indexOfScalar(?objc.Object, pages, old) == null) self.detach(old);
         };
         self.slots.shrinkRetainingCapacity(@min(self.slots.items.len, pages.len));
         while (self.slots.items.len < pages.len) self.slots.append(self.gpa, .{}) catch return;
@@ -128,12 +128,12 @@ pub const StageHost = struct {
             if (slot.webview == webview) slot.* = .{};
         }
         if (self.peek_slot.webview == webview) self.peek_slot = .{};
-        objc.msg(void, webview, "removeFromSuperview", .{});
+        self.detach(webview);
     }
 
     pub fn setPeek(self: *StageHost, webview: ?objc.Object) void {
         if (self.peek_slot.webview == webview) return;
-        if (self.peek_slot.webview) |old| objc.msg(void, old, "removeFromSuperview", .{});
+        if (self.peek_slot.webview) |old| self.detach(old);
         self.peek_slot = .{ .webview = webview };
         if (webview) |wv| {
             objc.msg(void, self.stage_view, "addSubview:", .{wv});
@@ -142,10 +142,17 @@ pub const StageHost = struct {
         }
     }
 
+    fn detach(self: *const StageHost, wv: objc.Object) void {
+        if (objc.msg(?objc.Object, wv, "superview", .{}) == self.stage_view) {
+            objc.msg(void, wv, "removeFromSuperview", .{});
+        }
+    }
+
     fn applyCornerRadius(wv: objc.Object, radius: f32) void {
         objc.msg(void, wv, "setWantsLayer:", .{objc.YES});
         if (objc.msg(?objc.Object, wv, "layer", .{})) |layer| {
             objc.msg(void, layer, "setCornerRadius:", .{@as(f64, radius)});
+            objc.msg(void, layer, "setCornerCurve:", .{objc.nsString("continuous")});
             objc.msg(void, layer, "setMasksToBounds:", .{if (radius > 0) objc.YES else objc.NO});
         }
     }

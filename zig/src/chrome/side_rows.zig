@@ -223,11 +223,13 @@ fn iconOf(b: *Browser, t: *Tab) ?mark.Icon {
 pub fn keepLine(b: *Browser, c: *ui.Context, p: *const Palette, clears: bool, interactive: bool) void {
     const i = c.open(.{ .direction = .row, .gap = 6, .padding = .xy(10, 0), .width = .fill, .height = px(keep_line), .align_items = .center }, "keep-line");
     defer c.end();
-    const hovering = interactive and c.interact(i, .{}).hovered;
+    const line = c.interact(i, .{});
+    const hovering = interactive and line.hovered;
     if (interactive) c.cursor_hand = false;
     _ = c.leaf(.{ .grow = 1, .height = px(1), .background = p.hairline }, .none, null);
-    if (!(clears and hovering)) return;
-    const btn = c.open(.{ .direction = .row, .gap = 3, .align_items = .center, .control = true }, null);
+    const alpha = motion.quickTo(c, line.id, 1, if (clears and hovering) 1 else 0);
+    if (alpha < 0.01) return;
+    const btn = c.open(.{ .direction = .row, .gap = 3, .align_items = .center, .opacity = alpha, .control = true }, null);
     const it = c.interact(btn, .{});
     c.help(btn, "Close the tabs under the line. Pins and groups stay; ⇧⌘T brings them all back.");
     c.addA11y(btn, .button, "Clear", "", false, true);
