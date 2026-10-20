@@ -64,21 +64,21 @@ Source-by-source (`Sources/Kea/*.swift` vs `zig/src/**`) and snapshot (`$TMPDIR/
 
 | Scenario | Cold CPU (ms) | CPU p50 (ms) | CPU p90 (ms) | CPU p99 (ms) | CPU max (ms) | GPU p50 (ms) | GPU p90 (ms) | Nodes | Steady Allocs/f (max) | Gate |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
-| 1. Tabs hover-sweep & edge drag (200 tabs) | 13.81 | 3.72 | 7.82 | 7.89 | 8.05 | 0.49 | 2.97 | 1452 | 115.6 (499) | FAIL |
-| 2. Bookmarks sidebar scroll & hover (2000) | 35.60 | 28.86 | 29.57 | 30.34 | 31.61 | 2.52 | 4.94 | 10476 | 8.6 (21) | FAIL |
-| 3. Manager search type 1-5 chars (2000 bm) | 1.82 | 1.64 | 17.81 | 24.24 | 45.28 | 1.11 | 2.90 | 13287 | 258.0 (18158) | FAIL |
-| 4. History panel open, scroll & hunt (2000) | 8.98 | 0.31 | 0.44 | 3.18 | 4.36 | 1.01 | 1.70 | 1756 | 28.0 (349) | FAIL |
-| 5. Chat scroll, hover, resize & stream (200) | 35.41 | 6.78 | 7.03 | 8.42 | 11.01 | 1.07 | 2.71 | 17412 | 2.1 (42) | FAIL |
-| 6. Chat list hover & search (300 chats) | 7.09 | 1.34 | 1.78 | 1.93 | 2.08 | 0.48 | 0.65 | 1470 | 0.4 (10) | FAIL |
-| 7. Omnibox typing (2000 hist, 2000 bm, 200 tabs) | 10.69 | 7.28 | 7.41 | 7.73 | 8.37 | 1.45 | 2.31 | 1467 | 1.0 (36) | FAIL |
-| 8. Composer @ and history/ (200 tabs, 2000 hist) | 18.56 | 7.85 | 8.05 | 9.27 | 13.42 | 1.24 | 2.32 | 1544 | 9.4 (209) | FAIL |
-| 9. Settings > Shortcuts with search | 7.15 | 0.08 | 0.14 | 0.22 | 0.44 | 0.96 | 1.58 | 591 | 0.7 (42) | FAIL |
-| 10. Downloads panel idle (50 kept + 3 active) | 4.60 | 0.37 | 0.38 | 0.43 | 0.43 | 0.96 | 1.66 | 581 | 0.0 (0) | PASS |
-| 11. Ctrl+Tab switcher (120 candidates) | 14.27 | 8.75 | 8.91 | 9.21 | 9.26 | 1.80 | 3.18 | 1759 | 0.1 (1) | FAIL |
+| 1. Tabs hover-sweep & edge drag (200 tabs) | 16.01 | 3.74 | 8.17 | 8.55 | 8.70 | 0.68 | 1.91 | 1452 | 115.6 (499) | FAIL |
+| 2. Bookmarks sidebar scroll & hover (2000) | 37.35 | 30.30 | 31.10 | 31.55 | 31.62 | 1.75 | 2.76 | 10476 | 8.6 (21) | FAIL |
+| 3. Manager search type 1-5 chars (2000 bm) | 2.10 | 1.78 | 19.60 | 27.50 | 49.36 | 1.12 | 2.91 | 13287 | 258.0 (18158) | FAIL |
+| 4. History panel open, scroll & hunt (2000) | 9.40 | 0.31 | 0.51 | 3.32 | 4.64 | 1.01 | 1.28 | 1757 | 28.1 (355) | FAIL |
+| 5. Chat scroll, hover, resize & stream (200) | 36.59 | 7.25 | 7.84 | 9.19 | 11.82 | 1.05 | 2.07 | 17412 | 2.1 (42) | FAIL |
+| 6. Chat list hover & search (300 chats) | 6.87 | 1.35 | 1.97 | 2.31 | 2.58 | 0.48 | 0.59 | 1470 | 0.4 (10) | FAIL |
+| 7. Omnibox typing (2000 hist, 2000 bm, 200 tabs) | 11.02 | 7.68 | 8.08 | 8.78 | 9.71 | 1.22 | 2.22 | 1467 | 1.0 (36) | FAIL |
+| 8. Composer @ and history/ (200 tabs, 2000 hist) | 17.12 | 8.34 | 8.80 | 9.59 | 9.84 | 1.20 | 1.98 | 1544 | 9.4 (209) | FAIL |
+| 9. Settings > Shortcuts with search | 7.89 | 0.07 | 0.12 | 0.22 | 0.47 | 0.96 | 1.07 | 591 | 0.7 (42) | FAIL |
+| 10. Downloads panel idle (50 kept + 3 active) | 4.28 | 0.36 | 0.39 | 0.42 | 0.43 | 0.96 | 1.05 | 581 | 0.0 (0) | PASS |
+| 11. Ctrl+Tab switcher (120 candidates) | 14.30 | 9.03 | 9.41 | 9.99 | 10.70 | 2.30 | 3.36 | 1759 | 0.1 (1) | FAIL |
 
 ### 3. Reference compare and film baseline (`zig build compare`)
 
-- **Snapshot compare (`/tmp/kea-ref` vs `$TMPDIR/keazig-snapshots`):** 27 state pairs compared in light and dark; differences dominated by circular vs `.continuous` corner curvature, glyph smoothing weight, un-snapped 1 pt hairlines, and sheet/panel hole masking.
+- **Snapshot compare (`/tmp/kea-ref` vs `$TMPDIR/keazig-snapshots`, `/tmp/keazig-compare/report.md`):** `p8-welcome-light`, `strip-light`, and `strip-dark` have 0 diff pixels (`0.00%`); `site-light` (`8.85%`, 1 cluster) and `site-dark` (`6.14%`, 2 clusters); remaining 29 light/dark state pairs show 1–518 clusters (`0.53%–45.62%` diff pixels), plus 5 states without a Swift `picture` mapping and 2 standalone size mismatches (`p9-markdown`, `p9-mermaid`).
 - **Film motion compare (`film-peek`, `film-unpeek`, `film-fold`):**
   - `film-peek-light`: max $|\Delta x| = 98.00\text{ pt}$ (#2 at $t = 90\text{ ms}$)
   - `film-peek-dark`: max $|\Delta x| = 81.50\text{ pt}$ (#2 at $t = 100\text{ ms}$)

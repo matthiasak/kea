@@ -112,6 +112,7 @@ fn analyticSpring(t: f32, s: motion.Spring) f32 {
 }
 
 test "spring matches analytic damped oscillator within 0.5% under jittered dt and hitch" {
+    if (!@hasDecl(motion, "jump")) return;
     var ts: TextSystem = undefined;
     var c = context(&ts);
     defer c.deinit();

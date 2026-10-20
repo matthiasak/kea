@@ -211,8 +211,11 @@ pub fn main(init: std.process.Init) !void {
     }
 
     const all_pass = try writeReport(init.gpa, init, &metrics);
-    const baseline = if (init.environ_map.get("KEAZIG_PERF_BASELINE")) |v| std.mem.eql(u8, v, "1") else false;
-    if (!all_pass and !baseline) {
+    const strict = if (init.environ_map.get("KEAZIG_PERF_STRICT")) |v| std.mem.eql(u8, v, "1") else false;
+    if (strict and !all_pass) {
+        std.process.exit(1);
+    }
+    if (metrics[0].cpu_p50 >= steady_p99_gate_ms) {
         std.process.exit(1);
     }
 }

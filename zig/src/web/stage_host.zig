@@ -20,6 +20,7 @@ pub const PaneSlot = struct {
     /// the last `setAlphaValue:` sent.
     alpha: f32 = 1,
     applied_alpha: f32 = 1,
+    place_calls: usize = 0,
 
     fn setHidden(slot: *PaneSlot, wv: objc.Object, on: bool) void {
         if (slot.hidden == on) return;
@@ -37,6 +38,7 @@ pub const PaneSlot = struct {
         }
         if (rectsEq(slot.last_rect, r)) return;
         slot.last_rect = r;
+        slot.place_calls += 1;
         objc.msg(void, wv, "setFrame:", .{objc.CGRect{
             .origin = .{ .x = r.x, .y = r.y },
             .size = .{ .width = r.w, .height = r.h },
