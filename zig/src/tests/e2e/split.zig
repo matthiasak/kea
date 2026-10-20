@@ -9,6 +9,7 @@ const Harness = @import("main.zig").Harness;
 
 pub const cases = [_]Case{
     .{ .name = "two panes show both webviews at hole rects", .run = bothPanes },
+    .{ .name = "split enter moves pictures, page laid out once", .run = splitEnterMovesPictures },
 };
 
 fn finished(t: *app.Tab) bool {
@@ -43,4 +44,40 @@ fn bothPanes(h: *Harness) !void {
         try h.expect(off < 1, "page {d} at ({d:.1},{d:.1},{d:.1},{d:.1}), hole ({d:.1},{d:.1},{d:.1},{d:.1})", .{ i, f.origin.x, f.origin.y, f.size.width, f.size.height, r.x, r.y, r.w, r.h });
     }
     try h.expect(@abs(holes[1].x - (holes[0].x + holes[0].w) - 7) < 0.5, "the gutter is {d:.1}, want 7", .{holes[1].x - (holes[0].x + holes[0].w)});
+}
+
+fn splitEnterMovesPictures(h: *Harness) !void {
+    const b = try h.start();
+    b.prefs.set("split_view", true);
+    const left = b.open("kea-test://site/page?title=Left", .{ .foreground = true });
+    try h.waitFor(left, finished, 10, "the left page");
+    const right = b.open("kea-test://site/page?title=Right", .{ .foreground = true });
+    try h.waitFor(right, finished, 10, "the right page");
+    b.select(left);
+    h.frame();
+    h.pump(0.05);
+
+    const sh = b.stage_host orelse return h.fail("no stage host", .{});
+    for (sh.slots.items) |*slot| slot.place_calls = 0;
+    const before = b.stage.boxes[0].win_rect;
+
+    b.pair(right, left, false);
+    h.frame();
+    h.pump(0.16);
+
+    const after = b.stage.boxes[0].win_rect;
+    const pic = b.stage.pictures.get(left.id) orelse return h.fail("no stage picture for staying pane", .{});
+    const layer = objc.msg(?objc.Object, pic, "layer", .{}) orelse return h.fail("no layer on stage picture", .{});
+    const pres = objc.msg(?objc.Object, layer, "presentationLayer", .{}) orelse layer;
+    const pf = objc.msg(objc.CGRect, pres, "frame", .{});
+    try h.expect(pf.size.width > after.w + 5 and pf.size.width < before.w - 5, "picture width {d:.1} not strictly between after {d:.1} and before {d:.1}", .{ pf.size.width, after.w, before.w });
+
+    for (0..12) |_| h.pump(0.05);
+    try h.expect(sh.slots.items.len == 2, "{d} slots, want 2", .{sh.slots.items.len});
+    for ([_]*app.Tab{ left, right }, 0..) |t, i| {
+        const slot = for (sh.slots.items) |s| {
+            if (s.webview == t.web) break s;
+        } else return h.fail("no slot for pane {d}", .{i});
+        try h.expect(slot.place_calls <= 1, "pane {d} had {d} place calls, want <= 1", .{ i, slot.place_calls });
+    }
 }

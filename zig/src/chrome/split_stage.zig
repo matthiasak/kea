@@ -27,7 +27,7 @@ const link_bubble = @import("link_bubble.zig");
 const omnibox = @import("omnibox.zig");
 const find_bar = @import("find_bar.zig");
 const mark = @import("mark.zig");
-
+const stage_pictures = @import("../web/stage_pictures.zig");
 const px = struct {
     fn v(n: f32) ui.Length {
         return .{ .px = n };
@@ -53,6 +53,7 @@ pub const State = struct {
     leaving: ?Box = null,
     divider: divider.State = .{},
     drop: split_drop.State = .{},
+    pictures: stage_pictures.StagePictures = .{},
 
     /// The panes as the stage last drew their holes.
     pub fn shown(s: *const State) []const Pane {
@@ -60,12 +61,12 @@ pub const State = struct {
     }
 
     pub fn deinit(s: *State, gpa: std.mem.Allocator) void {
+        s.pictures.deinit(gpa);
         s.drop.deinit(gpa);
     }
 };
 
-const Box = struct { tab: u64, rect: ui.Rect };
-
+const Box = struct { tab: u64, rect: ui.Rect, win_rect: ui.Rect = .{} };
 /// `PaneStage.Move`: what the change from last frame is, to the eye.
 const Move = union(enum) { none, enter: u64, leave: u64, swap, resize };
 
@@ -100,20 +101,55 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette, r: Room, size: ui.Si
     } else null else null;
     const paired = n == 2 and roomy and immersed == null;
 
+    const stage_node = c.stack.items[c.stack.items.len - 1];
+    const stage_origin: ui.Point = if (c.rects.get(c.node(stage_node).id)) |sr|
+        .{ .x = sr.x, .y = sr.y }
+    else blk: {
+        const right = r.sideOnRight();
+        break :blk .{ .x = if (right) r.farGap() else r.chrome().w, .y = r.chrome().h };
+    };
+    const old_boxes = st.boxes;
+    const old_box_n = st.box_n;
+
     const move = motionOf(st, tabs[0..n], split, roomy);
     st.divider.dragged = false;
     switch (move) {
-        .none => {},
-        else => st.moving_until = c.time + glide_duration,
+        .none => if (cutOccurred(st, tabs[0..n], split)) {
+            st.moving_until = 0;
+            st.leaving = null;
+            st.pictures.clearMoves();
+        },
+        else => st.moving_until = c.time + (if (c.reduce_motion) @as(f64, 0.15) else @as(f64, glide_duration)),
     }
-    switch (move) {
-        .leave => |id| st.leaving = for (st.boxes[0..st.box_n]) |bx| {
-            if (bx.tab == id) break bx;
-        } else null,
-        else => {},
+    if (b.stage_host == null) {
+        switch (move) {
+            .leave => |id| st.leaving = for (old_boxes[0..old_box_n]) |bx| {
+                if (bx.tab == id) break bx;
+            } else null,
+            else => {},
+        }
+    } else {
+        st.leaving = null;
     }
     const moving = c.time < st.moving_until;
 
+    var before_rects: [2]ui.Rect = .{ .{}, .{} };
+    var before_wvs: [2]?nanoui.objc.Object = .{ null, null };
+    if (move != .none) if (b.stage_host) |sh| {
+        for (old_boxes[0..old_box_n], 0..) |bx, bi| {
+            const wv = if (b.tabById(bx.tab)) |t| (if (t.floating) null else t.web) else null;
+            before_wvs[bi] = wv;
+            before_rects[bi] = if (wv) |w| blk: {
+                if (nanoui.objc.msg(?nanoui.objc.Object, w, "superview", .{}) == sh.stage_view) {
+                    const fr = nanoui.objc.msg(nanoui.objc.CGRect, w, "frame", .{});
+                    if (fr.size.width > 1 and fr.size.height > 1) {
+                        break :blk .{ .x = @floatCast(fr.origin.x), .y = @floatCast(fr.origin.y), .w = @floatCast(fr.size.width), .h = @floatCast(fr.size.height) };
+                    }
+                }
+                break :blk bx.win_rect;
+            } else bx.win_rect;
+        }
+    };
     // Where each page goes (`layout`).
     var frames: [2]?ui.Rect = .{ null, null };
     const area: ui.Rect = .{ .w = size.w, .h = size.h };
@@ -141,26 +177,30 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette, r: Room, size: ui.Si
     for (tabs[0..n], 0..) |t, i| {
         const f = frames[i] orelse continue;
         const id = paneId(t.id);
-        // Only a page already on the stage moves; one arriving is where it goes.
         const known = std.mem.indexOfScalar(u64, st.was[0..st.was_n], t.id) != null;
-        const d: f32 = if (moving and known) glide_duration else 0;
-        const x = ui.tween(c, id, 1, f.x, d, glide_curve);
-        const w = ui.tween(c, id, 2, f.w, d, glide_curve);
+        if (move != .none and known) _ = ui.tween(c, id, 7, 0, 0, .linear);
+        const pic_moving = moving and (st.pictures.get(t.id) != null or (move != .none and known));
+        if (pic_moving and r.cards()) c.frameIn(@floatCast(@max(0.001, st.moving_until - c.time)));
+        const edge_fade: f32 = if (b.stage_host == null) 1 else if (pic_moving)
+            ui.tween(c, id, 7, 0, 0, .linear)
+        else
+            ui.tween(c, id, 7, 1, 0.12, .ease_out);
         if (move == .enter and move.enter == t.id) _ = ui.tween(c, id, 3, 0, 0, .linear);
         const alpha = ui.tween(c, id, 3, 1, 0.3, .ease_out);
-        if (i == 0) left_w = w;
+        if (i == 0) left_w = f.w;
         const focused = t.id == b.active_id;
-        const box = pane(b, c, p, t, .{ .x = x, .w = w, .h = size.h }, r.cards(), paired, focused);
+        const box = pane(b, c, p, t, .{ .x = f.x, .w = f.w, .h = size.h }, r.cards(), edge_fade, paired, focused);
         st.panes[st.count] = .{ .tab = t.id, .alpha = alpha };
         st.count += 1;
-        st.boxes[st.box_n] = .{ .tab = t.id, .rect = f };
+        const win_r: ui.Rect = .{ .x = stage_origin.x + f.x, .y = stage_origin.y + f.y, .w = f.w, .h = f.h };
+        st.boxes[st.box_n] = .{ .tab = t.id, .rect = f, .win_rect = win_r };
         st.box_n += 1;
         if (c.rects.get(c.node(box).id)) |wr| {
             st.drop.pages[st.drop.page_n] = .{ .tab = t.id, .rect = wr };
             st.drop.page_n += 1;
         }
     }
-    leavingPane(b, c, r.cards());
+    if (b.stage_host == null) leavingPane(b, c, r.cards());
     if (paired) {
         const did = paneId(split.?.right() ^ split.?.left());
         if (move == .enter) _ = ui.tween(c, did, 5, 0, 0, .linear);
@@ -174,6 +214,70 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette, r: Room, size: ui.Si
     st.was_split = split;
     // This frame's pages into their holes, in the same order.
     b.syncStageHost();
+    if (b.stage_host) |sh| {
+        const radius: f32 = if (r.cards()) metrics.card_radius else 0;
+        if (move != .none) {
+            const testing = b.kea.opts.scheme_handler != null;
+            st.pictures.clearMoves();
+            for (old_boxes[0..old_box_n], 0..) |bx, bi| {
+                if (before_rects[bi].w <= 1 or before_rects[bi].h <= 1) continue;
+                st.pictures.showSnapshot(b.gpa, sh.stage_view, bx.tab, before_wvs[bi], before_rects[bi], radius, testing, p.ground, p.hairline);
+                const after: ?ui.Rect = for (st.boxes[0..st.box_n]) |nb| {
+                    if (nb.tab == bx.tab) break nb.win_rect;
+                } else null;
+                st.pictures.animateMove(bx.tab, after, c.reduce_motion);
+            }
+        }
+        syncCovers(b, c, p, sh.stage_view, radius);
+    }
+}
+
+fn cutOccurred(st: *const State, now: []const *Tab, split: ?TabSplit) bool {
+    if (now.len != st.was_n) return true;
+    for (now, st.was[0..st.was_n]) |t, w_id| if (t.id != w_id) return true;
+    if (split != null and st.was_split != null) {
+        if (!split.?.id.eql(st.was_split.?.id)) return true;
+        if (@abs(split.?.fraction() - st.was_split.?.fraction()) > 0.001) return true;
+    } else if ((split != null) != (st.was_split != null)) return true;
+    return false;
+}
+
+fn syncCovers(b: *Browser, c: *ui.Context, p: *const Palette, stage_view: nanoui.objc.Object, radius: f32) void {
+    const st = &b.stage;
+    st.pictures.prune();
+    var idx: usize = 0;
+    while (idx < st.pictures.entries.items.len) {
+        const key = st.pictures.entries.items[idx].key;
+        if (stage_pictures.isCoverKey(key)) {
+            const on_stage = for (st.boxes[0..st.box_n]) |bx| {
+                if (stage_pictures.coverKey(bx.tab) == key) break true;
+            } else false;
+            if (!on_stage) {
+                st.pictures.remove(key);
+                continue;
+            }
+        }
+        idx += 1;
+    }
+    for (st.boxes[0..st.box_n]) |bx| {
+        const t = b.tabById(bx.tab) orelse continue;
+        const key = stage_pictures.coverKey(t.id);
+        if (t.cover) |picture| {
+            const existing = st.pictures.getEntry(key);
+            if (existing == null or existing.?.tag != t.cover_serial or existing.?.fading_out) {
+                st.pictures.showBytes(b.gpa, stage_view, key, picture, bx.win_rect, radius, p.ground);
+                if (st.pictures.getEntry(key)) |e| {
+                    e.tag = t.cover_serial;
+                    nanoui.objc.msg(void, e.view, "setAlphaValue:", .{@as(f64, 0)});
+                    st.pictures.fade(key, 1, if (c.reduce_motion) 0 else 0.2, .ease_out, false);
+                }
+            } else {
+                st.pictures.place(stage_view, key, bx.win_rect, radius, p.ground);
+            }
+        } else if (st.pictures.getEntry(key)) |e| {
+            if (!e.fading_out) st.pictures.fade(key, 0, if (c.reduce_motion) 0 else 0.2, .ease_out, true);
+        }
+    }
 }
 
 /// `motion(to:split:)`: nil (`.none`) for a cut.
@@ -227,13 +331,19 @@ fn leavingPane(b: *Browser, c: *ui.Context, cards: bool) void {
 
 /// One page's hole at `at` (stage points), and over it what is drawn
 /// there alone. Returns the hole's box.
-fn pane(b: *Browser, c: *ui.Context, p: *const Palette, t: *Tab, at: ui.Rect, cards: bool, paired: bool, focused: bool) u32 {
+fn pane(b: *Browser, c: *ui.Context, p: *const Palette, t: *Tab, at: ui.Rect, cards: bool, edge_fade: f32, paired: bool, focused: bool) u32 {
     ui.key(c, c.print("kea.pane.{d}", .{t.id}));
     const i = c.open(.{ .absolute = true, .offset = .{ .x = at.x, .y = at.y }, .width = px(at.w), .height = px(at.h) }, null);
     defer c.end();
     c.addStageHoleNode(i);
-    if (cards) card.cardEdge(c, i);
-    // `CardEdge`'s ground behind the page: seen only where no page is shown
+    if (cards and edge_fade > 0) {
+        card.cardEdge(c, i);
+        if (edge_fade < 1) {
+            const s = &c.node(i).style;
+            s.border = p.ink.alpha(card.edge_alpha * edge_fade);
+            if (s.shadow) |*sh| sh.color = ui.Color.black.alpha(card.shadow_alpha * edge_fade);
+        }
+    }
     // (Stage.swift `Page`: blank, asleep, floating), never over a live one.
     if (cards and (t.isBlank() or t.asleep() or t.floating)) c.node(i).style.background = p.ground;
     // Watched, never taken: a click here is the page's.

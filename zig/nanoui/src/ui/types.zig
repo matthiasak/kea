@@ -155,6 +155,8 @@ pub const Style = struct {
     border: ?Color = null,
     border_width: f32 = 1,
     radius: f32 = 0,
+    /// Circular corners instead of Apple's continuous corners.
+    corner_circular: bool = false,
     shadow: ?Shadow = null,
     /// Filled with Liquid Glass instead of a background.
     glass: ?Glass = null,

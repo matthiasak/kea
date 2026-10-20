@@ -47,6 +47,9 @@ pub const State = struct {
     glide_to: CGPoint = .{ .x = 0, .y = 0 },
     glide_start: f64 = 0,
     glide_bounces: bool = false,
+    gliding: bool = false,
+    prev_after_frame_ctx: ?*anyopaque = null,
+    prev_after_frame: ?*const fn (ctx: ?*anyopaque, s: *nanoui.Surface) bool = null,
 };
 
 /// Bumped to stop a glide, or a pull's wait to settle.
@@ -357,20 +360,42 @@ fn glide(p: *Panel, to: CGPoint, bouncing: bool) void {
     m.glide_bounces = bouncing;
     m.glide_from = frameOf(p).origin;
     m.glide_to = to;
-    m.glide_start = nanoui.ui.clock.now();
+    m.glide_start = if (p.window.surface) |s| (if (s.last_frame_time > 0) s.last_frame_time else nanoui.ui.clock.now()) else nanoui.ui.clock.now();
     glides +%= 1;
+    if (p.window.surface) |s| {
+        if (s.visible()) {
+            m.gliding = true;
+            if (s.after_frame != glideAfterFrame) {
+                m.prev_after_frame_ctx = s.after_frame_ctx;
+                m.prev_after_frame = s.after_frame;
+                s.after_frame_ctx = p;
+                s.after_frame = glideAfterFrame;
+            }
+            s.requestFrame();
+            return;
+        }
+    }
+    m.gliding = false;
     objc.dispatchAfter(std.time.ns_per_s / 120, @ptrFromInt(glides), glideStep);
 }
 
-pub fn stopGlide(_: *Panel) void {
+pub fn stopGlide(p: *Panel) void {
     glides +%= 1;
+    const m = &p.m;
+    if (m.gliding) {
+        m.gliding = false;
+        if (p.window.surface) |s| {
+            if (s.after_frame == glideAfterFrame) {
+                s.after_frame_ctx = m.prev_after_frame_ctx;
+                s.after_frame = m.prev_after_frame;
+            }
+        }
+    }
 }
 
-fn glideStep(ctx: ?*anyopaque) callconv(.c) void {
-    if (@intFromPtr(ctx) != glides) return;
-    const p = current() orelse return;
+fn stepGlide(p: *Panel, now: f64) bool {
     const m = &p.m;
-    const t = nanoui.ui.clock.now() - m.glide_start;
+    const t = @max(0, now - m.glide_start);
     var done = false;
     const progress: f64 = if (m.glide_bounces) blk: {
         // Underdamped: past the place, and back to it.
@@ -385,7 +410,27 @@ fn glideStep(ctx: ?*anyopaque) callconv(.c) void {
         break :blk if (done) 1 else 1 - (1 + omega * t) * @exp(-omega * t);
     };
     setOrigin(p, .{ .x = m.glide_from.x + (m.glide_to.x - m.glide_from.x) * progress, .y = m.glide_from.y + (m.glide_to.y - m.glide_from.y) * progress });
-    if (!done) objc.dispatchAfter(std.time.ns_per_s / 120, ctx, glideStep);
+    return done;
+}
+
+fn glideAfterFrame(ctx: ?*anyopaque, s: *nanoui.Surface) bool {
+    const p: *Panel = @ptrCast(@alignCast(ctx));
+    const m = &p.m;
+    const changed = if (m.prev_after_frame) |af| af(m.prev_after_frame_ctx, s) else false;
+    if (!m.gliding) return changed;
+    const now = if (s.last_frame_time > 0) s.last_frame_time else nanoui.ui.clock.now();
+    if (stepGlide(p, now)) {
+        stopGlide(p);
+    } else {
+        s.ctx.animating = true;
+    }
+    return changed;
+}
+
+fn glideStep(ctx: ?*anyopaque) callconv(.c) void {
+    if (@intFromPtr(ctx) != glides) return;
+    const p = current() orelse return;
+    if (!stepGlide(p, nanoui.ui.clock.now())) objc.dispatchAfter(std.time.ns_per_s / 120, ctx, glideStep);
 }
 
 test "a flick goes to the corner it points at, or along its stronger way" {

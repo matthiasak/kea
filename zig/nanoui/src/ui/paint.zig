@@ -12,6 +12,7 @@ const none = ctx_mod.none;
 
 pub fn paint(c: *Context, out: *std.ArrayList(metal.Instance)) void {
     out.clearRetainingCapacity();
+    c.text.images.beginPaint();
     paintNode(c, out, 0, types.Rect.infinite, 1, false);
 }
 
@@ -32,17 +33,22 @@ fn paintNode(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, clip:
     const visible = r.intersect(clip);
     if (opacity <= 0.001) return;
     const clip4 = metal.clip4(clip);
-    const rect4: [4]f32 = .{ r.x, r.y, r.w, r.h };
+    const sx0 = snap(r.x, c.scale);
+    const sy0 = snap(r.y, c.scale);
+    const sx1 = snap(r.x + r.w, c.scale);
+    const sy1 = snap(r.y + r.h, c.scale);
+    const rect4: [4]f32 = .{ sx0, sy0, sx1 - sx0, sy1 - sy0 };
+    const rad: f32 = if (st.corner_circular) -st.radius else st.radius;
     // What the box and its subtree emit, for `Style.scale`.
     const start = out.items.len;
 
     if (visible.w > 0 and visible.h > 0) {
         if (st.shadow) |sh| push(c, out, .{
-            .rect = .{ r.x + sh.x, r.y + sh.y, r.w, r.h },
+            .rect = .{ sx0 + sh.x, sy0 + sh.y, rect4[2], rect4[3] },
             .color = metal.color4(sh.color.alpha(opacity)),
             // A knocked out shadow is cut by the box, where it is from the shadow.
             .uv = if (sh.knockout) .{ -sh.x, -sh.y, 0, 0 } else .{ 0, 0, 0, 0 },
-            .radius = st.radius,
+            .radius = rad,
             // CSS's blur radius is twice the Gaussian's standard deviation.
             .border_width = sh.blur / 2,
             .kind = if (sh.knockout) metal.Kind.shadow_out else metal.Kind.shadow,
@@ -50,13 +56,13 @@ fn paintNode(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, clip:
         });
         // Glass takes the background's place.
         const fill: ?types.Color = if (st.glass != null) null else st.background;
-        if (st.glass) |g| push(c, out, glass.instance(glass.material(g, r.w, r.h, c.theme.dark, c.scale), rect4, st.radius, clip4, opacity));
+        if (st.glass) |g| push(c, out, glass.instance(glass.material(g, rect4[2], rect4[3], c.theme.dark, c.scale), rect4, st.radius, clip4, opacity));
         if (fill != null or st.border != null) push(c, out, .{
             .rect = rect4,
             .color = metal.color4((fill orelse types.Color.transparent).alpha(opacity)),
             .border_color = metal.color4((st.border orelse types.Color.transparent).alpha(opacity)),
             .border_width = if (st.border != null) st.border_width else 0,
-            .radius = st.radius,
+            .radius = rad,
             .clip = clip4,
         });
         switch (n.content) {
@@ -76,13 +82,13 @@ fn paintNode(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, clip:
                     .clip = clip4,
                 });
             },
-            .image => |im| if (c.text.images.get(im.key, im.bytes)) |e| push(c, out, .{
+            .image => |im| if (c.text.images.get(im.key, im.bytes, @intFromFloat(@max(1, @ceil(@max(rect4[2], rect4[3]) * c.scale))))) |e| push(c, out, .{
                 .rect = rect4,
                 .color = .{ 1, 1, 1, im.opacity * opacity },
                 // A tint (alpha above 0) fills the picture's shape instead.
                 .border_color = if (im.tint) |t| metal.color4(t) else .{ 0, 0, 0, 0 },
                 .uv = e.uv,
-                .radius = st.radius,
+                .radius = rad,
                 .kind = metal.Kind.image,
                 .clip = clip4,
             }),
@@ -196,10 +202,16 @@ fn textRun(c: *Context, out: *std.ArrayList(metal.Instance), t: ctx_mod.Content.
             color[3] *= std.math.clamp((right - fd.clear - (x + g.x)) / @max(fd.ramp, 0.001), 0, 1);
             if (color[3] <= 0) continue;
         }
+        var uv = sp.uv;
+        if (!text_mod.portable and 0.2126 * color[0] + 0.7152 * color[1] + 0.0722 * color[2] < 0.5) {
+            const du = uv[2] - uv[0];
+            uv[0] += du;
+            uv[2] += du;
+        }
         push(c, out, .{
             .rect = .{ px / scale + sp.x, baseline - g.y + sp.y, sp.w, sp.h },
             .color = color,
-            .uv = sp.uv,
+            .uv = uv,
             .kind = metal.Kind.text,
             .clip = clip4,
         });

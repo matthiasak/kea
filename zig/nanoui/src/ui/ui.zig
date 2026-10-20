@@ -25,6 +25,7 @@ pub const Curve = motion.Curve;
 pub const spring = motion.spring;
 pub const springFrom = motion.springFrom;
 pub const tween = motion.tween;
+pub const jump = motion.jump;
 pub const Interaction = ctx_mod.Interaction;
 pub const FrameStats = ctx_mod.FrameStats;
 pub const frame_log = @import("frame_log.zig");

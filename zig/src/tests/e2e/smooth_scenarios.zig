@@ -477,7 +477,7 @@ fn s12LoadingRing(_: *Harness, b: *app.Browser, s: *ui.Surface, fl: *ui.FrameLog
     for (0..3) |iter| {
         const tab = b.open("kea-test://site/slow", .{ .foreground = true });
         b.redraw();
-        smooth.waitLoop(0.1);
+        smooth.waitUntilSettled(s, 0.85);
 
         const t0 = ui.clock.now();
         const m0 = fl.mark();
@@ -499,7 +499,7 @@ fn s13IdleBlank(_: *Harness, b: *app.Browser, _: *ui.Surface, fl: *ui.FrameLog) 
     while (b.tabs.items.len > 1) b.close(b.tabs.items[b.tabs.items.len - 1]);
     b.prefs.set("sidebar", false);
     b.redraw();
-    smooth.waitLoop(0.8);
+    smooth.waitLoop(1.1);
 
     var spans: [3]SpanMark = undefined;
     for (0..3) |iter| {

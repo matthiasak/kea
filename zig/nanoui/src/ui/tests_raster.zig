@@ -169,3 +169,48 @@ test "pictures written straight to the GPU draw as the CPU atlas's copy does" {
     try testing.expectEqual(@as(usize, 0), kept_cpu);
     try testing.expectEqualSlices(u8, frames[0].bytes, frames[1].bytes);
 }
+
+test "a box at x = 10.3 pt with a 1 pt border snaps to device pixels with full coverage" {
+    const SnapScene = struct {
+        fn view(_: *@This(), c: *ui.Context) void {
+            _ = c.open(.{ .width = .fill, .height = .fill, .background = .white }, null);
+            defer c.end();
+            _ = c.leaf(.{
+                .absolute = true,
+                .offset = .{ .x = 10.3, .y = 10.3 },
+                .width = .{ .px = 20 },
+                .height = .{ .px = 20 },
+                .background = .white,
+                .border = .black,
+                .border_width = 1,
+            }, .none, null);
+        }
+    };
+    const gpa = testing.allocator;
+    var s: SnapScene = .{};
+    var t: ui.Tester = undefined;
+    try t.init(gpa, .init(&s, SnapScene.view), .{ .width = 60, .height = 60 });
+    defer t.deinit();
+    t.settle(1);
+    const w: usize = @intFromFloat(t.size.w * t.scale);
+    const h: usize = @intFromFloat(t.size.h * t.scale);
+    const bytes = try gpa.alloc(u8, w * h * 4);
+    defer gpa.free(bytes);
+    const out: @import("gpu.zig").Pixels = .{ .bytes = bytes, .width = w, .height = h };
+    raster.draw(out, t.instances.items, .{ .pixels = &.{}, .size = 0 }, .{}, t.scale, .white);
+    // 10.3 pt at 2x snaps to 10.5 pt = pixel 21; a 1 pt border spans 2 device pixels (21 and 22),
+    // while pixel 20 (outside) and pixel 23 (inside fill) stay pure white.
+    const px20 = out.bytes[(30 * w + 20) * 4 ..][0..4].*;
+    const px21 = out.bytes[(30 * w + 21) * 4 ..][0..4].*;
+    const px22 = out.bytes[(30 * w + 22) * 4 ..][0..4].*;
+    const px23 = out.bytes[(30 * w + 23) * 4 ..][0..4].*;
+    try testing.expectEqual([4]u8{ 255, 255, 255, 255 }, px20);
+    try testing.expectEqual([4]u8{ 0, 0, 0, 255 }, px21);
+    try testing.expectEqual([4]u8{ 0, 0, 0, 255 }, px22);
+    try testing.expectEqual([4]u8{ 255, 255, 255, 255 }, px23);
+}
+
+test {
+    _ = @import("tests_corners.zig");
+    _ = @import("tests_text_weight.zig");
+}

@@ -68,18 +68,35 @@ static float blur_along_x(float x, float y, float sigma, float corner, float2 ha
 }
 
 static float shadow_alpha(float2 p, float2 half_size, float corner, float sigma) {
+    float c = abs(corner);
     float low = p.y - half_size.y;
     float high = p.y + half_size.y;
     float start = clamp(-3.0 * sigma, low, high);
     float end = clamp(3.0 * sigma, low, high);
-    float step = (end - start) / 4.0;
+    float step = (end - start) / 8.0;
     float y = start + step * 0.5;
     float alpha = 0.0;
-    for (int k = 0; k < 4; k++) {
-        alpha += blur_along_x(p.x, p.y - y, sigma, corner, half_size) * gaussian(y, sigma) * step;
+    for (int k = 0; k < 8; k++) {
+        alpha += blur_along_x(p.x, p.y - y, sigma, c, half_size) * gaussian(y, sigma) * step;
         y += step;
     }
     return alpha;
+}
+
+static float shadow_dither(float2 pos) {
+    uint x = uint(pos.x);
+    uint y = uint(pos.y);
+    uint h1 = (x * 1664525u + y * 1013904223u) ^ 0x68bc21ebu;
+    h1 ^= h1 >> 15;
+    h1 *= 0x85ebca6bu;
+    h1 ^= h1 >> 13;
+    uint h2 = (x * 22695477u + y * 2891336453u) ^ 0x02e5be93u;
+    h2 ^= h2 >> 15;
+    h2 *= 0xc2b2ae35u;
+    h2 ^= h2 >> 13;
+    float u1 = float(h1 & 0xffffu) / 65535.0;
+    float u2 = float(h2 & 0xffffu) / 65535.0;
+    return (u1 + u2 - 1.0) * (0.5 / 255.0);
 }
 
 static float rounded_box(float2 p, float2 half_size, float r) {
@@ -87,6 +104,31 @@ static float rounded_box(float2 p, float2 half_size, float r) {
     return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r;
 }
 
+static float corner_sdf(float2 p, float2 half_size, float r_in) {
+    float r = min(abs(r_in), min(half_size.x, half_size.y));
+    if (r <= 0.0 || r_in < 0.0) return rounded_box(p, half_size, r);
+    float dx = half_size.x - abs(p.x);
+    float dy = half_size.y - abs(p.y);
+    float a = min(dx, dy);
+    float b_val = max(dx, dy);
+    float half_long = (dy >= dx) ? half_size.y : half_size.x;
+    float ext = min(1.52866495 * r, half_long);
+    if (b_val >= ext) return -a;
+    if (b_val >= 0.63149399 * r && a > -0.25 * r) {
+        float span = max(ext - 0.63149399 * r, 1e-5);
+        float u = clamp((ext - b_val) / span, 0.0, 1.0);
+        float u2 = u * u;
+        float u3 = u2 * u;
+        const float c3 = 0.00759166, c4 = 0.06728002, c5 = 0.00003973;
+        float indent = r * (c3 * u3 + c4 * u3 * u + c5 * u3 * u2);
+        float slope = r * (3.0 * c3 * u2 + 4.0 * c4 * u3 + 5.0 * c5 * u2 * u2) / span;
+        return (indent - a) / sqrt(1.0 + slope * slope);
+    }
+    float cx = 0.950248 * r;
+    float cr = 0.931599 * r;
+    float2 q = float2(cx - dx, cx - dy);
+    return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - cr;
+}
 static float4 shade(VOut in, Instance i, texture2d<float> atlas, texture2d<float> images);
 
 // How much of the fragment the instance's clip lets through: discarded
@@ -101,7 +143,7 @@ static float clip_coverage(VOut in, Instance i) {
         float2 ch = (i.clip.zw - i.clip.xy) * 0.5;
         float2 q = in.world - i.clip.xy - ch;
         // Derivatives outside the branch on the corner: it differs by pixel.
-        float cd = rounded_box(q, ch, min(rad, min(ch.x, ch.y)));
+        float cd = corner_sdf(q, ch, min(rad, min(ch.x, ch.y)));
         float caa = max(fwidth(cd), 0.0001) * 0.5;
         uint bit = q.y < 0.0 ? (q.x < 0.0 ? 1u : 2u) : (q.x < 0.0 ? 8u : 4u);
         if ((uint(corners) & bit) != 0u) clip_cover = 1.0 - smoothstep(-caa, caa, cd);
@@ -128,8 +170,9 @@ static float4 shade(VOut in, Instance i, texture2d<float> atlas, texture2d<float
 
     float2 half_size = i.rect.zw * 0.5;
     float2 p = in.local - half_size;
-    float r = min(i.radius, min(half_size.x, half_size.y));
-    float d = rounded_box(p, half_size, r);
+    float r_abs = min(abs(i.radius), min(half_size.x, half_size.y));
+    float r = i.radius < 0.0 ? -r_abs : r_abs;
+    float d = corner_sdf(p, half_size, r);
 
     if (i.kind == 3.0) {
         // Premultiplied already: scaled by the corners' coverage and opacity.
@@ -150,7 +193,8 @@ static float4 shade(VOut in, Instance i, texture2d<float> atlas, texture2d<float
         float a = shadow_alpha(p, half_size, r, sigma) * i.color.a;
         // Knocked out inside the box itself: `uv.xy` is where the box is
         // from the shadow's rect (the shadow's offset, negated).
-        if (i.kind == 5.0) a *= clamp(rounded_box(p - i.uv.xy, half_size, r) + 0.5, 0.0, 1.0);
+        if (i.kind == 5.0) a *= clamp(corner_sdf(p - i.uv.xy, half_size, r) + 0.5, 0.0, 1.0);
+        if (a > 0.0) a = clamp(a + shadow_dither(in.pos.xy), 0.0, 1.0);
         return float4(i.color.rgb * a, a);
     }
 

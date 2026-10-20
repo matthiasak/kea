@@ -131,7 +131,7 @@ pub const ImageOptions = struct {
 /// A picture; false (and nothing drawn) if it can't be decoded.
 pub fn image(c: *Context, opts: ImageOptions) bool {
     const k = @import("images.zig").Images.key(opts.key);
-    // Sized from the decoded picture; packed only when it is drawn.
+    // Sized from the picture's header; decoded at device size and packed only when drawn.
     const e = c.text.images.info(k, opts.bytes) orelse return false;
     const w: f32 = @as(f32, @floatFromInt(e.width)) / @max(opts.scale, 0.5);
     const h: f32 = @as(f32, @floatFromInt(e.height)) / @max(opts.scale, 0.5);

@@ -22,27 +22,30 @@ pub const PaneSlot = struct {
     applied_alpha: f32 = 1,
     place_calls: usize = 0,
 
-    fn setHidden(slot: *PaneSlot, wv: objc.Object, on: bool) void {
-        if (slot.hidden == on) return;
+    fn setHidden(slot: *PaneSlot, wv: objc.Object, on: bool) bool {
+        if (slot.hidden == on) return false;
         slot.hidden = on;
         objc.msg(void, wv, "setHidden:", .{on});
+        return true;
     }
 
-    fn place(slot: *PaneSlot, wv: objc.Object, holes: []const ui.Rect, i: usize) void {
+    fn place(slot: *PaneSlot, wv: objc.Object, holes: []const ui.Rect, i: usize) bool {
         if (i >= holes.len or holes[i].w <= 1 or holes[i].h <= 1) return slot.setHidden(wv, true);
         const r = holes[i];
-        slot.setHidden(wv, false);
+        var changed = slot.setHidden(wv, false);
         if (slot.applied_alpha != slot.alpha) {
             slot.applied_alpha = slot.alpha;
             objc.msg(void, wv, "setAlphaValue:", .{@as(f64, slot.alpha)});
+            changed = true;
         }
-        if (rectsEq(slot.last_rect, r)) return;
+        if (rectsEq(slot.last_rect, r)) return changed;
         slot.last_rect = r;
         slot.place_calls += 1;
         objc.msg(void, wv, "setFrame:", .{objc.CGRect{
             .origin = .{ .x = r.x, .y = r.y },
             .size = .{ .width = r.w, .height = r.h },
         }});
+        return true;
     }
 };
 
@@ -53,6 +56,7 @@ pub const StageHost = struct {
     slots: std.ArrayList(PaneSlot) = .empty,
     peek_slot: PaneSlot = .{},
     card_radius: f32 = 10,
+    dirty: bool = false,
     on_rects_ctx: ?*anyopaque = null,
     on_rects: ?*const fn (ctx: ?*anyopaque, holes: []const ui.Rect) void = null,
 
@@ -104,6 +108,7 @@ pub const StageHost = struct {
         for (self.slots.items, pages, alphas) |*slot, page, alpha| {
             if (slot.webview != page) {
                 slot.* = .{ .webview = page, .corner_radius = self.card_radius };
+                self.dirty = true;
                 if (page) |wv| {
                     const sup = objc.msg(?objc.Object, wv, "superview", .{});
                     if (sup != self.stage_view) objc.msg(void, self.stage_view, "addSubview:", .{wv});
@@ -114,6 +119,7 @@ pub const StageHost = struct {
             } else if (page) |wv| if (slot.corner_radius != self.card_radius) {
                 slot.corner_radius = self.card_radius;
                 applyCornerRadius(wv, self.card_radius);
+                self.dirty = true;
             };
             slot.alpha = alpha;
         }
@@ -137,6 +143,7 @@ pub const StageHost = struct {
         if (self.peek_slot.webview == webview) return;
         if (self.peek_slot.webview) |old| self.detach(old);
         self.peek_slot = .{ .webview = webview };
+        self.dirty = true;
         if (webview) |wv| {
             objc.msg(void, self.stage_view, "addSubview:", .{wv});
             objc.msg(void, wv, "setHidden:", .{objc.NO});
@@ -144,9 +151,10 @@ pub const StageHost = struct {
         }
     }
 
-    fn detach(self: *const StageHost, wv: objc.Object) void {
+    fn detach(self: *StageHost, wv: objc.Object) void {
         if (objc.msg(?objc.Object, wv, "superview", .{}) == self.stage_view) {
             objc.msg(void, wv, "removeFromSuperview", .{});
+            self.dirty = true;
         }
     }
 
@@ -159,17 +167,22 @@ pub const StageHost = struct {
         }
     }
 
-    fn onAfterFrame(ctx: ?*anyopaque, s: *Surface) void {
+    fn onAfterFrame(ctx: ?*anyopaque, s: *Surface) bool {
         const self: *StageHost = @ptrCast(@alignCast(ctx));
+        var changed = self.dirty;
+        self.dirty = false;
         const holes = s.ctx.stage_rects[0..s.ctx.stage_count];
         if (self.on_rects) |cb| cb(self.on_rects_ctx, holes);
         const n = self.slots.items.len;
         for (self.slots.items, 0..) |*slot, i| {
             const wv = slot.webview orelse continue;
-            slot.place(wv, holes, i);
+            if (slot.place(wv, holes, i)) changed = true;
         }
         // The peek's hole is drawn after the panes'.
-        if (self.peek_slot.webview) |wv| self.peek_slot.place(wv, if (holes.len > n) holes else &.{}, n);
+        if (self.peek_slot.webview) |wv| {
+            if (self.peek_slot.place(wv, if (holes.len > n) holes else &.{}, n)) changed = true;
+        }
+        return changed;
     }
 };
 

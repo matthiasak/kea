@@ -80,13 +80,48 @@ fn smoothstep(e0: f32, e1: f32, x: f32) f32 {
 
 /// The signed distance to a rounded box centered at 0, and the sum of the
 /// absolute values of its gradient (what `fwidth` measures per pixel).
-fn roundedBox(px: f32, py: f32, hw: f32, hh: f32, r: f32) [2]f32 {
+pub fn roundedBox(px: f32, py: f32, hw: f32, hh: f32, r: f32) [2]f32 {
     const qx = @abs(px) - hw + r;
     const qy = @abs(py) - hh + r;
     const mx = @max(qx, 0);
     const my = @max(qy, 0);
     const len = @sqrt(mx * mx + my * my);
     const d = len + @min(@max(qx, qy), 0) - r;
+    const grad: f32 = if (len > 0) (mx + my) / len else 1;
+    return .{ d, grad };
+}
+
+pub fn cornerSdf(px: f32, py: f32, hw: f32, hh: f32, r_in: f32) [2]f32 {
+    const r = @min(@abs(r_in), @min(hw, hh));
+    if (r <= 0 or r_in < 0) return roundedBox(px, py, hw, hh, r);
+    const dx = hw - @abs(px);
+    const dy = hh - @abs(py);
+    const a = @min(dx, dy);
+    const b_val = @max(dx, dy);
+    const half_long = if (dy >= dx) hh else hw;
+    const ext = @min(1.52866495 * r, half_long);
+    if (b_val >= ext) return .{ -a, 1 };
+    if (b_val >= 0.63149399 * r and a > -0.25 * r) {
+        const span = @max(ext - 0.63149399 * r, 1e-5);
+        const u = std.math.clamp((ext - b_val) / span, 0, 1);
+        const uu = u * u;
+        const uuu = uu * u;
+        const c3: f32 = 0.00759166;
+        const c4: f32 = 0.06728002;
+        const c5: f32 = 0.00003973;
+        const indent = r * (c3 * uuu + c4 * uuu * u + c5 * uuu * uu);
+        const slope = r * (3 * c3 * uu + 4 * c4 * uuu + 5 * c5 * uu * uu) / span;
+        const inv_norm = 1 / @sqrt(1 + slope * slope);
+        return .{ (indent - a) * inv_norm, (1 + slope) * inv_norm };
+    }
+    const cx = 0.950248 * r;
+    const cr = 0.931599 * r;
+    const qx = cx - dx;
+    const qy = cx - dy;
+    const mx = @max(qx, 0);
+    const my = @max(qy, 0);
+    const len = @sqrt(mx * mx + my * my);
+    const d = len + @min(@max(qx, qy), 0) - cr;
     const grad: f32 = if (len > 0) (mx + my) / len else 1;
     return .{ d, grad };
 }
@@ -101,13 +136,14 @@ inline fn clipCover(i: *const gpu.Instance, wx: f32, wy: f32, inv: f32) f32 {
     const hw = (c[2] - c[0]) * 0.5;
     const hh = (c[3] - c[1]) * 0.5;
     const r = @min(round.radius, @min(hw, hh));
+    const reach = @min(1.52866495 * r, @max(hw, hh));
     // Between the corners, nothing is cut.
-    if ((wx > c[0] + r and wx < c[2] - r) or (wy > c[1] + r and wy < c[3] - r)) return 1;
+    if ((wx > c[0] + reach and wx < c[2] - reach) or (wy > c[1] + reach and wy < c[3] - reach)) return 1;
     const qx = wx - c[0] - hw;
     const qy = wy - c[1] - hh;
     const bit: u4 = if (qy < 0) (if (qx < 0) 1 else 2) else (if (qx < 0) 8 else 4);
     if (round.corners & bit == 0) return 1;
-    const sd = roundedBox(qx, qy, hw, hh, r);
+    const sd = cornerSdf(qx, qy, hw, hh, r);
     const aa = @max(sd[1] * inv, 0.0001) * 0.5;
     return 1 - smoothstep(-aa, aa, sd[0]);
 }
@@ -117,13 +153,15 @@ fn quad(out: gpu.Pixels, i: *const gpu.Instance, scale: f32, b: [4]usize) void {
     const hh = i.rect[3] * 0.5;
     const cx = i.rect[0] + hw;
     const cy = i.rect[1] + hh;
-    const r = @min(i.radius, @min(hw, hh));
+    const r_abs = @min(@abs(i.radius), @min(hw, hh));
+    const r: f32 = if (i.radius < 0) -r_abs else r_abs;
     const bw = i.border_width;
     const has_border = bw > 0 and i.border_color[3] > 0;
     const c = i.color;
     const bc = i.border_color;
     // Inside this, a pixel is wholly the fill: no edge, corner or border.
-    const solid = @max(r, if (has_border) bw else 0) + 2 / scale;
+    const corner_ext: f32 = if (r > 0) 1.52866495 * r else r_abs;
+    const solid = @max(corner_ext, if (has_border) bw else 0) + 2 / scale;
     const inv = 1 / scale;
     for (b[1]..b[3]) |y| {
         const wy = (@as(f32, @floatFromInt(y)) + 0.5) * inv;
@@ -139,7 +177,7 @@ fn quad(out: gpu.Pixels, i: *const gpu.Instance, scale: f32, b: [4]usize) void {
                 blend(out.bytes, row + x * 4, c[0] * a, c[1] * a, c[2] * a, a);
                 continue;
             }
-            const sd = roundedBox(pxl, py, hw, hh, r);
+            const sd = cornerSdf(pxl, py, hw, hh, r);
             const aa = @max(sd[1] * inv, 0.0001) * 0.5;
             const coverage = 1 - smoothstep(-aa, aa, sd[0]);
             if (coverage <= 0) continue;
@@ -223,7 +261,8 @@ fn picture(out: gpu.Pixels, i: *const gpu.Instance, p: Pictures, scale: f32, b: 
     const inv = 1 / scale;
     const hw = i.rect[2] * 0.5;
     const hh = i.rect[3] * 0.5;
-    const r = @min(i.radius, @min(hw, hh));
+    const r_abs = @min(@abs(i.radius), @min(hw, hh));
+    const r: f32 = if (i.radius < 0) -r_abs else r_abs;
     for (b[1]..b[3]) |y| {
         const wy = (@as(f32, @floatFromInt(y)) + 0.5) * inv;
         const ty = (wy - i.rect[1]) / i.rect[3];
@@ -232,7 +271,7 @@ fn picture(out: gpu.Pixels, i: *const gpu.Instance, p: Pictures, scale: f32, b: 
         for (b[0]..b[2]) |x| {
             const wx = (@as(f32, @floatFromInt(x)) + 0.5) * inv;
             const tx = (wx - i.rect[0]) / i.rect[2];
-            const sd = roundedBox(wx - i.rect[0] - hw, wy - i.rect[1] - hh, hw, hh, r);
+            const sd = cornerSdf(wx - i.rect[0] - hw, wy - i.rect[1] - hh, hw, hh, r);
             const aa = @max(sd[1] * inv, 0.0001) * 0.5;
             const k = (1 - smoothstep(-aa, aa, sd[0])) * i.color[3] * clipCover(i, wx, wy, inv);
             if (k <= 0) continue;
@@ -258,7 +297,7 @@ fn pane(out: gpu.Pixels, i: *const gpu.Instance, scale: f32, b: [4]usize) void {
     const inv = 1 / scale;
     const hw = i.rect[2] * 0.5;
     const hh = i.rect[3] * 0.5;
-    const r = @min(i.radius, @min(hw, hh));
+    const r = @min(@abs(i.radius), @min(hw, hh));
     for (b[1]..b[3]) |y| {
         const wy = (@as(f32, @floatFromInt(y)) + 0.5) * inv;
         const row = y * out.width * 4;
@@ -298,18 +337,35 @@ fn blurAlongX(x: f32, y: f32, sigma: f32, corner: f32, hw: f32, hh: f32) f32 {
 }
 
 fn shadowAlpha(px: f32, py: f32, hw: f32, hh: f32, corner: f32, sigma: f32) f32 {
+    const c = @abs(corner);
     const low = py - hh;
     const high = py + hh;
     const start = std.math.clamp(-3 * sigma, low, high);
     const end = std.math.clamp(3 * sigma, low, high);
-    const step = (end - start) / 4;
+    const step = (end - start) / 8;
     var y = start + step * 0.5;
     var alpha: f32 = 0;
-    for (0..4) |_| {
-        alpha += blurAlongX(px, py - y, sigma, corner, hw, hh) * gaussian(y, sigma) * step;
+    for (0..8) |_| {
+        alpha += blurAlongX(px, py - y, sigma, c, hw, hh) * gaussian(y, sigma) * step;
         y += step;
     }
     return alpha;
+}
+
+fn shadowDither(x: usize, y: usize) f32 {
+    const ux: u32 = @truncate(x);
+    const uy: u32 = @truncate(y);
+    var h1: u32 = (ux *% 1664525 +% uy *% 1013904223) ^ 0x68bc21eb;
+    h1 ^= h1 >> 15;
+    h1 *%= 0x85ebca6b;
+    h1 ^= h1 >> 13;
+    var h2: u32 = (ux *% 22695477 +% uy *% 2891336453) ^ 0x02e5be93;
+    h2 ^= h2 >> 15;
+    h2 *%= 0xc2b2ae35;
+    h2 ^= h2 >> 13;
+    const v1 = @as(f32, @floatFromInt(h1 & 0xffff)) / 65535.0;
+    const v2 = @as(f32, @floatFromInt(h2 & 0xffff)) / 65535.0;
+    return (v1 + v2 - 1.0) * (0.5 / 255.0);
 }
 
 fn shadow(out: gpu.Pixels, i: *const gpu.Instance, scale: f32, b: [4]usize) void {
@@ -317,7 +373,8 @@ fn shadow(out: gpu.Pixels, i: *const gpu.Instance, scale: f32, b: [4]usize) void
     const hh = i.rect[3] * 0.5;
     const cx = i.rect[0] + hw;
     const cy = i.rect[1] + hh;
-    const r = @min(i.radius, @min(hw, hh));
+    const r_abs = @min(@abs(i.radius), @min(hw, hh));
+    const r: f32 = if (i.radius < 0) -r_abs else r_abs;
     const sigma = @max(i.border_width, 0.25);
     const c = i.color;
     const inv = 1 / scale;
@@ -330,7 +387,8 @@ fn shadow(out: gpu.Pixels, i: *const gpu.Instance, scale: f32, b: [4]usize) void
             const pxl = wx - cx;
             var a = shadowAlpha(pxl, py, hw, hh, r, sigma) * c[3] * clipCover(i, wx, wy, inv);
             // Knocked out: nothing inside the box (`uv` its offset from the shadow's rect).
-            if (i.kind == gpu.Kind.shadow_out) a *= std.math.clamp(roundedBox(pxl - i.uv[0], py - i.uv[1], hw, hh, r)[0] + 0.5, 0, 1);
+            if (i.kind == gpu.Kind.shadow_out) a *= std.math.clamp(cornerSdf(pxl - i.uv[0], py - i.uv[1], hw, hh, r)[0] + 0.5, 0, 1);
+            if (a > 0) a = std.math.clamp(a + shadowDither(x, y), 0, 1);
             blend(out.bytes, row + x * 4, c[0] * a, c[1] * a, c[2] * a, a);
         }
     }

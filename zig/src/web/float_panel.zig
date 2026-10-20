@@ -365,6 +365,7 @@ fn button(c: *ui.Context, p: *Panel, symbol: []const u8, symbol_size: f32, side:
         .width = px(side),
         .height = px(side),
         .radius = side / 2,
+        .corner_circular = true,
         .background = glass,
         .opacity = fade,
         .align_items = .center,

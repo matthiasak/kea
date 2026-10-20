@@ -62,6 +62,7 @@ pub const Window = struct {
             .methods = &.{
                 .{ .name = "windowWillClose:", .imp = &windowWillClose, .types = "v@:@" },
                 .{ .name = "windowDidChangeOcclusionState:", .imp = &occlusionChanged, .types = "v@:@" },
+                .{ .name = "windowDidChangeScreen:", .imp = &screenChanged, .types = "v@:@" },
                 .{ .name = "windowDidResize:", .imp = &didResize, .types = "v@:@" },
                 .{ .name = "windowDidEnterFullScreen:", .imp = &fullScreenChanged, .types = "v@:@" },
                 .{ .name = "windowDidExitFullScreen:", .imp = &fullScreenChanged, .types = "v@:@" },
@@ -188,10 +189,12 @@ pub const Window = struct {
 
     pub fn show(self: *Window) void {
         objc.msg(void, self.nswindow, "makeKeyAndOrderFront:", .{@as(?objc.Object, null)});
+        if (self.surface) |s| s.occlusionChanged();
     }
 
     pub fn hide(self: *Window) void {
         objc.msg(void, self.nswindow, "orderOut:", .{@as(?objc.Object, null)});
+        if (self.surface) |s| s.is_visible = false;
     }
 
     pub fn isVisible(self: *Window) bool {
@@ -281,6 +284,11 @@ fn primaryHeight() f64 {
 fn occlusionChanged(self_obj: objc.Object, _: objc.SEL, _: objc.Object) callconv(.c) void {
     const w = objc.getZig(Window, self_obj) orelse return;
     if (w.surface) |s| s.occlusionChanged();
+}
+
+fn screenChanged(self_obj: objc.Object, _: objc.SEL, _: objc.Object) callconv(.c) void {
+    const w = objc.getZig(Window, self_obj) orelse return;
+    if (w.surface) |s| s.screenChanged();
 }
 
 fn didResize(self_obj: objc.Object, _: objc.SEL, _: objc.Object) callconv(.c) void {

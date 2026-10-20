@@ -11,9 +11,10 @@ extern "c" fn CTFontGetBoundingRectsForGlyphs(font: cf.CTFontRef, orientation: u
 extern "c" fn CTFontDrawGlyphs(font: cf.CTFontRef, glyphs: [*]const u16, positions: [*]const objc.CGPoint, count: usize, ctx: cf.CGContextRef) void;
 extern "c" fn CGContextDrawImage(ctx: cf.CGContextRef, rect: objc.CGRect, image: *anyopaque) void;
 extern "c" fn CGContextTranslateCTM(ctx: cf.CGContextRef, tx: f64, ty: f64) void;
-
-/// The atlas starts small and doubles when full, up to `max_size`.
-const initial_size: u32 = 512;
+extern "c" fn CGContextSetAllowsFontSmoothing(ctx: cf.CGContextRef, v: bool) void;
+extern "c" fn CGColorSpaceCreateDeviceGray() ?cf.CGColorSpaceRef;
+/// The atlas starts at 2048 so cold start never grows it, up to `max_size`.
+const initial_size: u32 = 2048;
 const max_size: u32 = 4096;
 const pad: u32 = 1;
 /// Horizontal positions are snapped to quarters of a pixel.
@@ -47,6 +48,7 @@ pub const Atlas = struct {
     /// are then stale: the frame must be painted again.
     reset_during_frame: bool = false,
     pixels: std.ArrayList(u8) = .empty,
+    font_smoothing: ?bool = null,
 
     pub fn init(gpa: std.mem.Allocator, device: objc.Object) Atlas {
         return .{ .gpa = gpa, .device = device, .texture = makeTexture(device, initial_size) };
@@ -103,6 +105,18 @@ pub const Atlas = struct {
         a.sprites.put(a.gpa, key, sp) catch {};
         return sp;
     }
+    fn smoothFonts(a: *Atlas) bool {
+        if (a.font_smoothing) |s| return s;
+        const pool = objc.Pool.push();
+        defer pool.pop();
+        const defaults = objc.msg(objc.Object, objc.class("NSUserDefaults"), "standardUserDefaults", .{});
+        const key = objc.nsString("AppleFontSmoothing");
+        const obj = objc.msg(?objc.Object, defaults, "objectForKey:", .{key});
+        const s = if (obj != null) objc.msg(objc.NSInteger, defaults, "integerForKey:", .{key}) != 0 else true;
+        a.font_smoothing = s;
+        return s;
+    }
+
 
     fn rasterize(a: *Atlas, font: cf.CTFontRef, g: u16, bin: u8) ?Sprite {
         const scale = a.scale;
@@ -117,18 +131,21 @@ pub const Atlas = struct {
         const y1 = @ceil((bounds.origin.y + bounds.size.height) * s);
         const w: u32 = @as(u32, @intFromFloat(x1 - x0)) + 2 * pad;
         const h: u32 = @as(u32, @intFromFloat(y1 - y0)) + 2 * pad;
-        if (w > max_size or h > max_size) return null;
-        const origin = a.allocate(w, h) orelse blk: {
+        const total_w: u32 = w * 2;
+        if (total_w > max_size or h > max_size) return null;
+        const origin = a.allocate(total_w, h) orelse blk: {
             a.makeRoom();
-            break :blk a.allocate(w, h) orelse return null;
+            break :blk a.allocate(total_w, h) orelse return null;
         };
 
         a.pixels.resize(a.gpa, w * h) catch return null;
         @memset(a.pixels.items, 0);
         const ctx = cf.CGBitmapContextCreate(a.pixels.items.ptr, w, h, 8, w, null, cf.image_alpha_only) orelse return null;
         defer cf.CGContextRelease(ctx);
+        const smooth = a.smoothFonts();
         cf.CGContextSetShouldAntialias(ctx, true);
-        cf.CGContextSetShouldSmoothFonts(ctx, false);
+        CGContextSetAllowsFontSmoothing(ctx, smooth);
+        cf.CGContextSetShouldSmoothFonts(ctx, smooth);
         cf.CGContextSetAllowsFontSubpixelPositioning(ctx, true);
         cf.CGContextSetShouldSubpixelPositionFonts(ctx, true);
         cf.CGContextSetGrayFillColor(ctx, 1, 1);
@@ -137,8 +154,28 @@ pub const Atlas = struct {
         cf.CGContextScaleCTM(ctx, s, s);
         const at = [1]objc.CGPoint{.{}};
         CTFontDrawGlyphs(font, &glyphs, &at, 1, ctx);
-
         a.upload(origin, w, h);
+
+        // Dark-on-light mask (AppKit's stem dilation for dark ink on light backgrounds).
+        if (CGColorSpaceCreateDeviceGray()) |gray| {
+            defer cf.CGColorSpaceRelease(gray);
+            @memset(a.pixels.items, 255);
+            if (cf.CGBitmapContextCreate(a.pixels.items.ptr, w, h, 8, w, gray, 0)) |lctx| {
+                defer cf.CGContextRelease(lctx);
+                cf.CGContextSetShouldAntialias(lctx, true);
+                CGContextSetAllowsFontSmoothing(lctx, smooth);
+                cf.CGContextSetShouldSmoothFonts(lctx, smooth);
+                cf.CGContextSetAllowsFontSubpixelPositioning(lctx, true);
+                cf.CGContextSetShouldSubpixelPositionFonts(lctx, true);
+                cf.CGContextSetGrayFillColor(lctx, 0, 1);
+                CGContextTranslateCTM(lctx, @as(f64, pad) - x0 + sub, @as(f64, pad) - y0);
+                cf.CGContextScaleCTM(lctx, s, s);
+                CTFontDrawGlyphs(font, &glyphs, &at, 1, lctx);
+                for (a.pixels.items) |*px| px.* = 255 - px.*;
+                a.upload(.{ origin[0] + w, origin[1] }, w, h);
+            }
+        }
+
         const as: f32 = @floatFromInt(a.size);
         const fw: f32 = @floatFromInt(w);
         const fh: f32 = @floatFromInt(h);

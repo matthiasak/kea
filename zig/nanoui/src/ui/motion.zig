@@ -85,23 +85,45 @@ pub fn spring(c: *Context, id: u64, salt: u32, target: f32, s: Spring) f32 {
 pub fn springFrom(c: *Context, id: u64, salt: u32, from: f32, target: f32, s: Spring) f32 {
     const e = entry(c, id, salt, from, target) orelse return target;
     e.target = target;
+    const stiffness = std.math.pow(f32, 2 * std.math.pi / s.response, 2);
+    const damping = 4 * std.math.pi * s.damping / s.response;
     if (e.stepped != c.frame) {
         e.stepped = c.frame;
-        const stiffness = std.math.pow(f32, 2 * std.math.pi / s.response, 2);
-        const damping = 4 * std.math.pi * s.damping / s.response;
+        const total = @min(c.dt, 0.5) + e.elapsed;
         const h: f32 = 1.0 / 480.0;
-        const steps: u32 = @intFromFloat(@max(1, @round(@min(c.dt, 0.1) * 480)));
+        const steps: u32 = @intFromFloat(@floor(total * 480.0));
+        e.elapsed = total - @as(f32, @floatFromInt(steps)) * h;
         for (0..steps) |_| {
-            const a = -stiffness * (e.value - target) - damping * e.velocity;
-            e.velocity += a * h;
-            e.value += e.velocity * h;
+            const a0 = -stiffness * (e.value - target) - damping * e.velocity;
+            const vmid = e.velocity + 0.5 * a0 * h;
+            const xmid = e.value + 0.5 * e.velocity * h;
+            const amid = -stiffness * (xmid - target) - damping * vmid;
+            e.velocity += amid * h;
+            e.value += vmid * h;
         }
     }
     if (@abs(e.value - target) < 0.0005 * @max(1, @abs(target)) and @abs(e.velocity) < 0.01) {
         e.value = target;
         e.velocity = 0;
-    } else c.animating = true;
-    return e.value;
+        e.elapsed = 0;
+        return target;
+    }
+    c.animating = true;
+    const rem = e.elapsed;
+    const a_rem = -stiffness * (e.value - target) - damping * e.velocity;
+    return e.value + e.velocity * rem + 0.5 * a_rem * rem * rem;
+}
+
+/// Sets `id`'s spring or tween to `value` at rest.
+pub fn jump(c: *Context, id: u64, salt: u32, value: f32) void {
+    const e = entry(c, id, salt, value, value) orelse return;
+    e.value = value;
+    e.target = value;
+    e.from = value;
+    e.velocity = 0;
+    e.elapsed = 0;
+    e.stepped = c.frame;
+    e.used = c.frame;
 }
 
 /// `id`'s value moving toward `target` over `duration` seconds along
@@ -116,7 +138,7 @@ pub fn tween(c: *Context, id: u64, salt: u32, target: f32, duration: f32, curve:
     }
     if (e.stepped != c.frame) {
         e.stepped = c.frame;
-        e.elapsed += @min(c.dt, 0.1);
+        e.elapsed += @min(c.dt, 0.5);
     }
     const p = if (duration <= 0) 1 else @min(1, e.elapsed / duration);
     e.value = if (p >= 1) target else e.from + (target - e.from) * ease(curve, p);

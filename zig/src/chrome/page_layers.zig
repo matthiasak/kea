@@ -10,26 +10,28 @@ const Tab = @import("../web/tab.zig").Tab;
 const swipe = @import("../web/swipe.zig");
 const Palette = @import("../design/palette.zig").Palette;
 const card = @import("../design/card.zig");
+const motion = @import("../design/motion.zig");
 const controls = @import("controls.zig");
 const ring = @import("ring.zig");
-
 fn px(v: f32) ui.Length {
     return .{ .px = v };
 }
 
 /// Inside the hole box; every layer is absolute over the page.
 pub fn draw(c: *ui.Context, p: *const Palette, t: *Tab) void {
-    if (t.cover) |picture| cover(c, t, picture);
+    if (t.browser == null or t.browser.?.stage_host == null) {
+        if (t.cover) |picture| cover(c, t, picture);
+    }
     flew(c, p, t.floating);
-    if (t.failure) |message| trouble(c, p, t, message);
-    if (t.pull) |pull| if (pull.stops.len > 0) list(c, p, pull) else disc(c, p, pull);
+    trouble(c, p, t);
+    swipeLayers(c, p, t);
     if (t.question()) |_| question(c, p, t);
 }
 
 /// A page out in the floating window: its tab says where it went rather
 /// than showing a white rectangle; in and out with `Motion.quick`.
 fn flew(c: *ui.Context, p: *const Palette, floating: bool) void {
-    const shown = @import("../design/motion.zig").quickTo(c, c.peekId("kea.flew"), 0, if (floating) 1 else 0);
+    const shown = motion.quickTo(c, c.peekId("kea.flew"), 0, if (floating) 1 else 0);
     if (shown <= 0) return;
     ui.column(c, .{ .absolute = true, .width = .fill, .height = .fill, .background = p.ground, .align_items = .center, .justify = .center, .opacity = shown });
     defer ui.end(c);
@@ -47,22 +49,84 @@ fn cover(c: *ui.Context, t: *Tab, picture: []const u8) void {
 }
 
 /// `Trouble`: one line, and another go.
-fn trouble(c: *ui.Context, p: *const Palette, t: *Tab, message: []const u8) void {
-    const i = c.open(.{ .absolute = true, .width = .fill, .height = .fill, .background = p.ground, .align_items = .center, .justify = .center, .gap = 10 }, null);
+fn trouble(c: *ui.Context, p: *const Palette, t: *Tab) void {
+    const shown = motion.quickTo(c, c.peekId("kea.trouble"), 0, if (t.failure != null) 1 else 0);
+    if (shown <= 0) return;
+    const message = t.failure orelse "";
+    const i = c.open(.{ .absolute = true, .width = .fill, .height = .fill, .background = p.ground, .align_items = .center, .justify = .center, .gap = 10, .opacity = shown }, null);
     defer c.end();
     _ = c.interact(i, .{});
     ui.text(c, message, .{ .size = 14, .color = p.ink });
     if (controls.pill(c, p, "Try again", .{ .filled = true }).clicked) t.reload(false);
 }
 
+var last_list: struct {
+    tab: u64 = 0,
+    back: bool = true,
+    travel: f64 = 0,
+    going: bool = false,
+    picked: usize = 0,
+    len: usize = 0,
+    titles: [8][96]u8 = undefined,
+    title_lens: [8]u8 = @splat(0),
+} = .{};
+
+fn swipeLayers(c: *ui.Context, p: *const Palette, t: *Tab) void {
+    const pid = c.peekId("kea.swipe");
+    const has_list = if (t.pull) |pull| pull.stops.len > 0 else false;
+    const has_disc = if (t.pull) |pull| pull.stops.len == 0 else false;
+    const disc_in = ui.tween(c, pid, 0x6473_68, if (has_disc) 1 else 0, 0.16, .ease_out);
+    const list_in = ui.tween(c, pid, 0x6c73_68, if (has_list) 1 else 0, 0.16, .ease_out);
+    if (has_list) {
+        const pull = t.pull.?;
+        last_list.tab = t.id;
+        last_list.back = pull.back;
+        last_list.travel = pull.travel;
+        last_list.going = pull.going;
+        last_list.picked = pull.picked;
+        last_list.len = @min(pull.stops.len, 8);
+        for (pull.stops[0..last_list.len], 0..) |st, i| {
+            const src = if (st.title.len > 0) st.title else st.url;
+            const n = @min(src.len, 96);
+            @memcpy(last_list.titles[i][0..n], src[0..n]);
+            last_list.title_lens[i] = @intCast(n);
+        }
+        list(c, p, pull, list_in, true);
+    } else if (list_in > 0 and last_list.tab == t.id and last_list.len > 0) {
+        var stops_buf: [8]swipe.Stop = undefined;
+        for (0..last_list.len) |i| {
+            const slice = last_list.titles[i][0..last_list.title_lens[i]];
+            stops_buf[i] = .{ .title = @constCast(slice), .url = @constCast(slice) };
+        }
+        list(c, p, .{
+            .back = last_list.back,
+            .travel = last_list.travel,
+            .armed = true,
+            .going = last_list.going,
+            .stops = stops_buf[0..last_list.len],
+            .picked = last_list.picked,
+        }, list_in, false);
+    }
+    if (disc_in > 0) {
+        const pull = if (t.pull) |pl| pl else if (t.page) |pg| swipe.Pull{
+            .back = pg.swipe.back,
+            .travel = @max(6, @abs(pg.swipe.sideways)),
+            .armed = pg.swipe.armed_now,
+            .going = pg.swipe.going,
+        } else return;
+        disc(c, p, pull, disc_in);
+    }
+}
+
 /// `Disc`: white with a hairline, a line of ink wound round it as the
-/// fingers go, closed when armed.
-fn disc(c: *ui.Context, p: *const Palette, pull: swipe.Pull) void {
+/// fingers go, closed when armed. Enters and leaves with opacity plus
+/// scale (0.85) over `easeOut(0.16)` (`Stage.swift:81,87`).
+fn disc(c: *ui.Context, p: *const Palette, pull: swipe.Pull, shown: f32) void {
     const travel: f32 = @floatCast(pull.travel);
     const reach = 150 * (1 - @exp(-travel / 110));
     const grown = @min(1, travel / 110);
     const going = ui.tween(c, c.peekId(null), 0x6469_73, if (pull.going) 1 else 0, 0.22, .ease_out);
-    const scale = std.math.lerp(0.86 + 0.14 * grown, 1.08, going);
+    const scale = std.math.lerp(0.85, 1.0, shown) * std.math.lerp(0.86 + 0.14 * grown, 1.08, going);
     const side: f32 = if (pull.back) 1 else -1;
     ui.row(c, .{ .absolute = true, .width = .fill, .height = .fill, .align_items = .center, .justify = if (pull.back) .start else .end });
     defer ui.end(c);
@@ -74,7 +138,7 @@ fn disc(c: *ui.Context, p: *const Palette, pull: swipe.Pull) void {
         .border = p.hairline,
         .shadow = card.swiftShadow(0.12, 16, 6),
         .scale = scale,
-        .opacity = 1 - going,
+        .opacity = shown * (1 - going),
         .offset = .{ .x = side * (10 + reach * 0.2 + 12 * going) },
         .align_items = .center,
         .justify = .center,
@@ -87,7 +151,9 @@ fn disc(c: *ui.Context, p: *const Palette, pull: swipe.Pull) void {
 }
 
 /// `HistoryList`: the pages that way, the lit one where the disc was.
-fn list(c: *ui.Context, p: *const Palette, pull: swipe.Pull) void {
+/// Enters with scale 0.92 and leaves with scale 0.96 from its edge over
+/// `easeOut(0.16)` (`Stage.swift:68-71,87`).
+fn list(c: *ui.Context, p: *const Palette, pull: swipe.Pull, shown: f32, entering: bool) void {
     const travel: f32 = @floatCast(pull.travel);
     const reach = 150 * (1 - @exp(-travel / 110));
     const count: f32 = @floatFromInt(pull.stops.len);
@@ -95,6 +161,7 @@ fn list(c: *ui.Context, p: *const Palette, pull: swipe.Pull) void {
     const slide = ui.spring(c, c.peekId(null), 0x6869_73, slide_target, .{ .response = 0.22, .damping = 0.9 });
     const going = ui.tween(c, c.peekId(null), 0x676f_6e, if (pull.going) 1 else 0, 0.26, .ease_out);
     const side: f32 = if (pull.back) 1 else -1;
+    const edge_scale = std.math.lerp(if (entering) @as(f32, 0.92) else @as(f32, 0.96), 1.0, shown);
     ui.row(c, .{ .absolute = true, .width = .fill, .height = .fill, .align_items = .center, .justify = if (pull.back) .start else .end });
     defer ui.end(c);
     ui.column(c, .{
@@ -105,8 +172,9 @@ fn list(c: *ui.Context, p: *const Palette, pull: swipe.Pull) void {
         .background = p.ground,
         .border = p.hairline,
         .shadow = card.swiftShadow(0.16, 18, 6),
-        .scale = std.math.lerp(1, 0.96, going),
-        .opacity = 1 - going,
+        .scale = edge_scale * std.math.lerp(1, 0.96, going),
+        .scale_anchor = .{ .x = if (pull.back) 0 else 1, .y = 0.5 },
+        .opacity = shown * (1 - going),
         .offset = .{ .x = side * (10 + reach * 0.2), .y = slide },
     });
     defer ui.end(c);

@@ -563,6 +563,7 @@ pub fn square(gpa: std.mem.Allocator, bytes: []const u8) ?[]u8 {
     defer bitmap.deinit(gpa);
     cg.CGContextSetInterpolationQuality(bitmap.ctx, cg.interpolation_high);
     const scale = @min(side / w, side / h);
+    // Device-pixel sizing for each drawn mark happens in `Images.get`.
     cg.CGContextDrawImage(bitmap.ctx, .{
         .origin = .{ .x = (side - w * scale) / 2, .y = (side - h * scale) / 2 },
         .size = .{ .width = w * scale, .height = h * scale },

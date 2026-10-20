@@ -26,16 +26,22 @@ pub const facts = [_][]const u8{
     "Kea were named New Zealand's Bird of the Year in 2017.",
 };
 
+var cached_day: usize = 0;
+var cached_until: f64 = 0;
+
 /// The same fact all day, a new one tomorrow: today's ordinal day in the
 /// era, by the Mac's calendar (`Calendar.current.ordinality(of:in:for:)`).
 pub fn fact() []const u8 {
+    const t = ui.clock.now();
+    if (t < cached_until) return facts[cached_day % facts.len];
     const pool = objc.Pool.push();
     defer pool.pop();
     const calendar = objc.msg(objc.Object, objc.class("NSCalendar"), "currentCalendar", .{});
     const now = objc.msg(objc.Object, objc.class("NSDate"), "date", .{});
     // NSCalendarUnitDay, NSCalendarUnitEra.
-    const day = objc.msg(objc.NSUInteger, calendar, "ordinalityOfUnit:inUnit:forDate:", .{ @as(objc.NSUInteger, 16), @as(objc.NSUInteger, 2), now });
-    return facts[day % facts.len];
+    cached_day = objc.msg(objc.NSUInteger, calendar, "ordinalityOfUnit:inUnit:forDate:", .{ @as(objc.NSUInteger, 16), @as(objc.NSUInteger, 2), now });
+    cached_until = t + 60.0;
+    return facts[cached_day % facts.len];
 }
 
 /// Under the field whose top is `field_y` in `area` (its 50 points and 18

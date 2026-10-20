@@ -16,6 +16,7 @@ pub const color4 = gpu.color4;
 pub const clip4 = gpu.clip4;
 pub const Pixels = gpu.Pixels;
 
+extern "c" fn dispatch_time(when: u64, delta: i64) u64;
 const FrameLog = @import("frame_log.zig").FrameLog;
 
 pub const DrawStats = struct {
@@ -40,6 +41,7 @@ pub const Renderer = struct {
     glass: metal_glass.Glass,
     layer: objc.Object,
     live_resize: bool = false,
+    present_at: f64 = 0,
     /// Instances go into one of three buffers, reused once the GPU is done
     /// with the frame that last used it.
     buffers: [frames_in_flight]?objc.Object = @splat(null),
@@ -78,7 +80,8 @@ pub const Renderer = struct {
         // Two drawables: a frame takes the GPU well under a millisecond, and
         // frames are drawn on demand, so a third would only hold memory
         // (a window-sized buffer, 13 MB for a large window).
-        objc.msg(void, layer, "setMaximumDrawableCount:", .{@as(objc.NSUInteger, 2)});
+        objc.msg(void, layer, "setMaximumDrawableCount:", .{@as(objc.NSUInteger, 3)});
+        objc.msg(void, layer, "setAllowsNextDrawableTimeout:", .{objc.YES});
         objc.msg(void, layer, "setOpaque:", .{objc.YES});
         // Colors are sRGB, as in CSS: tag them so the display matches them.
         if (cf.CGColorSpaceCreateWithName(cf.kCGColorSpaceSRGB)) |srgb| {
@@ -98,6 +101,8 @@ pub const Renderer = struct {
         if (self.images_texture == null) {
             const desc = objc.msg(objc.Object, objc.class("MTLTextureDescriptor"), "texture2DDescriptorWithPixelFormat:width:height:mipmapped:", .{ pixel_format, side, side, objc.NO });
             self.images_texture = objc.msg(objc.Object, self.device, "newTextureWithDescriptor:", .{desc});
+        } else if (x == 0 and y == 0) {
+            self.waitIdle();
         }
         const Region = extern struct { x: usize, y: usize, z: usize, w: usize, h: usize, d: usize };
         objc.msg(void, self.images_texture.?, "replaceRegion:mipmapLevel:withBytes:bytesPerRow:", .{
@@ -157,7 +162,9 @@ pub const Renderer = struct {
         const pool = objc.Pool.push();
         defer pool.pop();
         const t0 = cf.CACurrentMediaTime();
-        _ = objc.dispatch_semaphore_wait(self.in_flight, objc.DISPATCH_TIME_FOREVER);
+        if (objc.dispatch_semaphore_wait(self.in_flight, dispatch_time(0, std.time.ns_per_s)) != 0) {
+            return .{ .drawable_wait_ms = (cf.CACurrentMediaTime() - t0) * 1000, .sync = self.live_resize };
+        }
         const drawable = objc.msg(?objc.Object, self.layer, "nextDrawable", .{}) orelse {
             _ = objc.dispatch_semaphore_signal(self.in_flight);
             return .{ .drawable_wait_ms = (cf.CACurrentMediaTime() - t0) * 1000, .sync = self.live_resize };
@@ -180,7 +187,7 @@ pub const Renderer = struct {
             objc.msg(void, cmd, "waitUntilScheduled", .{});
             objc.msg(void, drawable, "present", .{});
         } else {
-            objc.msg(void, cmd, "presentDrawable:", .{drawable});
+            objc.msg(void, cmd, "presentDrawable:atTime:", .{ drawable, @max(self.present_at, cf.CACurrentMediaTime()) });
             objc.msg(void, cmd, "commit", .{});
         }
         return .{
@@ -218,6 +225,7 @@ pub const Renderer = struct {
     }
 
     pub fn setLiveResize(self: *Renderer, on: bool) void {
+        if (self.live_resize == on) return;
         self.live_resize = on;
         objc.msg(void, self.layer, "setPresentsWithTransaction:", .{on});
     }
@@ -377,4 +385,4 @@ fn makePipeline(device: objc.Object, library: objc.Object, comptime fragment: []
 
 const pixel_format: objc.NSUInteger = 80; // BGRA8Unorm
 const Images = @import("images.zig").Images;
-const frames_in_flight = 2;
+const frames_in_flight = 3;

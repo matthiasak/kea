@@ -39,7 +39,8 @@ pub const methods = [_]objc.Method{
     .{ .name = "wantsPeriodicDraggingUpdates", .imp = &no, .types = "c@:" },
     .{ .name = "setFrameSize:", .imp = &setFrameSize, .types = "v@:{CGSize=dd}" },
     .{ .name = "viewDidChangeBackingProperties", .imp = &backingChanged, .types = "v@:" },
-    .{ .name = "viewDidChangeEffectiveAppearance", .imp = &backingChanged, .types = "v@:" },
+    .{ .name = "viewDidChangeEffectiveAppearance", .imp = &appearanceChanged, .types = "v@:" },
+    .{ .name = "accessibilityChanged:", .imp = &accessibilityChanged, .types = "v@:@" },
     .{ .name = "updateTrackingAreas", .imp = &updateTrackingAreas, .types = "v@:" },
     .{ .name = "displayLinkFired:", .imp = &displayLinkFired, .types = "v@:@" },
     .{ .name = "viewWillStartLiveResize", .imp = &liveResizeStart, .types = "v@:" },
@@ -158,7 +159,7 @@ fn mouseDragged(obj: objc.Object, _: objc.SEL, event: objc.Object) callconv(.c) 
     const s = surfaceOf(obj) orelse return;
     setMouse(s, event);
     s.ctx.updateHot();
-    s.frame();
+    if (s.visible()) s.requestFrame() else s.frame();
 }
 
 fn mouseMoved(obj: objc.Object, _: objc.SEL, event: objc.Object) callconv(.c) void {
@@ -166,7 +167,10 @@ fn mouseMoved(obj: objc.Object, _: objc.SEL, event: objc.Object) callconv(.c) vo
     setMouse(s, event);
     const before = s.ctx.hot;
     s.ctx.updateHot();
-    if (s.ctx.hot != before or s.ctx.wants_moves) return s.frame();
+    if (s.ctx.hot != before or s.ctx.wants_moves) {
+        if (s.visible()) s.requestFrame() else s.frame();
+        return;
+    }
     // Onto or off text that selects, inside the same box: the cursor only.
     const over = s.ctx.pointerOverText();
     if (over != s.ctx.cursor_text) {
@@ -198,7 +202,8 @@ fn scrollWheel(obj: objc.Object, _: objc.SEL, event: objc.Object) callconv(.c) v
     setMouse(s, event);
     const in = &s.ctx.input;
     in.precise = objc.msg(objc.BOOL, event, "hasPreciseScrollingDeltas", .{});
-    in.scroll_phase = scrollPhase(event);
+    const phase = scrollPhase(event);
+    if (!s.visible() or in.scroll_phase == .none or in.scroll_phase == .changed or phase == .began or phase == .ended) in.scroll_phase = phase;
     var dx: f32 = @floatCast(objc.msg(f64, event, "scrollingDeltaX", .{}));
     var dy: f32 = @floatCast(objc.msg(f64, event, "scrollingDeltaY", .{}));
     if (!in.precise) {
@@ -210,9 +215,16 @@ fn scrollWheel(obj: objc.Object, _: objc.SEL, event: objc.Object) callconv(.c) v
     const took = dy != 0 and s.ctx.applyScroll(dy);
     const wheel = s.ctx.wants_wheel and !took;
     if (!took and dx == 0 and !wheel) return;
-    in.scroll = .{ .x = dx, .y = if (wheel) dy else 0 };
-    s.frame();
-    if (took) s.ctx.updateHot();
+    if (s.visible()) {
+        in.scroll.x += dx;
+        if (wheel) in.scroll.y += dy;
+        if (took) s.ctx.updateHot();
+        s.requestFrame();
+    } else {
+        in.scroll = .{ .x = dx, .y = if (wheel) dy else 0 };
+        s.frame();
+        if (took) s.ctx.updateHot();
+    }
 }
 
 fn keyDown(obj: objc.Object, _: objc.SEL, event: objc.Object) callconv(.c) void {
@@ -367,24 +379,24 @@ fn performDragOperation(obj: objc.Object, _: objc.SEL, info: objc.Object) callco
     return if (s.ctx.acceptsDropAt(p)) objc.YES else objc.NO;
 }
 
-fn displayLinkFired(obj: objc.Object, _: objc.SEL, _: objc.Object) callconv(.c) void {
+fn displayLinkFired(obj: objc.Object, _: objc.SEL, link: objc.Object) callconv(.c) void {
     const s = surfaceOf(obj) orelse return;
-    s.frame_kind = .link;
-    defer s.frame_kind = .input;
-    s.frame();
+    const target: f64 = if (s.link_fps == 0) objc.msg(f64, link, "targetTimestamp", .{}) else 0;
+    const duration: f64 = if (s.link_fps == 0) objc.msg(f64, link, "duration", .{}) else 0;
+    s.frameAt(.link, target, duration);
 }
 
 fn liveResizeStart(obj: objc.Object, _: objc.SEL) callconv(.c) void {
     objc.msgSuper(void, obj, objc.class("NSView"), "viewWillStartLiveResize", .{});
     const s = surfaceOf(obj) orelse return;
+    s.in_live_resize = true;
     s.renderer.setLiveResize(true);
 }
 
 fn liveResizeEnd(obj: objc.Object, _: objc.SEL) callconv(.c) void {
     objc.msgSuper(void, obj, objc.class("NSView"), "viewDidEndLiveResize", .{});
     const s = surfaceOf(obj) orelse return;
-    // A stage's view presents with its pages always (`Surface.hosted`).
-    if (!s.hosted) s.renderer.setLiveResize(false);
+    s.in_live_resize = false;
     s.frame();
 }
 
@@ -399,6 +411,19 @@ fn backingChanged(obj: objc.Object, _: objc.SEL) callconv(.c) void {
     const s = surfaceOf(obj) orelse return;
     s.updateGeometry();
     s.frame();
+}
+
+fn appearanceChanged(obj: objc.Object, _: objc.SEL) callconv(.c) void {
+    const s = surfaceOf(obj) orelse return;
+    s.refreshAppearance();
+    if (s.visible()) s.requestFrame() else s.frame();
+}
+
+fn accessibilityChanged(obj: objc.Object, _: objc.SEL, _: objc.Object) callconv(.c) void {
+    const s = surfaceOf(obj) orelse return;
+    const ws = objc.msg(objc.Object, objc.class("NSWorkspace"), "sharedWorkspace", .{});
+    s.reduce_motion = objc.msg(objc.BOOL, ws, "accessibilityDisplayShouldReduceMotion", .{});
+    if (s.visible()) s.requestFrame() else s.frame();
 }
 
 fn updateTrackingAreas(obj: objc.Object, _: objc.SEL) callconv(.c) void {
