@@ -90,6 +90,7 @@ pub const Chats = struct {
     index_arena: std.heap.ArenaAllocator,
     /// Newest first for chats made here.
     index: []const Entry = &.{},
+    revision: u64 = 0,
     /// The chats held in memory, least recently used first; at most `held`.
     recent: std.ArrayList(std.json.Parsed(Chat)) = .empty,
 
@@ -239,6 +240,7 @@ pub const Chats = struct {
         self.index_arena.deinit();
         self.index_arena = next;
         self.index = copy;
+        self.revision +%= 1;
         const bytes = json.encodeSorted(self.gpa, self.index) catch return;
         self.store.write(index_file, bytes, false);
     }
@@ -249,6 +251,7 @@ pub const Chats = struct {
             if (json.decode([]const Entry, self.gpa, bytes)) |p| {
                 defer p.deinit();
                 self.index = json.clone(self.index_arena.allocator(), p.value) catch &.{};
+                self.revision +%= 1;
                 return;
             } else |_| {}
             self.store.quarantine(index_file);
@@ -272,6 +275,7 @@ pub const Chats = struct {
         defer self.gpa.free(entries);
         for (entries, p.value) |*e, c| e.* = Entry.of(c);
         self.index = json.clone(self.index_arena.allocator(), entries) catch return;
+        self.revision +%= 1;
         var buf: [64]u8 = undefined;
         // A file that didn't land stops it here: chats.json stays for the
         // next launch, as when Swift's write throws.
@@ -316,6 +320,7 @@ pub const Chats = struct {
         }
         std.mem.sort(Entry, built.items, {}, newestFirst);
         self.index = built.items;
+        self.revision +%= 1;
         if (built.items.len > 0) {
             const out = json.encodeSorted(self.gpa, self.index) catch return;
             self.store.write(index_file, out, false);

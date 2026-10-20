@@ -1,6 +1,6 @@
 //! `Ring` (TabBar.swift): a turning arc for what is still coming, and the
 //! download door's progress arc (Fetching.swift). nanoui strokes no arcs,
-//! so each is a picture drawn once with CoreGraphics and kept: 24 turns
+//! so each is a picture drawn once with CoreGraphics and kept: 51 turns
 //! of the ring per size and appearance, 100 steps of progress.
 const std = @import("std");
 const ui = @import("nanoui").ui;
@@ -9,7 +9,7 @@ const palette = @import("../design/palette.zig");
 const motion = @import("../design/motion.zig");
 
 const turn_seconds: f32 = 0.85;
-const turns: u32 = 48;
+const turns: u32 = 51;
 
 const Picture = struct {
     size: f32,
@@ -23,24 +23,6 @@ const Picture = struct {
 /// Pictures by `Picture`'s hash, for the life of the app (main thread).
 // ponytail: never evicted; a handful of sizes × 124 tiny PNGs.
 var pictures: std.AutoHashMapUnmanaged(u64, []u8) = .empty;
-var warmed_scale: f32 = 0;
-var warmed_mask: u8 = 0;
-
-fn warm(scale: f32, dark: bool) void {
-    const bit: u8 = if (dark) 2 else 1;
-    if (warmed_scale != scale) {
-        warmed_scale = scale;
-        warmed_mask = 0;
-    }
-    if (warmed_mask & bit != 0) return;
-    warmed_mask |= bit;
-    for ([_]f32{ 10, 11 }) |sz| {
-        for (0..turns) |step| {
-            _ = png(.{ .size = sz, .scale = scale, .dark = dark, .kind = .turn, .step = @intCast(step) });
-        }
-    }
-}
-
 fn png(p: Picture) ?[]const u8 {
     var h = std.hash.Wyhash.init(0x7269_6e67);
     inline for (.{ p.size, p.scale, @as(u8, @intFromBool(p.dark)), @backingInt(p.kind), p.step }) |v| h.update(std.mem.asBytes(&v));
@@ -107,7 +89,6 @@ fn paint(b: cg.Bitmap, p: Picture) void {
 }
 
 fn show(c: *ui.Context, p: Picture) void {
-    if (p.kind == .turn and (p.size == 10 or p.size == 11)) warm(p.scale, p.dark);
     const bytes = png(p) orelse {
         _ = c.leaf(.{ .width = .{ .px = p.size }, .height = .{ .px = p.size } }, .none, null);
         return;

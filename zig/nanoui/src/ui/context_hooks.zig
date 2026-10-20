@@ -12,16 +12,11 @@ pub const DragRequest = struct {
     rect: types.Rect = .{},
 };
 
-/// Focuses the next box (a `textField` or `textArea` called right after) when
-/// building a view, or cycles focus through `focusable_ids` (reverse when
-/// `select_all` is true) when called between frames (Tab / Shift+Tab).
+/// Focuses the next box (a `textField` or `textArea` called right after),
+/// selecting all of its text when `select_all` is true.
 pub fn focusNext(c: *Context, select_all: bool) void {
-    if (c.building) {
-        c.focus = c.peekId(null);
-        c.focus_select_all = select_all;
-    } else {
-        focusCycle(c, select_all);
-    }
+    c.focus = c.peekId(null);
+    c.focus_select_all = select_all;
 }
 
 pub fn focusCycle(c: *Context, reverse: bool) void {

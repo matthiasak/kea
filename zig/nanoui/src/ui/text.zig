@@ -47,10 +47,9 @@ pub fn warmCaches(ts: *TextSystem) void {
 /// scrolling and search filtering do not re-allocate glyph slices on steady frames.
 pub fn retainLayouts(ts: *TextSystem) void {
     if (ts.previous.count() == 0) return;
-    if (ts.layouts.count() + ts.previous.count() > max_layouts) return;
     var it = ts.previous.iterator();
     while (it.next()) |kv| {
-        if (ts.layouts.contains(kv.key_ptr.*)) {
+        if (ts.layouts.contains(kv.key_ptr.*) or ts.layouts.count() >= max_layouts) {
             ts.gpa.free(kv.value_ptr.glyphs);
         } else {
             ts.layouts.put(ts.gpa, kv.key_ptr.*, kv.value_ptr.*) catch {

@@ -267,7 +267,7 @@ fn keyDown(obj: objc.Object, _: objc.SEL, event: objc.Object) callconv(.c) void 
         }
     }
     if (code == 48 and !in.cmd and !in.ctrl and !in.alt and !s.ctx.focused_multiline and s.ctx.focusable_ids.items.len > 0) {
-        s.ctx.focusNext(in.shift);
+        s.ctx.focusCycle(in.shift);
         s.frame();
         return;
     }

@@ -307,6 +307,9 @@ fn virtualChatList(b: *Browser, c: *ui.Context, p: *const Palette, a: *Assistant
 
     const index = a.m.chats.index;
     var h = std.hash.Wyhash.init(index.len);
+    h.update(std.mem.asBytes(&a.m.chats.revision));
+    const index_ptr: usize = @intFromPtr(index.ptr);
+    h.update(std.mem.asBytes(&index_ptr));
     h.update(st.search.text());
     h.update(&.{@intFromBool(st.all_starred)});
     if (index.len > 0) h.update(std.mem.asBytes(&index[0].touched));
@@ -319,7 +322,11 @@ fn virtualChatList(b: *Browser, c: *ui.Context, p: *const Palette, a: *Assistant
         var items: std.ArrayList(State.ListItem) = .empty;
         for (secs) |sec| {
             items.append(la, .{ .header = sec.title }) catch {};
-            for (sec.items) |e| items.append(la, .{ .entry = e }) catch {};
+            for (sec.items) |e| {
+                var owned = e;
+                owned.title = la.dupe(u8, e.title) catch e.title;
+                items.append(la, .{ .entry = owned }) catch {};
+            }
             if (std.mem.eql(u8, sec.title, "Starred")) {
                 if (sec.more > 0) items.append(la, .{ .more = sec.more + sec.items.len }) catch {} else if (st.all_starred and sec.items.len > 5) items.append(la, .fewer) catch {};
             }

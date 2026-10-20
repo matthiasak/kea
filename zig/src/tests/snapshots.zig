@@ -194,6 +194,10 @@ const FilmFrame = struct {
 };
 
 fn columnEdgePt(f: *Fixture) f32 {
+    const side_id = std.hash.Wyhash.hash(0, "side-bar");
+    const peek_id = std.hash.Wyhash.hash(0, "kea.peek.sheet");
+    if (f.tester.ctx.rects.get(side_id)) |r| return @round(@max(0, r.x + r.w));
+    if (f.tester.ctx.rects.get(peek_id)) |r| return @round(@max(0, r.x + r.w));
     const w = f.browser.prefs.side_width;
     const h = f.tester.size.h;
     for (f.tester.ctx.nodes.items) |n| {
@@ -206,8 +210,9 @@ fn columnEdgePt(f: *Fixture) f32 {
 
 fn glideProgress(t: f64) f64 {
     if (t <= 0) return 0;
-    const resp = 0.34;
-    const zeta = 0.82;
+    const g = @import("../design/motion.zig").glide;
+    const resp: f64 = g.response;
+    const zeta: f64 = g.damping;
     const w = 2.0 * std.math.pi / resp;
     const s = @sqrt(1.0 - zeta * zeta);
     const wd = w * s;

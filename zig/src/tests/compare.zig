@@ -516,8 +516,12 @@ fn compareFilms(gpa: std.mem.Allocator, ref_dir: []const u8, zig_dir: []const u8
             const r_frames = ref_parsed.value.frames;
             const z_frames = zig_parsed.value.frames;
             const frame_limit = if (r_frames.len > 0) @min(count -| 1, @min(r_frames.len, z_frames.len)) else count;
+            var stalled: usize = 0;
             for (0..frame_limit) |i| {
-                if (i + 1 < ref_parsed.value.t.len and ref_parsed.value.t[i + 1] - ref_parsed.value.t[i] > 100) continue;
+                if (i + 1 < ref_parsed.value.t.len and ref_parsed.value.t[i + 1] - ref_parsed.value.t[i] > 100) {
+                    stalled += 1;
+                    continue;
+                }
                 const rx: f32 = if (i < r_frames.len and r_frames[i].lights != null) blk: {
                     const l = r_frames[i].lights.?;
                     if (std.mem.eql(u8, action, "peek")) {
@@ -553,10 +557,7 @@ fn compareFilms(gpa: std.mem.Allocator, ref_dir: []const u8, zig_dir: []const u8
                     worst_zig_x = zx;
                 }
             }
-
-            try report.print(gpa, "| `film-{s}-{s}` | {d} | {d:.2} | #{d} (t={d} ms, ref={d:.1}, zig={d:.1}) |\n", .{
-                action, look, count, max_dx, worst_idx, worst_t, worst_ref_x, worst_zig_x,
-            });
+            if (stalled > 0) try report.print(gpa, "| `film-{s}-{s}` | {d} (-{d} stalled) | {d:.2} | #{d} (t={d} ms, ref={d:.1}, zig={d:.1}) |\n", .{ action, look, count, stalled, max_dx, worst_idx, worst_t, worst_ref_x, worst_zig_x }) else try report.print(gpa, "| `film-{s}-{s}` | {d} | {d:.2} | #{d} (t={d} ms, ref={d:.1}, zig={d:.1}) |\n", .{ action, look, count, max_dx, worst_idx, worst_t, worst_ref_x, worst_zig_x });
         }
     }
 }

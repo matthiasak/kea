@@ -88,7 +88,7 @@ pub fn view(b: *Browser, c: *ui.Context) void {
     // Placed by its own side, so a column leaving the right goes out on the right.
     const right = r.sideOnRight();
     const col_target: f32 = if (r.sidebar()) b.prefs.side_width else 0;
-    const col_w = if (swapping) swapTo(c, col_id, 0, col_target) else motion.glideTo(c, col_id, b.room.still, col_target);
+    const col_w = if (swapping) swapTo(c, col_id, 0, col_target) else motion.glideTo(c, col_id, b.room.still +% 1, col_target);
     if (r.sidebar() or col_w > 0.5) {
         const on_right = b.prefs.side_position == .right;
         const x = if (on_right) c.size.w - col_w else col_w - b.prefs.side_width;

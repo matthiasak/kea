@@ -68,3 +68,34 @@ test "composer return sends and shift-return newlines" {
     try t.expectEqualStrings("/he", a.draft.items);
     try t.expect(f.tester.hasText("/help") and !f.tester.hasText("/summarize"));
 }
+
+test "virtual chat list updates when starring or renaming a middle chat" {
+    var f: Fixture = undefined;
+    try f.init(gpa, .{});
+    defer f.deinit();
+    const b = f.browser;
+    ready(b);
+    b.toggleChat();
+    const a = b.assisting orelse return error.NoChat;
+    var third_id: app.json.Uuid = undefined;
+    for (0..45) |i| {
+        const id = app.json.Uuid.random();
+        if (i == 42) third_id = id;
+        var title_buf: [32]u8 = undefined;
+        const title = std.fmt.bufPrint(&title_buf, "Chat item {d}", .{i}) catch "Chat";
+        a.m.chats.put(.{
+            .id = id,
+            .title = title,
+            .touched = @as(f64, @floatFromInt(1_000 + i)),
+            .turns = &.{.{ .id = app.json.Uuid.random(), .question = "Q", .answer = "A", .done = true }},
+        });
+    }
+    a.listing = true;
+    f.tester.settle(1);
+    try t.expect(!f.tester.hasText("Starred"));
+    a.edit(third_id, {}, struct { fn setStar(_: void, _: std.mem.Allocator, c: *@TypeOf(a.chat)) error{OutOfMemory}!void { c.starred = true; } }.setStar);
+    a.rename(third_id, "Renamed third chat");
+    f.tester.settle(1);
+    try t.expect(f.tester.hasText("Starred"));
+    try t.expect(f.tester.hasText("Renamed third chat"));
+}
