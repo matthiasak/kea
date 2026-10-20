@@ -168,11 +168,15 @@ pub fn analyzeMono(png: []const u8) Mono {
     defer cg.CGContextRelease(ctx);
     cg.CGContextDrawImage(ctx, .{ .origin = .{ .x = 0, .y = 0 }, .size = .{ .width = @floatFromInt(w), .height = @floatFromInt(h) } }, img);
     var sum_lum: f64 = 0;
+    var min_lum: f32 = 1;
+    var max_lum: f32 = 0;
     var max_chroma: f32 = 0;
     var count: usize = 0;
+    var trans: usize = 0;
     var i: usize = 0;
     while (i < buf.len) : (i += 4) {
         const alpha = buf[i + 3];
+        if (alpha < 32) trans += 1;
         if (alpha < 128) continue;
         const af: f32 = @floatFromInt(alpha);
         const b = @min(1.0, @as(f32, @floatFromInt(buf[i])) / af);
@@ -181,10 +185,13 @@ pub fn analyzeMono(png: []const u8) Mono {
         const hi = @max(r, @max(g, b));
         const lo = @min(r, @min(g, b));
         max_chroma = @max(max_chroma, hi - lo);
-        sum_lum += 0.2126 * r + 0.7152 * g + 0.0722 * b;
+        const l: f32 = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+        min_lum = @min(min_lum, l);
+        max_lum = @max(max_lum, l);
+        sum_lum += l;
         count += 1;
     }
-    if (count == 0 or max_chroma >= 0.08) return .none;
+    if (count == 0 or trans * 5 < w * h or max_chroma >= 0.08 or max_lum - min_lum > 0.35) return .none;
     const lum = sum_lum / @as(f64, @floatFromInt(count));
     if (lum < 0.25) return .dark;
     if (lum > 0.85) return .light;

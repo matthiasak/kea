@@ -109,6 +109,9 @@ pub const Surface = struct {
             .start_time = cf.CACurrentMediaTime(),
         };
         self.ctx = .init(gpa, &self.text);
+        // Pictures go straight to the GPU before any view callback can run a frame.
+        self.text.images.sink = .{ .ctx = &self.renderer, .upload = @import("metal.zig").Renderer.uploadImage };
+        self.refreshAppearance();
         if (getenv("NANOUI_FRAMES")) |raw| {
             const p = std.mem.span(raw);
             if (p.len > 0) self.frame_log = FrameLog.init(gpa, p) catch null;
@@ -145,8 +148,6 @@ pub const Surface = struct {
         }
         self.refreshAppearance();
         self.is_visible = objc.msg(objc.BOOL, window.nswindow, "isVisible", .{}) and (objc.msg(objc.NSUInteger, window.nswindow, "occlusionState", .{}) & 2 != 0);
-        // Pictures go straight to the GPU: no copy of their atlas in memory.
-        self.text.images.sink = .{ .ctx = &self.renderer, .upload = @import("metal.zig").Renderer.uploadImage };
         self.updateGeometry();
         self.frame();
         return self;

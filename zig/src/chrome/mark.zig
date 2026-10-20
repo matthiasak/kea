@@ -86,7 +86,7 @@ fn drawMonogram(c: *ui.Context, p: *const Palette, letter: []const u8, size: f32
         .justify = .center,
     }, null);
     defer c.end();
-    ui.text(c, letter, .{ .size = size * 0.56, .weight = .medium, .color = p.muted });
+    ui.text(c, c.print("{s}", .{letter}), .{ .size = size * 0.56, .weight = .medium, .color = p.muted });
 }
 
 /// `text.first.map { String($0).uppercased() } ?? "•"`: the first

@@ -152,3 +152,21 @@ test "strip overflow scrolls instead of overlapping doors" {
     try std.testing.expect(r.x >= run.x - 0.5 and r.x + r.w <= run.x + run.w + 0.5);
     try std.testing.expect((ctx.scroll_x.get(f.browser.strip.run_node) orelse 0) > 0);
 }
+
+test "compact tabs with icons mode keep distinct monogram letters when icons are absent" {
+    var f: Fixture = undefined;
+    try f.init(gpa, .{ .sidebar = false, .tabs = 0 });
+    defer f.deinit();
+    f.browser.prefs.set("glyph", .icons);
+    const hosts = [_][]const u8{
+        "https://alpha.invalid/", "https://bravo.invalid/", "https://charlie.invalid/", "https://delta.invalid/",
+    };
+    for (0..40) |i| {
+        _ = f.browser.open(hosts[i % hosts.len], .{ .foreground = false, .at_end = true });
+    }
+    f.tester.settle(2);
+    try std.testing.expect(f.tester.hasText("A"));
+    try std.testing.expect(f.tester.hasText("B"));
+    try std.testing.expect(f.tester.hasText("C"));
+    try std.testing.expect(f.tester.hasText("D"));
+}

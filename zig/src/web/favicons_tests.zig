@@ -225,3 +225,39 @@ test "setDark flips cached and clears missing" {
     try t.expectEqual(@as(usize, 0), favs.missing.count());
     try t.expectEqualSlices(u8, light_png, favs.cached("example.com").?.png);
 }
+
+test "analyzeMono tints alpha silhouettes and leaves opaque two-tone icons untinted" {
+    const decode = @import("favicons_decode.zig");
+    // Opaque black square with a white mark inside (like x.com@dark): must stay .none.
+    const two_tone = blk: {
+        const bmp = try cg.Bitmap.init(t.allocator, 64, 64, 1);
+        defer bmp.deinit(t.allocator);
+        bmp.fill(.{ .r = 0, .g = 0, .b = 0, .a = 1 });
+        const bg = cg.CGPathCreateWithRoundedRect(.{ .origin = .{ .x = 0, .y = 0 }, .size = .{ .width = 64, .height = 64 } }, 0, 0, null).?;
+        defer cg.CGPathRelease(bg);
+        cg.CGContextAddPath(bmp.ctx, bg);
+        cg.CGContextFillPath(bmp.ctx);
+        bmp.fill(.{ .r = 1, .g = 1, .b = 1, .a = 1 });
+        const fg = cg.CGPathCreateWithRoundedRect(.{ .origin = .{ .x = 24, .y = 24 }, .size = .{ .width = 16, .height = 16 } }, 0, 0, null).?;
+        defer cg.CGPathRelease(fg);
+        cg.CGContextAddPath(bmp.ctx, fg);
+        cg.CGContextFillPath(bmp.ctx);
+        break :blk try bmp.png(t.allocator);
+    };
+    defer t.allocator.free(two_tone);
+    try t.expectEqual(f.Mono.none, decode.analyzeMono(two_tone));
+
+    // Black silhouette on a transparent canvas: .dark.
+    const dark_sil = blk: {
+        const bmp = try cg.Bitmap.init(t.allocator, 64, 64, 1);
+        defer bmp.deinit(t.allocator);
+        bmp.fill(.{ .r = 0, .g = 0, .b = 0, .a = 1 });
+        const fg = cg.CGPathCreateWithRoundedRect(.{ .origin = .{ .x = 12, .y = 12 }, .size = .{ .width = 40, .height = 40 } }, 0, 0, null).?;
+        defer cg.CGPathRelease(fg);
+        cg.CGContextAddPath(bmp.ctx, fg);
+        cg.CGContextFillPath(bmp.ctx);
+        break :blk try bmp.png(t.allocator);
+    };
+    defer t.allocator.free(dark_sil);
+    try t.expectEqual(f.Mono.dark, decode.analyzeMono(dark_sil));
+}
