@@ -62,7 +62,7 @@ pub fn measure(c: *Context, index: u32, avail_w: f32) types.Size {
             }
         },
         .icon => |ic| {
-            if (c.text.atlas.symbol(ic.name, ic.size, @intFromEnum(ic.weight), 0)) |sp| {
+            if (c.text.atlas.symbol(ic.name, ic.size, @intFromEnum(ic.weight))) |sp| {
                 content = .{ .w = sp.w + 2 * sp.x, .h = sp.h + 2 * sp.y };
             } else content = .{ .w = ic.size, .h = ic.size };
         },

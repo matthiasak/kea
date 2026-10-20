@@ -47,6 +47,7 @@ pub const Tab = struct {
     delegate: ?objc.Object = null,
     /// Its KVO observer (`watch`, `AudioWatch`, the capture states).
     observer: ?objc.Object = null,
+    observes_capture: bool = false,
     /// An extension page's UI delegate in front of `delegate` (Tab.swift:266).
     page_delegate: ?objc.Object = null,
     /// What the page view keeps (swipes, keys handed to the page).
@@ -68,9 +69,8 @@ pub const Tab = struct {
     loading: bool = false,
     can_go_back: bool = false,
     can_go_forward: bool = false,
-    /// `hasOnlySecureContent`.
-    secure: bool = false,
-    progress: f32 = 0,
+    reading_drawn_at: f64 = 0,
+    reading_pending: bool = false,
     muted: bool = false,
     /// Something on the page is making noise (`noisy`, AudioWatch).
     noisy: bool = false,
@@ -159,12 +159,11 @@ pub const Tab = struct {
         return self;
     }
 
-    /// A blank tab, its page built.
+    /// A blank tab; its page is built when it is first needed.
     pub fn create(gpa: std.mem.Allocator, id: u64, shy: bool, data_store: ?objc.Object, kea: *Kea) !*Tab {
         const self = try make(gpa, id, kea);
         self.shy = shy;
         self.data_store = data_store;
-        self.build();
         return self;
     }
 
@@ -249,7 +248,8 @@ pub const Tab = struct {
     /// browser takes it off the stage first (`StageHost.forget`).
     pub fn discard(self: *Tab) void {
         self.built = false;
-        if (self.observer) |o| kvo.stop(o, self.web);
+        if (self.observer) |o| kvo.stop(o, self.web, self.observes_capture);
+        self.observes_capture = false;
         self.observer = null;
         if (self.web) |wv| {
             // Its page out in the floating window: that window goes first.

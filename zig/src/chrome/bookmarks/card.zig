@@ -38,7 +38,7 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette) void {
         s.card_fresh = false;
         s.card_title.set(node.title);
         // The keys to the name, as the card appears.
-        ui.focusNext(c, false);
+        ui.focusNext(c, true);
     }
     // Emptied, the field shows what the lists will read.
     if (s.card_title.text().len == 0)

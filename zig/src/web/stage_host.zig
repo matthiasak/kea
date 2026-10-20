@@ -9,7 +9,7 @@ const nanoui = @import("nanoui");
 const objc = nanoui.objc;
 const ui = nanoui.ui;
 const Surface = nanoui.Surface;
-
+const page_view = @import("page_view.zig");
 pub const PaneSlot = struct {
     webview: ?objc.Object = null,
     last_rect: ui.Rect = .{},
@@ -20,6 +20,7 @@ pub const PaneSlot = struct {
     /// the last `setAlphaValue:` sent.
     alpha: f32 = 1,
     applied_alpha: f32 = 1,
+    held: bool = false,
     place_calls: usize = 0,
 
     fn setHidden(slot: *PaneSlot, wv: objc.Object, on: bool) bool {
@@ -29,13 +30,18 @@ pub const PaneSlot = struct {
         return true;
     }
 
-    fn place(slot: *PaneSlot, wv: objc.Object, holes: []const ui.Rect, i: usize) bool {
+    fn place(slot: *PaneSlot, wv: objc.Object, holes: []const ui.Rect, i: usize, reduce_motion: bool) bool {
         if (i >= holes.len or holes[i].w <= 1 or holes[i].h <= 1) return slot.setHidden(wv, true);
         const r = holes[i];
         var changed = slot.setHidden(wv, false);
-        if (slot.applied_alpha != slot.alpha) {
-            slot.applied_alpha = slot.alpha;
-            objc.msg(void, wv, "setAlphaValue:", .{@as(f64, slot.alpha)});
+        const unpaid = page_view.unpainted(wv);
+        if (unpaid) slot.held = true;
+        const want: f32 = if (unpaid) 0 else slot.alpha;
+        if (slot.applied_alpha != want) {
+            const painted = slot.held and !unpaid and want > 0;
+            if (!unpaid) slot.held = false;
+            slot.applied_alpha = want;
+            if (painted and !reduce_motion) fadeIn(wv, want) else objc.msg(void, wv, "setAlphaValue:", .{@as(f64, want)});
             changed = true;
         }
         if (rectsEq(slot.last_rect, r)) return changed;
@@ -57,6 +63,8 @@ pub const StageHost = struct {
     peek_slot: PaneSlot = .{},
     card_radius: f32 = 10,
     dirty: bool = false,
+    last_holes: [8]ui.Rect = undefined,
+    last_hole_count: usize = 0,
     on_rects_ctx: ?*anyopaque = null,
     on_rects: ?*const fn (ctx: ?*anyopaque, holes: []const ui.Rect) void = null,
 
@@ -105,15 +113,19 @@ pub const StageHost = struct {
         };
         self.slots.shrinkRetainingCapacity(@min(self.slots.items.len, pages.len));
         while (self.slots.items.len < pages.len) self.slots.append(self.gpa, .{}) catch return;
-        for (self.slots.items, pages, alphas) |*slot, page, alpha| {
+        for (self.slots.items, pages, alphas, 0..) |*slot, page, alpha, i| {
+            slot.alpha = alpha;
             if (slot.webview != page) {
-                slot.* = .{ .webview = page, .corner_radius = self.card_radius };
+                const unpaid = if (page) |wv| page_view.unpainted(wv) else false;
+                const init_alpha: f32 = if (unpaid) 0 else alpha;
+                slot.* = .{ .webview = page, .corner_radius = self.card_radius, .alpha = alpha, .applied_alpha = init_alpha, .held = unpaid };
                 self.dirty = true;
                 if (page) |wv| {
                     const sup = objc.msg(?objc.Object, wv, "superview", .{});
                     if (sup != self.stage_view) objc.msg(void, self.stage_view, "addSubview:", .{wv});
                     objc.msg(void, wv, "setHidden:", .{objc.NO});
-                    objc.msg(void, wv, "setAlphaValue:", .{@as(f64, 1)});
+                    objc.msg(void, wv, "setAlphaValue:", .{@as(f64, init_alpha)});
+                    if (i < self.last_hole_count) _ = slot.place(wv, self.last_holes[0..self.last_hole_count], i, self.surface.reduce_motion);
                     applyCornerRadius(wv, self.card_radius);
                 }
             } else if (page) |wv| if (slot.corner_radius != self.card_radius) {
@@ -121,7 +133,6 @@ pub const StageHost = struct {
                 applyCornerRadius(wv, self.card_radius);
                 self.dirty = true;
             };
-            slot.alpha = alpha;
         }
     }
 
@@ -139,14 +150,22 @@ pub const StageHost = struct {
         self.detach(webview);
     }
 
+    pub fn holds(self: *const StageHost, webview: objc.Object) bool {
+        for (self.slots.items) |slot| if (slot.webview == webview) return true;
+        return self.peek_slot.webview == webview;
+    }
+
     pub fn setPeek(self: *StageHost, webview: ?objc.Object) void {
         if (self.peek_slot.webview == webview) return;
         if (self.peek_slot.webview) |old| self.detach(old);
-        self.peek_slot = .{ .webview = webview };
+        const unpaid = if (webview) |wv| page_view.unpainted(wv) else false;
+        const init_alpha: f32 = if (unpaid) 0 else 1;
+        self.peek_slot = .{ .webview = webview, .applied_alpha = init_alpha, .held = unpaid };
         self.dirty = true;
         if (webview) |wv| {
             objc.msg(void, self.stage_view, "addSubview:", .{wv});
             objc.msg(void, wv, "setHidden:", .{objc.NO});
+            objc.msg(void, wv, "setAlphaValue:", .{@as(f64, init_alpha)});
             applyCornerRadius(wv, 12);
         }
     }
@@ -172,19 +191,40 @@ pub const StageHost = struct {
         var changed = self.dirty;
         self.dirty = false;
         const holes = s.ctx.stage_rects[0..s.ctx.stage_count];
+        const hc = @min(holes.len, self.last_holes.len);
+        @memcpy(self.last_holes[0..hc], holes[0..hc]);
+        self.last_hole_count = hc;
         if (self.on_rects) |cb| cb(self.on_rects_ctx, holes);
         const n = self.slots.items.len;
         for (self.slots.items, 0..) |*slot, i| {
             const wv = slot.webview orelse continue;
-            if (slot.place(wv, holes, i)) changed = true;
+            if (slot.place(wv, holes, i, s.reduce_motion)) changed = true;
         }
         // The peek's hole is drawn after the panes'.
         if (self.peek_slot.webview) |wv| {
-            if (self.peek_slot.place(wv, if (holes.len > n) holes else &.{}, n)) changed = true;
+            if (self.peek_slot.place(wv, if (holes.len > n) holes else &.{}, n, s.reduce_motion)) changed = true;
         }
         return changed;
     }
 };
+
+const Fade = struct { wv: objc.Object, alpha: f32 };
+
+fn runFade(f: *Fade, ctx: objc.Object) void {
+    objc.msg(void, ctx, "setDuration:", .{@as(f64, 0.18)});
+    const timing = objc.msg(objc.Object, objc.class("CAMediaTimingFunction"), "functionWithName:", .{objc.nsString("easeOut")});
+    objc.msg(void, ctx, "setTimingFunction:", .{timing});
+    const anim = objc.msg(objc.Object, f.wv, "animator", .{});
+    objc.msg(void, anim, "setAlphaValue:", .{@as(f64, f.alpha)});
+}
+
+fn fadeIn(wv: objc.Object, alpha: f32) void {
+    const pool = objc.Pool.push();
+    defer pool.pop();
+    var f: Fade = .{ .wv = wv, .alpha = alpha };
+    var block = objc.Block(Fade, &.{objc.Object}).init(&f, runFade);
+    objc.msg(void, objc.class("NSAnimationContext"), "runAnimationGroup:", .{@as(*anyopaque, @ptrCast(&block))});
+}
 
 fn rectsEq(a: ui.Rect, b: ui.Rect) bool {
     return @abs(a.x - b.x) < 0.25 and @abs(a.y - b.y) < 0.25 and @abs(a.w - b.w) < 0.25 and @abs(a.h - b.h) < 0.25;

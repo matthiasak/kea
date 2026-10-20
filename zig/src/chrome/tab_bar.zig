@@ -406,7 +406,7 @@ fn liveGround(b: *Browser, c: *ui.Context, p: *const Palette, box: u32, fill: u3
     s.background = if (pinned) p.pin_live else p.wash;
     // The grey fills from the left as you read down the page.
     if (pinned or tab_pill.compact(b, tab, each) or !b.prefs.shows_reading) return;
-    const read = ui.tween(c, live_id, 2, std.math.clamp(tab.reading, 0, 1), 0.15, .ease_out);
+    const read = std.math.clamp(tab.reading, 0, 1);
     const f = &c.node(fill).style;
     f.width = px(w * read);
     f.background = p.ink.alpha(0.055);

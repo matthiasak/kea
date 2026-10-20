@@ -65,14 +65,30 @@ fn safariVersion() []const u8 {
 const OsVersion = extern struct { major: objc.NSInteger, minor: objc.NSInteger, patch: objc.NSInteger };
 
 var shared_pool: ?objc.Object = null;
+extern "c" fn objc_getClass(name: [*:0]const u8) ?objc.Class;
 
 /// `Web.pool`: one process pool for every tab, so the next process is warm.
 pub fn processPool() objc.Object {
     if (shared_pool) |p| return p;
+    const pool = objc.Pool.push();
+    defer pool.pop();
+    if (objc_getClass("_WKProcessPoolConfiguration")) |cfg_cls| {
+        const cfg = objc.msg(objc.Object, cfg_cls, "new", .{});
+        defer objc.release(cfg);
+        if (objc.msg(objc.BOOL, cfg, "respondsToSelector:", .{objc.sel("setPrewarmsProcessesAutomatically:")}))
+            objc.msg(void, cfg, "setPrewarmsProcessesAutomatically:", .{objc.YES});
+        if (objc.msg(objc.BOOL, cfg, "respondsToSelector:", .{objc.sel("setUsesWebProcessCache:")}))
+            objc.msg(void, cfg, "setUsesWebProcessCache:", .{objc.YES});
+        const raw = objc.alloc("WKProcessPool");
+        if (objc.msg(objc.BOOL, raw, "respondsToSelector:", .{objc.sel("_initWithConfiguration:")})) {
+            shared_pool = objc.msg(objc.Object, raw, "_initWithConfiguration:", .{cfg});
+            return shared_pool.?;
+        }
+        objc.release(raw);
+    }
     shared_pool = objc.new("WKProcessPool");
     return shared_pool.?;
 }
-
 /// `Web.playback`: sound waits for a click; video too with
 /// Settings › Videos wait for a click (`media.click`).
 pub fn playback(store: *const Store) objc.NSUInteger {
@@ -100,9 +116,13 @@ pub fn configuration(kea: *Kea, shy: bool, data_store: ?objc.Object) objc.Object
     if (kea.opts.scheme_handler) |h| objc.msg(void, config, "setURLSchemeHandler:forURLScheme:", .{ h, objc.nsString("kea-test") });
     objc.msg(void, config, "setApplicationNameForUserAgent:", .{objc.nsString(userAgentName())});
     objc.msg(void, config, "setAllowsAirPlayForMediaPlayback:", .{objc.YES});
+    if (objc.msg(objc.BOOL, config, "respondsToSelector:", .{objc.sel("_setProcessDisplayName:")}))
+        objc.msg(void, config, "_setProcessDisplayName:", .{objc.nsString("KeaZig Web Content")});
     const prefs = objc.msg(objc.Object, config, "preferences", .{});
     objc.msg(void, prefs, "setElementFullscreenEnabled:", .{objc.YES});
     objc.msg(void, prefs, "setJavaScriptCanOpenWindowsAutomatically:", .{objc.NO});
+    if (objc.msg(objc.BOOL, prefs, "respondsToSelector:", .{objc.sel("_setDNSPrefetchingEnabled:")}))
+        objc.msg(void, prefs, "_setDNSPrefetchingEnabled:", .{objc.YES});
     objc.msg(void, config, "setMediaTypesRequiringUserActionForPlayback:", .{playback(&kea.store)});
     // A test run's hidden pages keep running (WKInactiveSchedulingPolicyNone).
     if (kea.opts.root != null and !kea.opts.measuring and objc.msg(objc.BOOL, prefs, "respondsToSelector:", .{objc.sel("setInactiveSchedulingPolicy:")}))
@@ -120,10 +140,22 @@ pub fn configuration(kea: *Kea, shy: bool, data_store: ?objc.Object) objc.Object
 /// to keep sign-ins; until then its flag is not touched.
 fn followSignIns(store: objc.Object, keeps: bool) void {
     if (!keeps) return;
-    if (!objc.msg(objc.BOOL, store, "respondsToSelector:", .{objc.sel("_setResourceLoadStatisticsEnabled:")})) return;
-    objc.msg(void, store, "_setResourceLoadStatisticsEnabled:", .{objc.NO});
+    setTrackingPrevention(store, false);
 }
 
+fn setTrackingPrevention(store: objc.Object, on: bool) void {
+    if (!objc.msg(objc.BOOL, store, "respondsToSelector:", .{objc.sel("_setResourceLoadStatisticsEnabled:")})) return;
+    objc.msg(void, store, "_setResourceLoadStatisticsEnabled:", .{on});
+}
+
+pub fn followSignInsAll(kea: *Kea, keeps: bool) void {
+    if (kea.opts.root != null) return;
+    const pool = objc.Pool.push();
+    defer pool.pop();
+    const cls = objc.class("WKWebsiteDataStore");
+    setTrackingPrevention(objc.msg(objc.Object, cls, "defaultDataStore", .{}), !keeps);
+    for (kea.stores.values()) |s| setTrackingPrevention(s, !keeps);
+}
 /// `Web.inspector`: WebKit's developer extras, asked for first.
 pub fn inspector(prefs: objc.Object, on: bool) void {
     if (!objc.msg(objc.BOOL, prefs, "respondsToSelector:", .{objc.sel("_setDeveloperExtrasEnabled:")})) return;

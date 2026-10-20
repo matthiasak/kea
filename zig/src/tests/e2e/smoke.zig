@@ -28,7 +28,8 @@ fn tabFail(h: *Harness, t: *app.Tab) error{CaseFailed} {
 }
 
 fn finished(t: *app.Tab) bool {
-    return !t.loading and t.progress >= 1;
+    const wv = t.web orelse return false;
+    return !t.loading and !objc.msg(objc.BOOL, wv, "isLoading", .{}) and objc.msg(f64, wv, "estimatedProgress", .{}) >= 1;
 }
 
 fn unixNow() i64 {
@@ -127,7 +128,8 @@ fn siteChip(h: *Harness) !void {
 /// WebKit holds `/slow`'s first bytes until the rest arrives 8 s later:
 /// the load stays in flight.
 fn loadingSlow(t: *app.Tab) bool {
-    return t.loading and t.progress > 0.1;
+    const wv = t.web orelse return false;
+    return t.loading and objc.msg(f64, wv, "estimatedProgress", .{}) > 0.1;
 }
 
 fn stopSlow(h: *Harness) !void {

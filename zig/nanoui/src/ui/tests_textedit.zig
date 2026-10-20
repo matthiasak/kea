@@ -300,6 +300,28 @@ test "focused textField keeps focus, caret, and undo when wrapped in a row" {
     try testing.expectEqualStrings("hello", s.buf.text());
 }
 
+test "stale focus dropped when field vanishes" {
+    const Vanish = struct {
+        buf: ui.TextBuffer = .{},
+        show: bool = true,
+        fn view(s: *@This(), cx: *ui.Context) void {
+            ui.column(cx, .{ .padding = .all(12) });
+            defer ui.end(cx);
+            if (s.show) _ = ui.textField(cx, &s.buf, .{ .placeholder = "Name" });
+        }
+    };
+    var s: Vanish = .{};
+    defer s.buf.deinit();
+    var t: ui.Tester = undefined;
+    try t.init(testing.allocator, .init(&s, Vanish.view), .{});
+    defer t.deinit();
+    try t.clickText("Name");
+    try testing.expect(t.ctx.focus != 0);
+    s.show = false;
+    t.frame();
+    try testing.expectEqual(@as(u64, 0), t.ctx.focus);
+}
+
 test {
     _ = @import("textedit.zig");
     _ = @import("scroll.zig");

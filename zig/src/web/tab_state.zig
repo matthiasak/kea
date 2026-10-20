@@ -4,11 +4,12 @@
 const std = @import("std");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;
+const ui = nanoui.ui;
 const tab_mod = @import("tab.zig");
 const Tab = tab_mod.Tab;
 const Parts = @import("../data/url.zig").Parts;
 const cg = @import("../sys/cg.zig");
-
+const dispatch = @import("../sys/dispatch.zig");
 // MARK: sleeping and waking
 
 /// Sent somewhere new: nothing of where it was before to bring back.
@@ -260,7 +261,19 @@ pub fn resetZoom(t: *Tab) void {
 
 // MARK: reading, pictures, what was typed
 
-/// `scrolled(to:of:)`: throttled to >= 0.5 % changes while `shows_reading` is on.
+fn isVisible(t: *const Tab) bool {
+    const b = t.browser orelse return false;
+    const ids = b.visibleTabIDs();
+    return t.id != 0 and (ids[0] == t.id or ids[1] == t.id);
+}
+
+fn fireReading(t: *Tab, _: usize) void {
+    t.reading_pending = false;
+    t.reading_drawn_at = ui.clock.now();
+    if (t.browser) |b| if (b.prefs.shows_reading and isVisible(t)) t.changed(.state);
+}
+
+/// `scrolled(to:of:)`: throttled to >= 0.5 % changes and at most 10 Hz while `shows_reading` is on.
 pub fn scrolled(t: *Tab, y: f64, ceiling: f64) void {
     const raw: f32 = if (ceiling > 0) @floatCast(@min(1, @max(0, y / ceiling))) else 0;
     const shows = if (t.browser) |b| b.prefs.shows_reading else false;
@@ -269,22 +282,35 @@ pub fn scrolled(t: *Tab, y: f64, ceiling: f64) void {
     if (fraction == prev_reading) return;
     if (shows and @abs(fraction - prev_reading) < 0.005 and fraction != 0 and fraction != 1) return;
     t.reading = fraction;
-    t.changed(.state);
+    if (!shows or !isVisible(t)) return;
+    const now = ui.clock.now();
+    if (now - t.reading_drawn_at >= 0.1) {
+        t.reading_drawn_at = now;
+        t.changed(.state);
+    } else if (!t.reading_pending) {
+        t.reading_pending = true;
+        t.after(0.1, fireReading, 0);
+    }
 }
 
 pub const Done = *const fn (t: *Tab, value: bool, picture: ?[]u8, arg: usize) void;
 
-const Snap = struct { serial: u64, done: Done, arg: usize };
+const Snap = struct {
+    serial: u64,
+    done: Done,
+    arg: usize,
+    cgimage: ?cg.Image = null,
+    bytes: ?[]u8 = null,
+};
 const SnapBlock = objc.Block(Snap, &.{ ?objc.Object, ?objc.Object });
 
 extern "c" const kCGImageDestinationLossyCompressionQuality: cg.CFStringRef;
+extern "c" fn CGImageRetain(image: cg.Image) cg.Image;
 
 /// The page as it looks now, JPEG at quality 0.55 (`Tab.jpeg`).
-// ponytail: encoded on the main thread; Swift uses a utility queue.
-fn jpeg(gpa: std.mem.Allocator, image: objc.Object) ?[]u8 {
+fn jpeg(gpa: std.mem.Allocator, cgimage: cg.Image) ?[]u8 {
     const pool = objc.Pool.push();
     defer pool.pop();
-    const cgimage: cg.Image = @ptrCast(objc.msg(?objc.Object, image, "CGImageForProposedRect:context:hints:", .{ @as(?*anyopaque, null), @as(?objc.Object, null), @as(?objc.Object, null) }) orelse return null);
     const data = cg.CFDataCreateMutable(null, 0) orelse return null;
     defer cg.CFRelease(data);
     const dest = cg.CGImageDestinationCreateWithData(data, @ptrCast(objc.nsString("public.jpeg")), 1, null) orelse return null;
@@ -296,13 +322,39 @@ fn jpeg(gpa: std.mem.Allocator, image: objc.Object) ?[]u8 {
     return gpa.dupe(u8, cg.CFDataGetBytePtr(data)[0..@intCast(cg.CFDataGetLength(data))]) catch null;
 }
 
-fn snapped(s: *Snap, image: ?objc.Object, _: ?objc.Object) void {
-    defer std.heap.c_allocator.destroy(s);
+fn encodeBg(p: ?*anyopaque) callconv(.c) void {
+    const s: *Snap = @ptrCast(@alignCast(p.?));
+    if (s.cgimage) |img| {
+        defer cg.CGImageRelease(img);
+        s.bytes = jpeg(std.heap.c_allocator, img);
+    }
+    objc.dispatchMain(s, encodeFg);
+}
+
+fn encodeFg(p: ?*anyopaque) callconv(.c) void {
+    const s: *Snap = @ptrCast(@alignCast(p.?));
+    defer {
+        if (s.bytes) |b| std.heap.c_allocator.free(b);
+        std.heap.c_allocator.destroy(s);
+    }
     const t = Tab.alive(s.serial) orelse return;
-    const picture = if (image) |i| jpeg(t.gpa, i) else null;
+    const picture = if (s.bytes) |b| t.gpa.dupe(u8, b) catch null else null;
     s.done(t, picture != null, picture, s.arg);
 }
 
+fn snapped(s: *Snap, image: ?objc.Object, _: ?objc.Object) void {
+    if (Tab.alive(s.serial) == null) return std.heap.c_allocator.destroy(s);
+    if (image) |img| {
+        const pool = objc.Pool.push();
+        defer pool.pop();
+        if (objc.msg(?objc.Object, img, "CGImageForProposedRect:context:hints:", .{ @as(?*anyopaque, null), @as(?objc.Object, null), @as(?objc.Object, null) })) |raw| {
+            s.cgimage = CGImageRetain(@ptrCast(raw));
+            return dispatch.dispatch_async_f(dispatch.dispatch_get_global_queue(0x11, 0), s, encodeBg);
+        }
+    }
+    defer std.heap.c_allocator.destroy(s);
+    if (Tab.alive(s.serial)) |t| s.done(t, false, null, s.arg);
+}
 /// `snapshot`: drawn by the page's own process, so a view off screen can
 /// still be pictured; null when there is nothing to draw.
 pub fn snapshot(t: *Tab, done: Done, arg: usize) void {

@@ -14,7 +14,7 @@ pub const Case = struct {
     run: *const fn (*Harness) anyerror!void,
 };
 
-const cases = @import("smoke.zig").cases ++ @import("windows.zig").cases ++ @import("favicons.zig").cases ++ @import("web.zig").cases ++ @import("links.zig").cases ++ @import("downloads.zig").cases ++ @import("page_features.zig").cases ++ @import("page_b.zig").cases ++ @import("side_panels.zig").cases ++ @import("peek_switch.zig").cases ++ @import("split.zig").cases ++ @import("find_bar.zig").cases ++ @import("menus.zig").cases ++ @import("chat.zig").cases ++ @import("passwords.zig").cases ++ @import("extensions.zig").cases ++ @import("quality.zig").cases ++ @import("webkit_metrics.zig").cases;
+const cases = @import("smoke.zig").cases ++ @import("windows.zig").cases ++ @import("focus.zig").cases ++ @import("favicons.zig").cases ++ @import("web.zig").cases ++ @import("links.zig").cases ++ @import("downloads.zig").cases ++ @import("page_features.zig").cases ++ @import("page_b.zig").cases ++ @import("side_panels.zig").cases ++ @import("peek_switch.zig").cases ++ @import("split.zig").cases ++ @import("find_bar.zig").cases ++ @import("menus.zig").cases ++ @import("chat.zig").cases ++ @import("passwords.zig").cases ++ @import("extensions.zig").cases ++ @import("quality.zig").cases ++ @import("webkit_metrics.zig").cases;
 
 pub const Harness = struct {
     gpa: std.mem.Allocator,
@@ -125,6 +125,13 @@ pub const Harness = struct {
     /// virtual key code.
     pub fn press(h: *Harness, key: []const u8, code: u16, cmd: bool, ctrl: bool) void {
         var flags: objc.NSUInteger = 0;
+        if (cmd) flags |= 1 << 20;
+        if (ctrl) flags |= 1 << 18;
+        h.send(10, key, code, flags);
+    }
+
+    pub fn pressShift(h: *Harness, key: []const u8, code: u16, cmd: bool, ctrl: bool) void {
+        var flags: objc.NSUInteger = 1 << 17;
         if (cmd) flags |= 1 << 20;
         if (ctrl) flags |= 1 << 18;
         h.send(10, key, code, flags);

@@ -31,6 +31,7 @@ pub const FrameStats = ctx_mod.FrameStats;
 pub const frame_log = @import("frame_log.zig");
 pub const FrameLog = frame_log.FrameLog;
 pub const Surface = if (@import("builtin").os.tag == .macos) @import("surface.zig").Surface else void;
+pub const KeysReleased = if (@import("builtin").os.tag == .macos) @import("surface.zig").KeysReleased else void;
 pub const Shortcut = ctx_mod.Shortcut;
 /// A text field's editing keys: the system's, Emacs's or Vim's.
 pub const Keymap = @import("keymap.zig").Keymap;
@@ -56,6 +57,7 @@ pub const Color = types.Color;
 pub const Edges = types.Edges;
 pub const Length = types.Length;
 pub const Style = types.Style;
+pub const Pulse = types.Pulse;
 pub const TextStyle = types.TextStyle;
 pub const Shadow = types.Shadow;
 pub const Glass = types.Glass;
@@ -139,7 +141,6 @@ test {
     _ = @import("tests_text_style.zig");
     _ = @import("tests_text_extras.zig");
     _ = @import("tests_settle.zig");
-    _ = @import("turn.zig");
     _ = types;
     _ = @import("layout.zig");
     _ = textfield;

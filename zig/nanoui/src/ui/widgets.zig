@@ -104,8 +104,8 @@ pub const IconOptions = struct {
 
 /// An SF Symbol: `ui.icon(c, "star.fill", .{ .color = c.theme.accent })`.
 pub fn icon(c: *Context, name: []const u8, opts: IconOptions) void {
-    const style: Style = if (opts.frame) |f| .{ .width = .{ .px = f }, .height = .{ .px = f } } else .{};
-    _ = c.leaf(style, .{ .icon = .{ .name = name, .size = opts.size, .weight = opts.weight, .color = opts.color orelse c.theme.text, .step = @import("turn.zig").quantize(opts.rotation) } }, null);
+    const style: Style = if (opts.frame) |f| .{ .width = .{ .px = f }, .height = .{ .px = f }, .rotation = opts.rotation } else .{ .rotation = opts.rotation };
+    _ = c.leaf(style, .{ .icon = .{ .name = name, .size = opts.size, .weight = opts.weight, .color = opts.color orelse c.theme.text } }, null);
 }
 
 pub const ImageOptions = struct {

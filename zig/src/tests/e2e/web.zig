@@ -23,7 +23,8 @@ pub const cases = [_]Case{
 };
 
 fn finished(t: *app.Tab) bool {
-    return !t.loading and t.progress >= 1;
+    const wv = t.web orelse return false;
+    return !t.loading and !objc.msg(objc.BOOL, wv, "isLoading", .{}) and objc.msg(f64, wv, "estimatedProgress", .{}) >= 1;
 }
 
 pub fn open(h: *Harness, b: *app.Browser, url: []const u8) !*app.Tab {
@@ -89,7 +90,7 @@ fn helloTitled(t: *app.Tab) bool {
 fn progressDone(h: *Harness) !void {
     const b = try h.start();
     const t = try open(h, b, "kea-test://site/f/hello.html");
-    try h.expect(t.progress == 1 and !t.loading and !t.isBlank(), "progress {d}, loading {}", .{ t.progress, t.loading });
+    try h.expect(!t.loading and !t.isBlank(), "loading {}", .{t.loading});
     // WebKit tells the title in its own turn, which may come after the load
     // ends (a loaded machine shows it).
     h.waitFor(t, helloTitled, 5, "the title") catch return h.fail("title '{s}'", .{t.title()});

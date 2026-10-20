@@ -43,6 +43,7 @@ pub fn openAISettings(b: *Browser) void {
 pub fn followChatWindow(b: *Browser) void {
     const want = b.assisting != null and b.prefs.chat_popped;
     if (want == (b.chat.window != null)) return;
+    b.chat.typing = true;
     if (want) {
         b.chat.window = popped.open(b.kea, .chat, b);
     } else {

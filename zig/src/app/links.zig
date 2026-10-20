@@ -230,6 +230,15 @@ pub fn watchForTrouble(kea: *Kea) void {
     NSSetUncaughtExceptionHandler(&uncaught);
 }
 
+pub fn logTrouble(kea: *Kea, msg: []const u8) void {
+    if (crash_path) |path| return append(path, &.{ msg, "\n" });
+    const p = kea.store.file("crash.log") catch return;
+    defer kea.gpa.free(p);
+    const z = kea.gpa.dupeSentinel(u8, p, 0) catch return;
+    defer kea.gpa.free(z);
+    append(z, &.{ msg, "\n" });
+}
+
 fn uncaught(exception: objc.Object) callconv(.c) void {
     const path = crash_path orelse return;
     const date = objc.msg(objc.Object, objc.class("NSDate"), "date", .{});

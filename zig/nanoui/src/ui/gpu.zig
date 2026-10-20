@@ -17,7 +17,13 @@ pub const Instance = extern struct {
     kind: f32 = 0,
     /// The clip's rounded corners (`clipRound`): 0 for a plain rectangle.
     clip_round: f32 = 0,
+    xf: [4]f32 = .{ 0, 0, 0, 0 },
+    pulse: [4]f32 = .{ 0, 0, 1, 0 },
+    vel: [4]f32 = .{ 0, 0, 0, 0 },
 };
+comptime {
+    std.debug.assert(@sizeOf(Instance) == 144);
+}
 
 /// The clip rectangle's corners rounded by `radius`: those in `corners`
 /// (1 top left, 2 top right, 4 bottom right, 8 bottom left), packed in one
@@ -49,6 +55,9 @@ pub const Kind = struct {
     /// under the box shows through it. `uv`'s x, y: where the box is from
     /// the shadow's rect, in points.
     pub const shadow_out: f32 = 5;
+    pub const layer_begin: f32 = 6;
+    pub const layer_end: f32 = 7;
+    pub const layer_composite: f32 = 8;
 };
 
 pub fn color4(c: types.Color) [4]f32 {

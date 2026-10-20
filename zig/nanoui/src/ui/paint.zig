@@ -30,16 +30,45 @@ fn paintNode(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, clip:
     const n = c.node(index);
     const st = n.style;
     const selectable = (selectable_in or st.selectable) and !st.control;
-    const opacity = opacity_in * st.opacity;
     const r = n.rect;
     const visible = r.intersect(clip);
-    if (opacity <= 0.001) return;
+    const total_opacity = opacity_in * st.opacity;
+    if (total_opacity <= 0.001) return;
+    const open_group = st.group and total_opacity < 0.999 and !c.painting_group;
+    const opacity = if (open_group) 1.0 else total_opacity;
+    var group_rect: [4]f32 = .{ 0, 0, 0, 0 };
+    if (open_group) {
+        c.painting_group = true;
+        const grown: types.Rect = .{ .x = r.x - 64, .y = r.y - 64, .w = r.w + 128, .h = r.h + 128 };
+        const gr = grown.intersect(clip);
+        group_rect = .{ gr.x, gr.y, gr.w, gr.h };
+        push(c, out, .{
+            .rect = group_rect,
+            .color = .{ 1, 1, 1, 1 },
+            .kind = metal.Kind.layer_begin,
+            .clip = metal.clip4(clip),
+        });
+    }
+    defer if (open_group) {
+        c.painting_group = false;
+        push(c, out, .{
+            .rect = group_rect,
+            .color = .{ 1, 1, 1, total_opacity },
+            .kind = metal.Kind.layer_end,
+            .clip = metal.clip4(clip),
+        });
+    };
     const clip4 = metal.clip4(clip);
-    const sx0 = snap(r.x, c.scale);
-    const sy0 = snap(r.y, c.scale);
-    const sx1 = snap(r.x + r.w, c.scale);
-    const sy1 = snap(r.y + r.h, c.scale);
-    const rect4: [4]f32 = .{ sx0, sy0, sx1 - sx0, sy1 - sy0 };
+    const moving = blk: {
+        if (!c.animating) break :blk false;
+        const prev = c.prev_rects.get(n.id) orelse break :blk false;
+        break :blk @abs(r.x - prev.x) > 0.01 or @abs(r.y - prev.y) > 0.01 or @abs(r.w - prev.w) > 0.01 or @abs(r.h - prev.h) > 0.01;
+    };
+    const sx0 = if (moving) r.x else snap(r.x, c.scale);
+    const sy0 = if (moving) r.y else snap(r.y, c.scale);
+    const sw = if (moving) r.w else snap(r.w, c.scale);
+    const sh_h = if (moving) r.h else snap(r.h, c.scale);
+    const rect4: [4]f32 = .{ sx0, sy0, sw, sh_h };
     const rad: f32 = if (st.corner_circular) -st.radius else st.radius;
     // What the box and its subtree emit, for `Style.scale`.
     const start = out.items.len;
@@ -68,18 +97,18 @@ fn paintNode(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, clip:
             .clip = clip4,
         });
         switch (n.content) {
-            .text => |*t| paintText(c, out, index, n, t, clip4, opacity, selectable),
-            .icon => |ic| if (c.text.atlas.symbol(ic.name, ic.size, @intFromEnum(ic.weight), 0)) |sp| {
+            .text => |*t| paintText(c, out, index, n, t, clip4, opacity, selectable, moving),
+            .icon => |ic| if (c.text.atlas.symbol(ic.name, ic.size, @intFromEnum(ic.weight))) |sp| {
                 // Centered in its box, which may be larger (a fixed frame).
                 const inner = r.inset(st.padding);
-                const x = snap(inner.x + (inner.w - (sp.w + 2 * sp.x)) / 2, c.scale) + sp.x;
-                const y = snap(inner.y + (inner.h - (sp.h + 2 * sp.y)) / 2, c.scale) + sp.y;
-                // Turned, the square it turns in, on the same centre.
-                const d = if (ic.step != 0) c.text.atlas.symbol(ic.name, ic.size, @intFromEnum(ic.weight), ic.step) orelse sp else sp;
+                const cx = inner.x + (inner.w - (sp.w + 2 * sp.x)) / 2;
+                const cy = inner.y + (inner.h - (sp.h + 2 * sp.y)) / 2;
+                const x = (if (moving) cx else snap(cx, c.scale)) + sp.x;
+                const y = (if (moving) cy else snap(cy, c.scale)) + sp.y;
                 push(c, out, .{
-                    .rect = .{ x + (sp.w - d.w) / 2, y + (sp.h - d.h) / 2, d.w, d.h },
+                    .rect = .{ x, y, sp.w, sp.h },
                     .color = metal.color4(ic.color.alpha(opacity)),
-                    .uv = d.uv,
+                    .uv = sp.uv,
                     .kind = metal.Kind.text,
                     .clip = clip4,
                 });
@@ -112,6 +141,35 @@ fn paintNode(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, clip:
 
     if (st.scroll or st.scroll_x) @import("scroll.zig").paintScrollbars(c, out, n.*, visible, opacity);
     if (st.scale != 1) scaleItems(out.items[start..], r, st.scale, st.scale_anchor, clip4);
+
+    if (st.spin != 0) c.time_driven = .fast;
+    const pulse = if (c.reduce_motion) null else st.pulse;
+    if (pulse != null and c.time_driven == .none) c.time_driven = .slow;
+    if (st.rotation != 0 or st.spin != 0 or pulse != null) {
+        const px = r.x + r.w * 0.5;
+        const py = r.y + r.h * 0.5;
+        const p4: [4]f32 = if (pulse) |p| .{ p.period, p.scale_amp, p.alpha_low, 0 } else .{ 0, 0, 1, 0 };
+        for (out.items[start..]) |*inst| {
+            if (inst.kind == metal.Kind.layer_begin or inst.kind == metal.Kind.layer_end) continue;
+            if (inst.xf[0] == 0 and inst.xf[1] == 0 and inst.xf[2] == 0 and inst.xf[3] == 0 and inst.pulse[0] == 0 and inst.pulse[1] == 0) {
+                inst.xf = .{ st.rotation, st.spin, px, py };
+                inst.pulse = p4;
+            }
+        }
+    }
+    if (st.motion_blur and c.animating and !c.reduce_motion) {
+        if (c.prev_rects.get(n.id)) |prev| {
+            const vx = r.x - prev.x;
+            const vy = r.y - prev.y;
+            if (@sqrt(vx * vx + vy * vy) > 2) {
+                for (out.items[start..]) |*inst| {
+                    if (inst.kind == metal.Kind.quad or inst.kind == metal.Kind.text or inst.kind == metal.Kind.image) {
+                        inst.vel = .{ vx * 0.5, vy * 0.5, 0, 0 };
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Maps instances around the anchor of `box` (fractions of it) by `s`,
@@ -122,6 +180,10 @@ fn scaleItems(items: []metal.Instance, box: types.Rect, s: f32, anchor: types.Po
     const ay = box.y + box.h * anchor.y;
     for (items) |*i| {
         i.rect = .{ ax + (i.rect[0] - ax) * s, ay + (i.rect[1] - ay) * s, i.rect[2] * s, i.rect[3] * s };
+        if (i.xf[0] != 0 or i.xf[1] != 0 or i.pulse[0] > 0) {
+            i.xf[2] = ax + (i.xf[2] - ax) * s;
+            i.xf[3] = ay + (i.xf[3] - ay) * s;
+        }
         i.clip = .{
             @max(outer[0], ax + (i.clip[0] - ax) * s), @max(outer[1], ay + (i.clip[1] - ay) * s),
             @min(outer[2], ax + (i.clip[2] - ax) * s), @min(outer[3], ay + (i.clip[3] - ay) * s),
@@ -135,7 +197,7 @@ fn scaleItems(items: []metal.Instance, box: types.Rect, s: f32, anchor: types.Po
     }
 }
 
-fn paintText(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, n: *const ctx_mod.Node, t: *const ctx_mod.Content.Text, clip4: [4]f32, opacity: f32, selectable: bool) void {
+fn paintText(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, n: *const ctx_mod.Node, t: *const ctx_mod.Content.Text, clip4: [4]f32, opacity: f32, selectable: bool, moving: bool) void {
     const sel: ?Sel = if (selectable) .{ .id = n.id, .index = index, .x0 = n.rect.x, .x1 = n.rect.x + n.rect.w } else null;
     const inner = n.rect.inset(n.style.padding);
     const f = c.text.font(t.style);
@@ -143,10 +205,10 @@ fn paintText(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, n: *c
     if (t.style.wrap) {
         for (t.lines, 0..) |l, i| {
             const y = inner.y + lh * @as(f32, @floatFromInt(i));
-            textRun(c, out, t, l.start, l.end, inner.x, y, f, lh, clip4, opacity, sel, n.rect.x + n.rect.w);
+            textRun(c, out, t, l.start, l.end, inner.x, y, f, lh, clip4, opacity, sel, n.rect.x + n.rect.w, moving);
         }
     } else {
-        textRun(c, out, t, 0, t.str.len, inner.x, inner.y, f, lh, clip4, opacity, sel, n.rect.x + n.rect.w);
+        textRun(c, out, t, 0, t.str.len, inner.x, inner.y, f, lh, clip4, opacity, sel, n.rect.x + n.rect.w, moving);
     }
 }
 
@@ -156,7 +218,7 @@ fn paintText(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, n: *c
 const Sel = struct { id: u64, index: u32, x0: f32, x1: f32 };
 
 /// `right` is the box's right edge, where a fade (`TextStyle.fade`) ends.
-fn textRun(c: *Context, out: *std.ArrayList(metal.Instance), t: *const ctx_mod.Content.Text, start: usize, end: usize, x: f32, y: f32, f: text_mod.Font, lh: f32, clip4: [4]f32, opacity: f32, sel: ?Sel, right: f32) void {
+fn textRun(c: *Context, out: *std.ArrayList(metal.Instance), t: *const ctx_mod.Content.Text, start: usize, end: usize, x: f32, y: f32, f: text_mod.Font, lh: f32, clip4: [4]f32, opacity: f32, sel: ?Sel, right: f32, moving: bool) void {
     const style = t.style;
     // Cull lines wholly above or below the clip before shaping them; a
     // selectable one still counts for where the pointer is.
@@ -175,7 +237,8 @@ fn textRun(c: *Context, out: *std.ArrayList(metal.Instance), t: *const ctx_mod.C
     if (lay.glyphs.len == 0 or x + lay.width < clip4[0]) return;
     const scale = c.scale;
     // The line's extra height (its leading) goes half above, half below.
-    const baseline = snap(y + (lh - f.lineHeight()) / 2 + f.leading / 2 + f.ascent, scale);
+    const raw_baseline = y + (lh - f.lineHeight()) / 2 + f.leading / 2 + f.ascent;
+    const baseline = if (moving) raw_baseline else snap(raw_baseline, scale);
     const base = metal.color4(t.color.alpha(opacity));
     if (sel) |s| @import("selection.zig").line(c, out, s.id, s.index, t.str, start, end, lay, x, y, lh, s.x0, s.x1, clip4);
     if (t.spans.len > 0) decorations(c, out, t, lay, start, end, x, baseline, f, clip4, opacity);

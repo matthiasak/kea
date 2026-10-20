@@ -221,3 +221,71 @@ fn pillRect(f: *Fixture, id: u64) !ui.Rect {
     for (f.browser.strip.seen.items) |s| if (s.id == id) return f.tester.ctx.rects.get(s.node) orelse error.NotLaidOut;
     return error.NotDrawn;
 }
+
+test "⌘Return opens behind, ⇧⌘Return in front" {
+    var f: Fixture = undefined;
+    try start(&f, 1);
+    defer f.deinit();
+    const b = f.browser;
+    b.select(b.tabs.items[1]);
+    const base = b.active_id;
+    _ = f.press("l", 37, .{ .cmd = true });
+    f.tester.settle(1);
+    f.tester.typeText("example.com");
+    f.tester.settle(1);
+    const before = b.tabs.items.len;
+    try t.expect(f.press("\r", 36, .{ .cmd = true }));
+    try t.expectEqual(before + 1, b.tabs.items.len);
+    try t.expectEqual(base, b.active_id);
+
+    _ = f.press("l", 37, .{ .cmd = true });
+    f.tester.settle(1);
+    f.tester.typeText("example.org");
+    f.tester.settle(1);
+    try t.expect(f.press("\r", 36, .{ .cmd = true, .shift = true }));
+    try t.expectEqual(before + 2, b.tabs.items.len);
+    try t.expect(b.active_id != base);
+    try t.expectEqualStrings("https://example.org", b.activeTab().?.url());
+}
+
+test "Tab walks offers, ⇧Tab back" {
+    var f: Fixture = undefined;
+    try start(&f, 0);
+    defer f.deinit();
+    const b = f.browser;
+    f.kea.history.record("https://github.com/a", "GitHub A");
+    f.kea.history.record("https://github.com/b", "GitHub B");
+    f.tester.typeText("github");
+    f.tester.settle(1);
+    try t.expect(b.omni.offers.len >= 2);
+    try t.expect(f.press("\t", 48, .{}));
+    try t.expectEqual(@as(?usize, 0), b.omni.picked);
+    try t.expect(f.press("\t", 48, .{}));
+    try t.expectEqual(@as(?usize, 1), b.omni.picked);
+    try t.expect(f.press("\t", 48, .{ .shift = true }));
+    try t.expectEqual(@as(?usize, 0), b.omni.picked);
+}
+
+test "esc on blank tab keeps field" {
+    var f: Fixture = undefined;
+    try start(&f, 0);
+    defer f.deinit();
+    const b = f.browser;
+    seedGitHub(&f);
+    f.tester.typeText("gi");
+    f.tester.settle(1);
+    _ = f.press("\x1b", 53, .{});
+    f.tester.settle(1);
+    try t.expect(f.tester.ctx.focused_text != null);
+    f.tester.typeText("t");
+    f.tester.settle(1);
+    try t.expectEqualStrings("git", b.omni.typed.items);
+}
+
+test "blank tab focuses its field" {
+    var f: Fixture = undefined;
+    try start(&f, 0);
+    defer f.deinit();
+    try t.expect(f.browser.omnibox.text_id != 0);
+    try t.expectEqual(f.browser.omnibox.text_id, f.tester.ctx.focus);
+}

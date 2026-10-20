@@ -9,6 +9,9 @@ const ui = nanoui.ui;
 const Browser = @import("../model/browser.zig").Browser;
 const Tab = @import("../web/tab.zig").Tab;
 const cg = @import("../sys/cg.zig");
+const dispatch = @import("../sys/dispatch.zig");
+
+extern "c" fn CGImageRetain(image: cg.Image) cg.Image;
 
 pub const Direction = enum { left, right, up, down };
 
@@ -351,7 +354,18 @@ pub fn pump(b: *Browser, now: f64) ?f64 {
 
 var tokens: u64 = 0;
 
-const Job = struct { serial: u64, id: u64, token: u64, generation: u64, address: []u8, gpa: std.mem.Allocator };
+const Job = struct {
+    serial: u64,
+    id: u64,
+    token: u64,
+    generation: u64,
+    address: []u8,
+    jpeg: ?[]u8 = null,
+    cgimage: ?cg.Image = null,
+    png: ?[]u8 = null,
+    w: f32 = 0,
+    h: f32 = 0,
+};
 const SnapBlock = objc.Block(Job, &.{ ?objc.Object, ?objc.Object });
 
 /// `tab.preview(width: 180)`: a sleeping tab's from the picture kept for
@@ -360,9 +374,13 @@ fn request(b: *Browser, t: *Tab) void {
     const address = t.address orelse return;
     tokens += 1;
     b.switcher.requests.put(b.gpa, t.id, tokens) catch return;
-    const job = std.heap.c_allocator.create(Job) catch return;
-    job.* = .{ .serial = t.serial, .id = t.id, .token = tokens, .generation = b.switcher.generation, .address = b.gpa.dupe(u8, address) catch return std.heap.c_allocator.destroy(job), .gpa = b.gpa };
-    if (t.picture) |jpeg| return thumbnail(job, jpeg);
+    const ca = std.heap.c_allocator;
+    const job = ca.create(Job) catch return;
+    job.* = .{ .serial = t.serial, .id = t.id, .token = tokens, .generation = b.switcher.generation, .address = ca.dupe(u8, address) catch return ca.destroy(job) };
+    if (t.picture) |jpeg| {
+        job.jpeg = ca.dupe(u8, jpeg) catch return dropJob(job);
+        return dispatch.dispatch_async_f(dispatch.dispatch_get_global_queue(dispatch.qos_user_initiated, 0), job, encodeBg);
+    }
     const wv = t.web orelse return dropJob(job);
     const pool = objc.Pool.push();
     defer pool.pop();
@@ -374,51 +392,71 @@ fn request(b: *Browser, t: *Tab) void {
 }
 
 fn dropJob(job: *Job) void {
-    job.gpa.free(job.address);
-    std.heap.c_allocator.destroy(job);
+    const ca = std.heap.c_allocator;
+    if (job.jpeg) |j| ca.free(j);
+    if (job.png) |p| ca.free(p);
+    if (job.cgimage) |i| cg.CGImageRelease(i);
+    ca.free(job.address);
+    ca.destroy(job);
 }
 
 fn snapped(job: *Job, image: ?objc.Object, _: ?objc.Object) void {
     const img = image orelse return dropJob(job);
     const pool = objc.Pool.push();
     defer pool.pop();
-    const cgimage: ?cg.Image = @ptrCast(objc.msg(?*anyopaque, img, "CGImageForProposedRect:context:hints:", .{ @as(?*anyopaque, null), @as(?objc.Object, null), @as(?objc.Object, null) }));
-    deliver(job, cgimage);
+    const raw: ?cg.Image = @ptrCast(objc.msg(?*anyopaque, img, "CGImageForProposedRect:context:hints:", .{ @as(?*anyopaque, null), @as(?objc.Object, null), @as(?objc.Object, null) }));
+    job.cgimage = if (raw) |r| CGImageRetain(r) else return dropJob(job);
+    dispatch.dispatch_async_f(dispatch.dispatch_get_global_queue(dispatch.qos_user_initiated, 0), job, encodeBg);
 }
 
 /// The kept JPEG, made small (`CGImageSourceCreateThumbnailAtIndex`, 360 px).
-fn thumbnail(job: *Job, jpeg: []const u8) void {
-    const pool = objc.Pool.push();
-    defer pool.pop();
-    const data = cg.CFDataCreate(null, jpeg.ptr, @intCast(jpeg.len)) orelse return dropJob(job);
+fn thumbnail(jpeg: []const u8) ?cg.Image {
+    const data = cg.CFDataCreate(null, jpeg.ptr, @intCast(jpeg.len)) orelse return null;
     defer cg.CFRelease(data);
-    const source = cg.CGImageSourceCreateWithData(data, null) orelse return dropJob(job);
+    const source = cg.CGImageSourceCreateWithData(data, null) orelse return null;
     defer cg.CFRelease(source);
     const keys = [_]objc.Object{ @ptrCast(@constCast(cg.kCGImageSourceCreateThumbnailFromImageAlways)), @ptrCast(@constCast(cg.kCGImageSourceThumbnailMaxPixelSize)) };
     const values = [_]objc.Object{ objc.msg(objc.Object, objc.class("NSNumber"), "numberWithBool:", .{objc.YES}), objc.msg(objc.Object, objc.class("NSNumber"), "numberWithInt:", .{@as(c_int, 360)}) };
     const options = objc.msg(objc.Object, objc.class("NSDictionary"), "dictionaryWithObjects:forKeys:count:", .{ &values, &keys, @as(objc.NSUInteger, 2) });
-    const image = cg.CGImageSourceCreateThumbnailAtIndex(source, 0, options);
-    defer if (image) |i| cg.CGImageRelease(i);
-    deliver(job, image);
+    return cg.CGImageSourceCreateThumbnailAtIndex(source, 0, options);
+}
+
+fn encodeBg(p: ?*anyopaque) callconv(.c) void {
+    const job: *Job = @ptrCast(@alignCast(p.?));
+    const pool = objc.Pool.push();
+    defer pool.pop();
+    if (job.jpeg) |j| job.cgimage = thumbnail(j);
+    if (job.cgimage) |cgimage| {
+        defer {
+            cg.CGImageRelease(cgimage);
+            job.cgimage = null;
+        }
+        job.w = @floatFromInt(cg.CGImageGetWidth(cgimage));
+        job.h = @floatFromInt(cg.CGImageGetHeight(cgimage));
+        const rep = objc.msg(objc.Object, objc.msg(objc.Object, objc.class("NSBitmapImageRep"), "alloc", .{}), "initWithCGImage:", .{@as(*anyopaque, @ptrCast(cgimage))});
+        defer objc.release(rep);
+        // NSBitmapImageFileTypePNG.
+        if (objc.msg(?objc.Object, rep, "representationUsingType:properties:", .{ @as(objc.NSUInteger, 4), objc.msg(objc.Object, objc.class("NSDictionary"), "dictionary", .{}) })) |data| {
+            const bytes: [*]const u8 = @ptrCast(objc.msg(*const anyopaque, data, "bytes", .{}));
+            job.png = std.heap.c_allocator.dupe(u8, bytes[0..objc.msg(objc.NSUInteger, data, "length", .{})]) catch null;
+        }
+    }
+    objc.dispatchMain(job, deliverFg);
 }
 
 /// The picture, as PNG, to the switcher that asked — if it still wants it.
-fn deliver(job: *Job, image: ?cg.Image) void {
+fn deliverFg(p: ?*anyopaque) callconv(.c) void {
+    const job: *Job = @ptrCast(@alignCast(p.?));
     defer dropJob(job);
     const t = Tab.alive(job.serial) orelse return;
     const b = t.browser orelse return;
     const s = &b.switcher;
     if (s.requests.get(job.id) != job.token) return;
     _ = s.requests.swapRemove(job.id);
-    const cgimage = image orelse return;
+    const png_bytes = job.png orelse return;
     if (!std.mem.eql(u8, t.address orelse "", job.address) or s.generation != job.generation or !s.visible) return;
     if (!(s.kept(job.id) or s.shown(job.id))) return;
-    const rep = objc.msg(objc.Object, objc.msg(objc.Object, objc.class("NSBitmapImageRep"), "alloc", .{}), "initWithCGImage:", .{@as(*anyopaque, @ptrCast(cgimage))});
-    defer objc.release(rep);
-    // NSBitmapImageFileTypePNG.
-    const data = objc.msg(?objc.Object, rep, "representationUsingType:properties:", .{ @as(objc.NSUInteger, 4), objc.msg(objc.Object, objc.class("NSDictionary"), "dictionary", .{}) }) orelse return;
-    const bytes: [*]const u8 = @ptrCast(objc.msg(*const anyopaque, data, "bytes", .{}));
-    const png = b.gpa.dupe(u8, bytes[0..objc.msg(objc.NSUInteger, data, "length", .{})]) catch return;
+    const png = b.gpa.dupe(u8, png_bytes) catch return;
     const address = b.gpa.dupe(u8, job.address) catch return b.gpa.free(png);
     s.pictures +%= 1;
     const entry = s.previews.getOrPut(b.gpa, job.id) catch {
@@ -429,8 +467,8 @@ fn deliver(job: *Job, image: ?cg.Image) void {
     entry.value_ptr.* = .{
         .address = address,
         .png = png,
-        .w = @floatFromInt(cg.CGImageGetWidth(cgimage)),
-        .h = @floatFromInt(cg.CGImageGetHeight(cgimage)),
+        .w = job.w,
+        .h = job.h,
         .serial = s.pictures,
     };
     b.redraw();

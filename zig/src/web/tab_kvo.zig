@@ -8,7 +8,8 @@ const Tab = @import("tab.zig").Tab;
 const currentUrl = @import("tab.zig").currentUrl;
 const Parts = @import("../data/url.zig").Parts;
 
-const keys = [_][:0]const u8{ "title", "URL", "loading", "estimatedProgress", "canGoBack", "canGoForward", "hasOnlySecureContent", "cameraCaptureState", "microphoneCaptureState" };
+const keys = [_][:0]const u8{ "title", "URL", "loading", "canGoBack", "canGoForward" };
+const capture_keys = [_][:0]const u8{ "cameraCaptureState", "microphoneCaptureState" };
 /// `AudioWatch.key`, outside the public framework: asked for first.
 const audio = "_isPlayingAudio";
 
@@ -30,16 +31,23 @@ pub fn watch(t: *Tab, wv: objc.Object) objc.Object {
     const o = objc.msg(objc.Object, class(), "new", .{});
     objc.setZig(o, t);
     for (keys) |k| objc.msg(void, wv, "addObserver:forKeyPath:options:context:", .{ o, objc.nsString(k), @as(objc.NSUInteger, 1), @as(?*anyopaque, null) });
+    t.observes_capture = t.kea.ext == null;
+    if (t.observes_capture) {
+        for (capture_keys) |k| objc.msg(void, wv, "addObserver:forKeyPath:options:context:", .{ o, objc.nsString(k), @as(objc.NSUInteger, 1), @as(?*anyopaque, null) });
+    }
     if (hearsAudio(wv)) objc.msg(void, wv, "addObserver:forKeyPath:options:context:", .{ o, objc.nsString(audio), @as(objc.NSUInteger, 1), @as(?*anyopaque, null) });
     return o;
 }
 
-pub fn stop(o: objc.Object, web: ?objc.Object) void {
+pub fn stop(o: objc.Object, web: ?objc.Object, watched_capture: bool) void {
     objc.setZig(o, null);
     if (web) |wv| {
         const pool = objc.Pool.push();
         defer pool.pop();
         for (keys) |k| objc.msg(void, wv, "removeObserver:forKeyPath:", .{ o, objc.nsString(k) });
+        if (watched_capture) {
+            for (capture_keys) |k| objc.msg(void, wv, "removeObserver:forKeyPath:", .{ o, objc.nsString(k) });
+        }
         if (hearsAudio(wv)) objc.msg(void, wv, "removeObserver:forKeyPath:", .{ o, objc.nsString(audio) });
     }
     objc.release(o);
@@ -63,14 +71,10 @@ fn observe(self: objc.Object, _: objc.SEL, path: ?objc.Object, object: ?objc.Obj
     if (std.mem.eql(u8, key, "URL")) return moved(t, wv);
     if (std.mem.eql(u8, key, "loading")) {
         t.loading = flag(wv, "isLoading");
-    } else if (std.mem.eql(u8, key, "estimatedProgress")) {
-        t.progress = @floatCast(objc.msg(f64, wv, "estimatedProgress", .{}));
     } else if (std.mem.eql(u8, key, "canGoBack")) {
         t.can_go_back = flag(wv, "canGoBack");
     } else if (std.mem.eql(u8, key, "canGoForward")) {
         t.can_go_forward = flag(wv, "canGoForward");
-    } else if (std.mem.eql(u8, key, "hasOnlySecureContent")) {
-        t.secure = flag(wv, "hasOnlySecureContent");
     } else if (std.mem.eql(u8, key, audio)) {
         const new = if (change) |c| objc.msg(?objc.Object, c, "objectForKey:", .{objc.nsString("new")}) else null;
         t.noisy = if (new) |n| objc.msg(objc.BOOL, n, "respondsToSelector:", .{objc.sel("boolValue")}) and objc.msg(objc.BOOL, n, "boolValue", .{}) else false;

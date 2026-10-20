@@ -50,7 +50,7 @@ fn sendWebScroll(wv: objc.Object, dy: i32) void {
 fn s14PageScroll(h: *Harness, b: *app.Browser, s: *ui.Surface, fl: *ui.FrameLog) ![3]SpanMark {
     b.prefs.set("shows_reading", true);
     const tab = try web.open(h, b, "kea-test://site/f/long.html");
-    smooth.waitUntilSettled(s, 0.5);
+    smooth.waitUntilSettled(s, 1.0);
     const wv = tab.web orelse return h.fail("no web view on long.html tab", .{});
 
     const m0 = fl.mark();

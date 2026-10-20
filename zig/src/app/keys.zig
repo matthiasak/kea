@@ -29,6 +29,7 @@ const fold = @import("../chrome/fold.zig");
 const page_find = @import("../web/page_find.zig");
 const curtain_js = @import("../web/curtain_js.zig");
 const little = @import("../web/little.zig");
+const popup = @import("../ext/popup.zig");
 
 const command = shortcuts.flag.command;
 const shift = shortcuts.flag.shift;
@@ -103,6 +104,23 @@ pub fn take(b: *Browser, event: objc.Object) bool {
     if (window) |w| if (objc.msg(?objc.Object, w, "sheetParent", .{}) != null) return false;
     // A small window's keys are its own (web/little.zig has its monitor).
     if (little.owning(window) != null) return false;
+    if (popup.owns(window)) {
+        const flags = objc.msg(objc.NSUInteger, event, "modifierFlags", .{}) & held;
+        if (objc.msg(u16, event, "keyCode", .{}) == 53 and flags == 0) {
+            popup.close();
+            return true;
+        }
+        if (flags == command) {
+            const pool = objc.Pool.push();
+            defer pool.pop();
+            const chars = objc.msg(?objc.Object, event, "charactersIgnoringModifiers", .{});
+            if (chars != null and std.mem.eql(u8, objc.fromNSString(objc.msg(objc.Object, chars.?, "lowercaseString", .{})), "w")) {
+                popup.close();
+                return true;
+            }
+        }
+        return false;
+    }
     // An extension's popup window: ⌘W closes it, not a tab of the window
     // menus act on; every other key is its page's.
     if (browsers.browserFor(b.kea, window)) |pw| if (pw.ext.popup != null) {
@@ -119,9 +137,8 @@ pub fn take(b: *Browser, event: objc.Object) bool {
     const pool = objc.Pool.push();
     defer pool.pop();
     const flags = objc.msg(objc.NSUInteger, event, "modifierFlags", .{}) & held;
+    if (flags & command == 0 and hasMarkedText(b, event)) return false;
     const code = objc.msg(u16, event, "keyCode", .{});
-    const chars = objc.msg(?objc.Object, event, "charactersIgnoringModifiers", .{});
-    const key = if (chars) |s| objc.fromNSString(objc.msg(objc.Object, s, "lowercaseString", .{})) else "";
     const own = if (b.window) |w| window == w.nswindow else window == null;
     const control_tab = code == 48 and flags & control != 0 and flags & (command | option) == 0;
 
@@ -154,6 +171,9 @@ pub fn take(b: *Browser, event: objc.Object) bool {
 
     // Escape puts the page back, one thing at a time.
     if (code == 53) return escape(b);
+    if (flags == 0 and code != 48 and !b.kea.shortcuts.anyChanged() and (b.kea.ext == null or b.kea.ext.?.contexts.count() == 0)) return false;
+    const chars = objc.msg(?objc.Object, event, "charactersIgnoringModifiers", .{});
+    const key = if (chars) |s| objc.fromNSString(objc.msg(objc.Object, s, "lowercaseString", .{})) else "";
 
     var buf: [32]u8 = undefined;
     const combo = shortcuts.fromEvent(event, &buf);
@@ -390,9 +410,11 @@ fn responder(event: objc.Object) ?objc.Object {
     return objc.msg(?objc.Object, w, "firstResponder", .{});
 }
 
+extern "c" fn objc_getClass(name: [*:0]const u8) ?objc.Class;
+
 fn pageHasKeys(event: objc.Object) bool {
     const r = responder(event) orelse return false;
-    const cls = objc.class("KeaZigPageView");
+    const cls = objc_getClass("KeaZigPageView") orelse return false;
     return objc.msg(objc.BOOL, r, "isKindOfClass:", .{cls});
 }
 
@@ -411,6 +433,17 @@ fn caretIn(b: *Browser, event: objc.Object) bool {
 fn editable(t: *const Tab) bool {
     const wv = t.web orelse return false;
     return objc.msg(?objc.Object, wv, "inputContext", .{}) != null;
+}
+
+/// An input method composing text keeps Tab, Return and Escape for itself.
+fn hasMarkedText(b: *Browser, event: objc.Object) bool {
+    if (responder(event)) |r| {
+        if (objc.msg(objc.BOOL, r, "isKindOfClass:", .{objc.class("NSTextView")}))
+            return objc.msg(objc.BOOL, r, "hasMarkedText", .{});
+        if (b.window) |w| if (w.surface) |s| if (r == s.nsview)
+            return if (s.ctx.focused_text) |ft| ft.marked != null else false;
+    }
+    return false;
 }
 
 /// ⇧⌘V: paste without formatting while something is being typed (a Google

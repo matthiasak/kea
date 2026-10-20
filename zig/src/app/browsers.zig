@@ -51,7 +51,7 @@ pub fn dockMenu(kea: *Kea) []const nanoui.MenuItem {
 }
 
 fn dockNewWindow(kea: *Kea, _: *nanoui.menu.Item) void {
-    _ = newWindow(kea) catch {};
+    _ = newWindow(kea) catch if (acting(kea)) |b| b.announce("Couldn't open a window");
 }
 
 // MARK: opening
@@ -102,6 +102,7 @@ fn openAs(kea: *Kea, record: ?*const WindowRecord, frame: ?CGRect, popup: ?[]con
         .on_close = .{ .ctx = b, .func = onClose },
         .should_close = .{ .ctx = b, .func = shouldClose },
         .on_key = .{ .ctx = b, .func = onKey },
+        .on_fullscreen = .{ .ctx = b, .func = onFullscreen },
         .content = .{ .view = ui.View.init(b, window_view.view) },
     });
     const ns = win.nswindow;
@@ -122,6 +123,7 @@ fn openAs(kea: *Kea, record: ?*const WindowRecord, frame: ?CGRect, popup: ?[]con
         objc.msg(void, ns, "setFrameTopLeftPoint:", .{top_left});
     };
     try b.bindWindow(win);
+    if (win.surface) |s| s.keys_released = .{ .ctx = b, .func = keysReleased };
     // Extensions see every window; the first one starts them (`register`,
     // `Extensions.start(for:)`, Browser.swift:1544).
     if (kea.ext) |e| e.start(b);
@@ -148,7 +150,11 @@ pub fn newWindow(kea: *Kea) !*Browser {
 pub fn show(b: *Browser) void {
     b.shut = false;
     if (b.kea.opts.hidden) return;
-    if (b.window) |w| w.show();
+    if (b.window) |w| {
+        if (objc.msg(objc.BOOL, w.nswindow, "isMiniaturized", .{}))
+            objc.msg(void, w.nswindow, "deminiaturize:", .{@as(?objc.Object, null)});
+        w.show();
+    }
     comeForward(b.kea);
 }
 
@@ -195,7 +201,7 @@ pub fn restore(kea: *Kea) void {
     const records = windows_file.read(&kea.store);
     defer records.deinit();
     if (records.value.len <= 1) return;
-    for (records.value[1..]) |*r| _ = reopenRecord(kea, r) catch continue;
+    for (records.value[1..]) |*r| _ = reopenRecord(kea, r) catch |err| @import("links.zig").logTrouble(kea, @errorName(err));
     // The first window in front, as the app opens.
     if (!kea.opts.hidden and kea.browsers.items.len > 0) if (kea.browsers.items[0].window) |w| w.show();
 }
@@ -227,7 +233,7 @@ fn shouldClose(ctx: *anyopaque, w: *nanoui.Window) bool {
     b.shut = true;
     b.flushSession();
     save(kea, true);
-    w.hide();
+    if (w.isFullScreen()) w.setFullScreen(false) else w.hide();
     return false;
 }
 
@@ -279,8 +285,10 @@ fn remember(kea: *Kea, b: *Browser) void {
 fn becomePrimary(b: *Browser) void {
     b.becomePrimary();
     // The first window, opened next launch, comes back where this one is.
-    if (b.kea.opts.root == null and !b.kea.opts.hidden) if (b.window) |w|
+    if (b.kea.opts.root == null and !b.kea.opts.hidden) if (b.window) |w| {
+        _ = objc.msg(objc.BOOL, w.nswindow, "setFrameAutosaveName:", .{objc.nsString("kea")});
         objc.msg(void, w.nswindow, "saveFrameUsingName:", .{objc.nsString("kea")});
+    };
 }
 
 /// ⇧⌘T for a window: it comes back where it was, with its tabs.
@@ -400,6 +408,16 @@ fn onKey(ctx: *anyopaque, w: *nanoui.Window) void {
     b.kea.windows.front = b;
     b.handOff();
     if (b.kea.ext) |e| e.focused(b);
+}
+
+fn onFullscreen(ctx: *anyopaque, w: *nanoui.Window) void {
+    const b: *Browser = @ptrCast(@alignCast(ctx));
+    if (b.shut and !w.isFullScreen()) w.hide();
+}
+
+fn keysReleased(ctx: ?*anyopaque, _: *ui.Surface) void {
+    const b: *Browser = @ptrCast(@alignCast(ctx orelse return));
+    @import("../chrome/omnibox.zig").giveKeys(b);
 }
 
 // MARK: watching frames (`Browsers.watchFrames`)

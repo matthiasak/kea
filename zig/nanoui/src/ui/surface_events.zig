@@ -98,6 +98,7 @@ fn hitTest(obj: objc.Object, _: objc.SEL, point: objc.CGPoint) callconv(.c) ?obj
 /// The view gives up the keyboard (a page took it): no box has the focus.
 fn resignFirstResponder(obj: objc.Object, _: objc.SEL) callconv(.c) objc.BOOL {
     const s = surfaceOf(obj) orelse return objc.YES;
+    s.last_focus = 0;
     if (s.ctx.focus != 0) {
         s.ctx.focus = 0;
         s.requestFrame();
@@ -126,6 +127,9 @@ fn press(obj: objc.Object, event: objc.Object, button: input.Button) void {
     s.ctx.text_menu = false;
     s.ctx.pointerDown();
     s.frame();
+    if (s.ctx.focus == 0) {
+        if (s.keys_released) |kr| kr.func(kr.ctx, s);
+    }
     if (s.ctx.text_menu) {
         s.ctx.text_menu = false;
         textinput.popMenu(s);
@@ -181,6 +185,7 @@ fn mouseDragged(obj: objc.Object, _: objc.SEL, event: objc.Object) callconv(.c) 
 fn mouseMoved(obj: objc.Object, _: objc.SEL, event: objc.Object) callconv(.c) void {
     const s = surfaceOf(obj) orelse return;
     setMouse(s, event);
+    if (s.transparent and s.ctx.inStageHoleAt(s.ctx.input.mouse) and s.ctx.hot == 0) return;
     const before = s.ctx.hot;
     s.ctx.updateHot();
     if (s.ctx.hot != before or s.ctx.wants_moves) {
@@ -406,6 +411,12 @@ fn displayLinkFired(obj: objc.Object, _: objc.SEL, link: objc.Object) callconv(.
     const s = surfaceOf(obj) orelse return;
     const target: f64 = if (s.link_fps == 0) objc.msg(f64, link, "targetTimestamp", .{}) else 0;
     const duration: f64 = if (s.link_fps == 0) objc.msg(f64, link, "duration", .{}) else 0;
+    const now = if (target > 0) target else cf.CACurrentMediaTime();
+    const frame_in_due = s.ctx.frame_in != null and now >= s.frame_in_due - 0.001;
+    if (!s.full_pending and !frame_in_due and !s.ctx.animating and !s.in_live_resize and !s.geometry_changed and !s.pending_sync and s.ctx.time_driven != .none) {
+        s.redrawRetained(target, duration);
+        return;
+    }
     s.frameAt(.link, target, duration);
 }
 

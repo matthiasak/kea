@@ -5,7 +5,6 @@ const std = @import("std");
 const objc = @import("../objc.zig");
 const cf = @import("cf.zig");
 const types = @import("types.zig");
-const turn = @import("turn.zig");
 
 extern "c" fn CTFontGetBoundingRectsForGlyphs(font: cf.CTFontRef, orientation: u32, glyphs: [*]const u16, rects: ?[*]objc.CGRect, count: cf.CFIndex) objc.CGRect;
 extern "c" fn CTFontDrawGlyphs(font: cf.CTFontRef, glyphs: [*]const u16, positions: [*]const objc.CGPoint, count: usize, ctx: cf.CGContextRef) void;
@@ -31,7 +30,7 @@ pub const Sprite = struct {
 };
 
 const Key = struct { font: u16, glyph: u16, bin: u8 };
-const SymbolKey = struct { name: u64, size_bits: u32, weight: u8, step: u8 };
+const SymbolKey = struct { name: u64, size_bits: u32, weight: u8 };
 
 pub const Atlas = struct {
     gpa: std.mem.Allocator,
@@ -196,16 +195,15 @@ pub const Atlas = struct {
 
     /// The SF Symbol `name` at `point_size` and `weight` (0 regular … 3
     /// bold), as a mask: `x`, `y` are 0 and `w`, `h` its size in points.
-    /// Turned clockwise by `step` (`turn.zig`), it is the square it turns in.
-    pub fn symbol(a: *Atlas, name: []const u8, point_size: f32, weight: u8, step: u8) ?Sprite {
-        const key: SymbolKey = .{ .name = std.hash.Wyhash.hash(0, name), .size_bits = @bitCast(point_size), .weight = weight, .step = step };
+    pub fn symbol(a: *Atlas, name: []const u8, point_size: f32, weight: u8) ?Sprite {
+        const key: SymbolKey = .{ .name = std.hash.Wyhash.hash(0, name), .size_bits = @bitCast(point_size), .weight = weight };
         if (a.symbols.get(key)) |sp| return sp;
-        const sp = a.rasterizeSymbol(name, point_size, weight, step);
+        const sp = a.rasterizeSymbol(name, point_size, weight);
         a.symbols.put(a.gpa, key, sp) catch {};
         return sp;
     }
 
-    fn rasterizeSymbol(a: *Atlas, name: []const u8, point_size: f32, weight: u8, step: u8) ?Sprite {
+    fn rasterizeSymbol(a: *Atlas, name: []const u8, point_size: f32, weight: u8) ?Sprite {
         const pool = objc.Pool.push();
         defer pool.pop();
         const base = objc.msg(?objc.Object, objc.class("NSImage"), "imageWithSystemSymbolName:accessibilityDescription:", .{
@@ -226,10 +224,6 @@ pub const Atlas = struct {
         const rect: objc.CGRect = .{ .origin = .{ .x = pad, .y = pad }, .size = .{ .width = @floatFromInt(w), .height = @floatFromInt(h) } };
         const dw = w + 2 * pad;
         const dh = h + 2 * pad;
-        const turned = step != 0;
-        const bw = if (turned) turn.side(dw, dh) else dw;
-        const bh = if (turned) bw else dh;
-        if (bw > max_size) return null;
         // AppKit draws the symbol, into color (it can't into a mask), and
         // the mask keeps its coverage: the symbol's CGImage holds only the
         // strokes' outlines on recent macOS.
@@ -247,30 +241,24 @@ pub const Atlas = struct {
         objc.msg(void, objc.class("NSGraphicsContext"), "restoreGraphicsState", .{});
         a.pixels.resize(a.gpa, dw * dh) catch return null;
         for (a.pixels.items, 0..) |*m, i| m.* = rgba[i * 4 + 3];
-        if (turned) {
-            const flat = a.gpa.dupe(u8, a.pixels.items) catch return null;
-            defer a.gpa.free(flat);
-            a.pixels.resize(a.gpa, bw * bh) catch return null;
-            turn.turned(flat, dw, dh, step, a.pixels.items, bw);
-        }
-        const origin = a.allocate(bw, bh) orelse blk: {
+        const origin = a.allocate(dw, dh) orelse blk: {
             a.makeRoom();
-            break :blk a.allocate(bw, bh) orelse return null;
+            break :blk a.allocate(dw, dh) orelse return null;
         };
-        a.upload(origin, bw, bh);
+        a.upload(origin, dw, dh);
         const as: f32 = @floatFromInt(a.size);
         const p: f32 = @as(f32, pad) / scale;
         return .{
             .uv = .{
                 @as(f32, @floatFromInt(origin[0])) / as,
                 @as(f32, @floatFromInt(origin[1])) / as,
-                @as(f32, @floatFromInt(origin[0] + bw)) / as,
-                @as(f32, @floatFromInt(origin[1] + bh)) / as,
+                @as(f32, @floatFromInt(origin[0] + dw)) / as,
+                @as(f32, @floatFromInt(origin[1] + dh)) / as,
             },
             .x = -p,
             .y = -p,
-            .w = @as(f32, @floatFromInt(bw)) / scale,
-            .h = @as(f32, @floatFromInt(bh)) / scale,
+            .w = @as(f32, @floatFromInt(dw)) / scale,
+            .h = @as(f32, @floatFromInt(dh)) / scale,
         };
     }
 

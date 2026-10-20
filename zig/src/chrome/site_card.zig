@@ -172,7 +172,7 @@ fn openPanel(b: *Browser, t: *Tab) void {
     const s = p.window.surface.?;
     const bounds = objc.msg(objc.CGRect, s.nsview, "bounds", .{});
     const glass = objc.msg(objc.Object, objc.alloc("NSVisualEffectView"), "initWithFrame:", .{bounds});
-    objc.msg(void, glass, "setMaterial:", .{@as(objc.NSInteger, 6)}); // .popover
+    objc.msg(void, glass, "setMaterial:", .{@as(objc.NSInteger, 5)}); // .menu
     objc.msg(void, glass, "setBlendingMode:", .{@as(objc.NSInteger, 0)}); // .behindWindow
     objc.msg(void, glass, "setState:", .{@as(objc.NSInteger, 1)}); // .active
     objc.msg(void, glass, "setWantsLayer:", .{objc.YES});
@@ -298,7 +298,7 @@ fn safety(t: *const Tab, certified: ?bool) ?Safety {
             .detail = "This site's certificate isn't trusted by this Mac. Someone could be reading what you send.",
             .trust = trust,
         };
-        if (t.web != null and !t.secure) return .{
+        if (t.web) |wv| if (!objc.msg(objc.BOOL, wv, "hasOnlySecureContent", .{})) return .{
             .title = "Parts of this page are not secure",
             .detail = "The page came privately, but some of what it shows was fetched over plain http, where anyone on the network could read or change it.",
             .trust = trust,

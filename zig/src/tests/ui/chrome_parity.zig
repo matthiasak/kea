@@ -54,3 +54,16 @@ test "chrome keeps the arrow over a tab" {
     f.tester.frame();
     try t.expect(!f.tester.ctx.cursor_hand);
 }
+
+test "new group name arrives selected" {
+    var f: Fixture = undefined;
+    try f.init(t.allocator, .{ .sidebar = true, .tabs = 2 });
+    defer f.deinit();
+    const b = f.browser;
+    b.prefs.set("uses_tab_groups", true);
+    const id = b.addTabGroup(b.tabs.items[1]);
+    b.editing_group_id = id;
+    f.tester.settle(0.5);
+    f.tester.typeText("W");
+    try t.expectEqualStrings("W", b.column.group_draft.text());
+}

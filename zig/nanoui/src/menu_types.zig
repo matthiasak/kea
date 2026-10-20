@@ -54,6 +54,7 @@ pub fn MenuItem(comptime Item: type) type {
         /// "CmdOrCtrl+Shift+K", "Alt+Up", "F5", "Cmd+,".
         accelerator: []const u8 = "",
         role: ?Role = null,
+        selector: ?[:0]const u8 = null,
         kind: Kind = .normal,
         checked: bool = false,
         disabled: bool = false,

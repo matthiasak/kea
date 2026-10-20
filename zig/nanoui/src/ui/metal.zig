@@ -24,6 +24,7 @@ pub const DrawStats = struct {
     encode_ms: f64 = 0,
     sync: bool = false,
     presented: bool = false,
+    queued: u8 = 0,
 };
 
 const DoneSlot = struct {
@@ -31,17 +32,38 @@ const DoneSlot = struct {
     log: ?*FrameLog = null,
     record_idx: usize = 0,
 };
+
+const PresentState = struct {
+    gen: std.atomic.Value(u32) = .init(1),
+    queued: std.atomic.Value(u32) = .init(0),
+    last_present: std.atomic.Value(u64) = .init(0),
+    targets: [4]std.atomic.Value(u64) = @splat(.init(0)),
+};
+
+var present_states: [32]PresentState = @splat(.{});
+var next_present_state: std.atomic.Value(u32) = .init(0);
+
+const MTLScissorRect = extern struct { x: objc.NSUInteger, y: objc.NSUInteger, width: objc.NSUInteger, height: objc.NSUInteger };
+
 pub const Renderer = struct {
     /// The image atlas on the GPU, copied when its generation changes.
     images_texture: ?objc.Object = null,
     images_generation: u64 = std.math.maxInt(u64),
+    layer_texture: ?objc.Object = null,
+    layer_w: usize = 0,
+    layer_h: usize = 0,
     device: objc.Object,
     queue: objc.Object,
     pipeline: objc.Object,
     glass: metal_glass.Glass,
     layer: objc.Object,
+    framebuffer_only: bool = true,
     live_resize: bool = false,
     present_at: f64 = 0,
+    time: f32 = 0,
+    present_state_idx: u8 = 0,
+    present_gen: u32 = 0,
+    next_present: usize = 0,
     /// Instances go into one of three buffers, reused once the GPU is done
     /// with the frame that last used it.
     buffers: [frames_in_flight]?objc.Object = @splat(null),
@@ -50,7 +72,6 @@ pub const Renderer = struct {
     in_flight: objc.dispatch_semaphore_t,
     done_slots: [frames_in_flight]DoneSlot = @splat(.{}),
     next_done: usize = 0,
-
     pub fn init() !Renderer {
         const pool = objc.Pool.push();
         defer pool.pop();
@@ -75,11 +96,10 @@ pub const Renderer = struct {
         const layer = objc.new("CAMetalLayer");
         objc.msg(void, layer, "setDevice:", .{device});
         objc.msg(void, layer, "setPixelFormat:", .{pixel_format});
-        // Readable: panes of glass read what the frame drew under them.
-        objc.msg(void, layer, "setFramebufferOnly:", .{objc.NO});
-        // Two drawables: a frame takes the GPU well under a millisecond, and
-        // frames are drawn on demand, so a third would only hold memory
-        // (a window-sized buffer, 13 MB for a large window).
+        // Framebuffer-only until a pane of glass needs to read the backdrop.
+        objc.msg(void, layer, "setFramebufferOnly:", .{objc.YES});
+        // Three drawables: up to two queued for display while one renders;
+        // if two are already queued, non-resize frames skip instead of blocking.
         objc.msg(void, layer, "setMaximumDrawableCount:", .{@as(objc.NSUInteger, 3)});
         objc.msg(void, layer, "setAllowsNextDrawableTimeout:", .{objc.YES});
         objc.msg(void, layer, "setOpaque:", .{objc.YES});
@@ -88,7 +108,13 @@ pub const Renderer = struct {
             defer cf.CGColorSpaceRelease(srgb);
             objc.msg(void, layer, "setColorspace:", .{srgb});
         }
-        return .{ .device = device, .queue = queue, .pipeline = pipeline, .glass = glass, .layer = layer, .in_flight = objc.dispatch_semaphore_create(frames_in_flight) };
+        const ps_idx: u8 = @intCast(next_present_state.fetchAdd(1, .monotonic) % present_states.len);
+        const ps = &present_states[ps_idx];
+        const gen = ps.gen.fetchAdd(1, .acq_rel) + 1;
+        ps.queued.store(0, .release);
+        ps.last_present.store(0, .release);
+        for (&ps.targets) |*t| t.store(0, .release);
+        return .{ .device = device, .queue = queue, .pipeline = pipeline, .glass = glass, .layer = layer, .present_state_idx = ps_idx, .present_gen = gen, .in_flight = objc.dispatch_semaphore_create(frames_in_flight) };
     }
 
     /// Brings the GPU's copy of the image atlas up to date (made on the
@@ -129,6 +155,8 @@ pub const Renderer = struct {
 
     pub fn deinit(self: *Renderer) void {
         if (self.images_texture) |t| objc.release(t);
+        _ = present_states[self.present_state_idx].gen.fetchAdd(1, .acq_rel);
+        if (self.layer_texture) |t| objc.release(t);
         // Wait for the frames in flight: their handlers signal this renderer.
         self.waitIdle();
         objc.dispatch_release(self.in_flight);
@@ -146,6 +174,12 @@ pub const Renderer = struct {
     }
 
     pub fn resize(self: *Renderer, size: types.Size, scale: f32) void {
+        if (self.layer_texture) |t| {
+            objc.release(t);
+            self.layer_texture = null;
+            self.layer_w = 0;
+            self.layer_h = 0;
+        }
         objc.msg(void, self.layer, "setContentsScale:", .{@as(f64, scale)});
         objc.msg(void, self.layer, "setDrawableSize:", .{objc.CGSize{
             .width = @max(1, @round(size.w * scale)),
@@ -161,14 +195,55 @@ pub const Renderer = struct {
     pub fn drawLogged(self: *Renderer, instances: []const Instance, atlas: objc.Object, size: types.Size, clear: types.Color, log: ?*FrameLog, record_idx: usize) DrawStats {
         const pool = objc.Pool.push();
         defer pool.pop();
+        const ps = &present_states[self.present_state_idx];
+        var q_before = ps.queued.load(.acquire);
+        if (!self.live_resize and q_before >= 2) {
+            const lp: f64 = @bitCast(ps.last_present.load(.acquire));
+            const now = cf.CACurrentMediaTime();
+            if (lp > 0 and now - lp > 0.5) {
+                ps.last_present.store(@bitCast(now), .release);
+                for (&ps.targets) |*t| t.store(0, .release);
+                ps.queued.store(0, .release);
+                q_before = 0;
+            } else {
+                var oldest: f64 = 0;
+                for (&ps.targets) |*t_atom| {
+                    const t: f64 = @bitCast(t_atom.load(.acquire));
+                    if (t > 0 and (oldest == 0 or t < oldest)) oldest = t;
+                }
+                // ponytail: addPresentedHandler: arrives ~16-24 ms after targetTimestamp via IPC; only skip when a pending present is >30 ms overdue.
+                if (oldest > 0 and now - oldest > 0.030) {
+                    return .{ .sync = false, .presented = false, .queued = @intCast(@min(q_before, 255)) };
+                }
+            }
+        }
+        if (self.framebuffer_only) {
+            for (instances) |inst| if (inst.kind == Kind.glass) {
+                objc.msg(void, self.layer, "setFramebufferOnly:", .{objc.NO});
+                self.framebuffer_only = false;
+                break;
+            };
+        }
         const t0 = cf.CACurrentMediaTime();
         if (objc.dispatch_semaphore_wait(self.in_flight, dispatch_time(0, std.time.ns_per_s)) != 0) {
-            return .{ .drawable_wait_ms = (cf.CACurrentMediaTime() - t0) * 1000, .sync = self.live_resize };
+            return .{ .drawable_wait_ms = (cf.CACurrentMediaTime() - t0) * 1000, .sync = self.live_resize, .queued = @intCast(@min(q_before, 255)) };
         }
         const drawable = objc.msg(?objc.Object, self.layer, "nextDrawable", .{}) orelse {
             _ = objc.dispatch_semaphore_signal(self.in_flight);
-            return .{ .drawable_wait_ms = (cf.CACurrentMediaTime() - t0) * 1000, .sync = self.live_resize };
+            return .{ .drawable_wait_ms = (cf.CACurrentMediaTime() - t0) * 1000, .sync = self.live_resize, .queued = @intCast(@min(q_before, 255)) };
         };
+        const q_acq = ps.queued.load(.acquire);
+        const sync = self.live_resize;
+        if (!sync) {
+            _ = ps.queued.fetchAdd(1, .acq_rel);
+            if (q_acq == 0) ps.last_present.store(@bitCast(cf.CACurrentMediaTime()), .release);
+            const p_idx = self.next_present;
+            self.next_present = (p_idx + 1) % ps.targets.len;
+            ps.targets[p_idx].store(@bitCast(self.present_at), .release);
+            const packed_ctx: usize = (@as(usize, self.present_gen) << 16) | (@as(usize, self.present_state_idx) << 8) | p_idx;
+            var pres = objc.Block(u8, &.{objc.Object}).init(@ptrFromInt(packed_ctx), presented);
+            objc.msg(void, drawable, "addPresentedHandler:", .{@as(*anyopaque, @ptrCast(&pres))});
+        }
         const t1 = cf.CACurrentMediaTime();
         const texture = objc.msg(objc.Object, drawable, "texture", .{});
         const buffer = self.upload(instances);
@@ -179,7 +254,6 @@ pub const Renderer = struct {
         var done = objc.Block(DoneSlot, &.{objc.Object}).init(&self.done_slots[slot_idx], frameDone);
         objc.msg(void, cmd, "addCompletedHandler:", .{@as(*anyopaque, @ptrCast(&done))});
         const t2 = cf.CACurrentMediaTime();
-        const sync = self.live_resize;
         if (sync) {
             // In the layer's transaction: a resizing window never shows a
             // stretched or misplaced frame.
@@ -195,7 +269,23 @@ pub const Renderer = struct {
             .encode_ms = (t2 - t1) * 1000,
             .sync = sync,
             .presented = true,
+            .queued = @intCast(@min(q_acq, 255)),
         };
+    }
+
+    fn presented(ctx_ptr: *u8, _: objc.Object) void {
+        const packed_ctx: usize = @intFromPtr(ctx_ptr);
+        const slot_idx: u8 = @truncate(packed_ctx);
+        const state_idx: u8 = @truncate(packed_ctx >> 8);
+        const gen: u32 = @truncate(packed_ctx >> 16);
+        const ps = &present_states[state_idx];
+        if (ps.gen.load(.acquire) != gen) return;
+        ps.targets[slot_idx].store(0, .release);
+        ps.last_present.store(@bitCast(cf.CACurrentMediaTime()), .release);
+        var cur = ps.queued.load(.acquire);
+        while (cur > 0) {
+            if (ps.queued.cmpxchgWeak(cur, cur - 1, .acq_rel, .acquire)) |next| cur = next else break;
+        }
     }
 
     fn frameDone(slot: *DoneSlot, cmd: objc.Object) void {
@@ -203,7 +293,18 @@ pub const Renderer = struct {
             const gpu_s = objc.msg(f64, cmd, "GPUEndTime", .{}) - objc.msg(f64, cmd, "GPUStartTime", .{});
             log.setGpuMs(slot.record_idx, @max(0, gpu_s * 1000));
         }
-        _ = objc.dispatch_semaphore_signal(slot.renderer.in_flight);
+        const r = slot.renderer;
+        const ps = &present_states[r.present_state_idx];
+        if (ps.queued.load(.acquire) > 0) {
+            const lp: f64 = @bitCast(ps.last_present.load(.acquire));
+            const now = cf.CACurrentMediaTime();
+            if (lp > 0 and now - lp > 0.5) {
+                ps.last_present.store(@bitCast(now), .release);
+                for (&ps.targets) |*t| t.store(0, .release);
+                ps.queued.store(0, .release);
+            }
+        }
+        _ = objc.dispatch_semaphore_signal(r.in_flight);
     }
 
     /// Copies `instances` into the next buffer of the ring, grown as needed.
@@ -316,18 +417,45 @@ pub const Renderer = struct {
     }
 
     /// Draws instances [first, first + count) with `pipeline`.
-    fn drawRange(self: *Renderer, enc: objc.Object, pipeline: objc.Object, buffer: objc.Object, atlas: objc.Object, size: types.Size, first: usize, count: usize) void {
+    fn ensureLayerTexture(self: *Renderer, w: usize, h: usize) objc.Object {
+        if (self.layer_texture) |t| {
+            if (self.layer_w == w and self.layer_h == h) return t;
+            objc.release(t);
+        }
+        const desc = objc.msg(objc.Object, objc.class("MTLTextureDescriptor"), "texture2DDescriptorWithPixelFormat:width:height:mipmapped:", .{
+            pixel_format, w, h, objc.NO,
+        });
+        objc.msg(void, desc, "setUsage:", .{@as(objc.NSUInteger, 1 | 4)}); // shader read, render target
+        objc.msg(void, desc, "setStorageMode:", .{@as(objc.NSUInteger, 2)}); // private
+        const t = objc.msg(objc.Object, self.device, "newTextureWithDescriptor:", .{desc});
+        self.layer_texture = t;
+        self.layer_w = w;
+        self.layer_h = h;
+        return t;
+    }
+
+    /// Draws instances [first, first + count) with `pipeline`.
+    fn drawRange(self: *Renderer, enc: objc.Object, pipeline: objc.Object, buffer: objc.Object, atlas: objc.Object, layer_tex: ?objc.Object, size: types.Size, first: usize, count: usize) void {
         const viewport: [2]f32 = .{ size.w, size.h };
         objc.msg(void, enc, "setRenderPipelineState:", .{pipeline});
         objc.msg(void, enc, "setVertexBuffer:offset:atIndex:", .{ buffer, @as(objc.NSUInteger, 0), @as(objc.NSUInteger, 0) });
         objc.msg(void, enc, "setVertexBytes:length:atIndex:", .{ @as(*const anyopaque, &viewport), @as(objc.NSUInteger, 8), @as(objc.NSUInteger, 1) });
+        objc.msg(void, enc, "setVertexBytes:length:atIndex:", .{ @as(*const anyopaque, &self.time), @as(objc.NSUInteger, 4), @as(objc.NSUInteger, 2) });
         objc.msg(void, enc, "setFragmentBuffer:offset:atIndex:", .{ buffer, @as(objc.NSUInteger, 0), @as(objc.NSUInteger, 0) });
         objc.msg(void, enc, "setFragmentTexture:atIndex:", .{ atlas, @as(objc.NSUInteger, 0) });
         // Pictures, when there are any; else the atlas stands in (unread).
         objc.msg(void, enc, "setFragmentTexture:atIndex:", .{ self.images_texture orelse atlas, @as(objc.NSUInteger, 1) });
+        if (layer_tex) |lt| objc.msg(void, enc, "setFragmentTexture:atIndex:", .{ lt, @as(objc.NSUInteger, 2) });
         objc.msg(void, enc, "drawPrimitives:vertexStart:vertexCount:instanceCount:baseInstance:", .{
             @as(objc.NSUInteger, 4), @as(objc.NSUInteger, 0), @as(objc.NSUInteger, 4), @as(objc.NSUInteger, count), @as(objc.NSUInteger, first), // triangle strip
         });
+    }
+
+    fn nextSplit(instances: []const Instance, from: usize) ?usize {
+        for (instances[from..], from..) |inst, k| {
+            if (inst.kind == Kind.glass or inst.kind == Kind.layer_begin) return k;
+        }
+        return null;
     }
 
     fn encode(self: *Renderer, texture: objc.Object, instance_buffer: ?objc.Object, instances: []const Instance, atlas: objc.Object, size: types.Size, clear: types.Color) objc.Object {
@@ -336,26 +464,80 @@ pub const Renderer = struct {
             objc.msg(void, pass(cmd, texture, clear), "endEncoding", .{});
             return cmd;
         };
-        const scale: f32 = @as(f32, @floatFromInt(objc.msg(objc.NSUInteger, texture, "width", .{}))) / size.w;
+        const tex_w = objc.msg(objc.NSUInteger, texture, "width", .{});
+        const tex_h = objc.msg(objc.NSUInteger, texture, "height", .{});
+        const scale: f32 = @as(f32, @floatFromInt(tex_w)) / size.w;
         var first: usize = 0;
         var cleared = false;
         while (true) {
-            // What comes before the next pane, in one draw.
-            const pane_at = metal_glass.next(instances, first);
-            const end = pane_at orelse instances.len;
-            const enc = pass(cmd, texture, if (cleared) null else clear);
-            cleared = true;
-            if (end > first) self.drawRange(enc, self.pipeline, buffer, atlas, size, first, end - first);
-            objc.msg(void, enc, "endEncoding", .{});
-            const at = pane_at orelse break;
-            first = at + 1;
-            // The pane: its backdrop from what was drawn, then the pane.
-            const p = self.glass.backdrop(self.device, cmd, texture, instances[at], scale) orelse continue;
-            const genc = pass(cmd, texture, null);
-            objc.msg(void, genc, "setFragmentBytes:length:atIndex:", .{ @as(*const anyopaque, &p), @as(objc.NSUInteger, @sizeOf(metal_glass.Pane)), @as(objc.NSUInteger, 1) });
-            objc.msg(void, genc, "setFragmentTexture:atIndex:", .{ self.glass.a.?, @as(objc.NSUInteger, 2) });
-            self.drawRange(genc, self.glass.pipeline, buffer, atlas, size, at, 1);
-            objc.msg(void, genc, "endEncoding", .{});
+            const split_at = nextSplit(instances, first);
+            const end = split_at orelse instances.len;
+            if (end > first or !cleared) {
+                const enc = pass(cmd, texture, if (cleared) null else clear);
+                cleared = true;
+                if (end > first) self.drawRange(enc, self.pipeline, buffer, atlas, atlas, size, first, end - first);
+                objc.msg(void, enc, "endEncoding", .{});
+            }
+            const at = split_at orelse break;
+            if (instances[at].kind == Kind.glass) {
+                first = at + 1;
+                const p = self.glass.backdrop(self.device, cmd, texture, instances[at], scale) orelse continue;
+                const genc = pass(cmd, texture, null);
+                objc.msg(void, genc, "setFragmentBytes:length:atIndex:", .{ @as(*const anyopaque, &p), @as(objc.NSUInteger, @sizeOf(metal_glass.Pane)), @as(objc.NSUInteger, 1) });
+                self.drawRange(genc, self.glass.pipeline, buffer, atlas, self.glass.a.?, size, at, 1);
+                objc.msg(void, genc, "endEncoding", .{});
+                continue;
+            }
+            // Kind.layer_begin .. Kind.layer_end
+            var end_at = at + 1;
+            while (end_at < instances.len and instances[end_at].kind != Kind.layer_end) : (end_at += 1) {}
+            first = if (end_at < instances.len) end_at + 1 else instances.len;
+            if (end_at <= at + 1 or end_at >= instances.len) continue;
+            const r = instances[at].rect;
+            const fw: f32 = @floatFromInt(tex_w);
+            const fh: f32 = @floatFromInt(tex_h);
+            const sx0: usize = @intFromFloat(std.math.clamp(@floor(r[0] * scale), 0, fw));
+            const sy0: usize = @intFromFloat(std.math.clamp(@floor(r[1] * scale), 0, fh));
+            const sx1: usize = @intFromFloat(std.math.clamp(@ceil((r[0] + r[2]) * scale), 0, fw));
+            const sy1: usize = @intFromFloat(std.math.clamp(@ceil((r[1] + r[3]) * scale), 0, fh));
+            if (sx1 <= sx0 or sy1 <= sy0) continue;
+            // Any glass inside the group draws in the main pass before the group.
+            for (instances[at + 1 .. end_at], at + 1..) |gi, gk| {
+                if (gi.kind == Kind.glass) {
+                    const p = self.glass.backdrop(self.device, cmd, texture, gi, scale) orelse continue;
+                    const genc = pass(cmd, texture, null);
+                    objc.msg(void, genc, "setFragmentBytes:length:atIndex:", .{ @as(*const anyopaque, &p), @as(objc.NSUInteger, @sizeOf(metal_glass.Pane)), @as(objc.NSUInteger, 1) });
+                    self.drawRange(genc, self.glass.pipeline, buffer, atlas, self.glass.a.?, size, gk, 1);
+                    objc.msg(void, genc, "endEncoding", .{});
+                }
+            }
+            const ltex = self.ensureLayerTexture(tex_w, tex_h);
+            const lenc = pass(cmd, ltex, types.Color.transparent);
+            objc.msg(void, lenc, "setScissorRect:", .{MTLScissorRect{ .x = sx0, .y = sy0, .width = sx1 - sx0, .height = sy1 - sy0 }});
+            var seg_start = at + 1;
+            while (seg_start < end_at) {
+                var seg_end = seg_start;
+                while (seg_end < end_at and instances[seg_end].kind != Kind.glass) : (seg_end += 1) {}
+                if (seg_end > seg_start) self.drawRange(lenc, self.pipeline, buffer, atlas, atlas, size, seg_start, seg_end - seg_start);
+                seg_start = seg_end + 1;
+            }
+            objc.msg(void, lenc, "endEncoding", .{});
+            var comp_inst = instances[end_at];
+            comp_inst.kind = Kind.layer_composite;
+            const cenc = pass(cmd, texture, null);
+            const viewport: [2]f32 = .{ size.w, size.h };
+            objc.msg(void, cenc, "setRenderPipelineState:", .{self.pipeline});
+            objc.msg(void, cenc, "setVertexBytes:length:atIndex:", .{ @as(*const anyopaque, &comp_inst), @as(objc.NSUInteger, @sizeOf(Instance)), @as(objc.NSUInteger, 0) });
+            objc.msg(void, cenc, "setVertexBytes:length:atIndex:", .{ @as(*const anyopaque, &viewport), @as(objc.NSUInteger, 8), @as(objc.NSUInteger, 1) });
+            objc.msg(void, cenc, "setVertexBytes:length:atIndex:", .{ @as(*const anyopaque, &self.time), @as(objc.NSUInteger, 4), @as(objc.NSUInteger, 2) });
+            objc.msg(void, cenc, "setFragmentBytes:length:atIndex:", .{ @as(*const anyopaque, &comp_inst), @as(objc.NSUInteger, @sizeOf(Instance)), @as(objc.NSUInteger, 0) });
+            objc.msg(void, cenc, "setFragmentTexture:atIndex:", .{ atlas, @as(objc.NSUInteger, 0) });
+            objc.msg(void, cenc, "setFragmentTexture:atIndex:", .{ self.images_texture orelse atlas, @as(objc.NSUInteger, 1) });
+            objc.msg(void, cenc, "setFragmentTexture:atIndex:", .{ ltex, @as(objc.NSUInteger, 2) });
+            objc.msg(void, cenc, "drawPrimitives:vertexStart:vertexCount:instanceCount:baseInstance:", .{
+                @as(objc.NSUInteger, 4), @as(objc.NSUInteger, 0), @as(objc.NSUInteger, 4), @as(objc.NSUInteger, 1), @as(objc.NSUInteger, 0),
+            });
+            objc.msg(void, cenc, "endEncoding", .{});
         }
         return cmd;
     }

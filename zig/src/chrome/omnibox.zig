@@ -69,7 +69,7 @@ pub const Options = struct {
 /// The field over `area`, the page's part of the window.
 pub fn view(b: *Browser, c: *ui.Context, p: *const Palette, area: ui.Rect, opts: Options) void {
     const st = &b.omnibox;
-    const showing = b.fieldShowing();
+    const showing = b.fieldShowing() and !b.welcoming;
     notice(b, st, showing);
     if (showing) st.over = if (b.activeTab()) |t| !t.isBlank() else false;
     const v = arrival(c, st, showing) orelse {
@@ -141,18 +141,33 @@ fn notice(b: *Browser, st: *State, showing: bool) void {
 
 /// The keyboard back to the page once the field is done with it, a turn
 /// later (`handBack`): typing would otherwise go nowhere.
-fn handBack(b: *Browser, showing: bool) void {
-    if (showing or b.editing_tab != null) return;
+pub fn giveKeys(b: *Browser) void {
+    if (b.fieldShowing() or b.editing_tab != null) return;
     const t = b.activeTab() orelse return;
-    objc.dispatchMain(@ptrFromInt(t.serial), giveKeys);
+    objc.dispatchMain(@ptrFromInt(t.serial), giveKeysNow);
 }
 
-fn giveKeys(ctx: ?*anyopaque) callconv(.c) void {
+fn handBack(b: *Browser, showing: bool) void {
+    if (!showing) giveKeys(b);
+}
+
+fn giveKeysNow(ctx: ?*anyopaque) callconv(.c) void {
+    applyKeys(ctx, true);
+}
+
+fn giveKeysRetry(ctx: ?*anyopaque) callconv(.c) void {
+    applyKeys(ctx, false);
+}
+
+fn applyKeys(ctx: ?*anyopaque, retry: bool) void {
     const t = Tab.alive(@intFromPtr(ctx)) orelse return;
     const b = t.browser orelse return;
     if (b.fieldShowing() or b.editing_tab != null) return;
     const wv = t.web orelse return;
-    const window = objc.msg(?objc.Object, wv, "window", .{}) orelse return;
+    const window = objc.msg(?objc.Object, wv, "window", .{}) orelse {
+        if (retry) objc.dispatchAfter(50 * std.time.ns_per_ms, ctx, giveKeysRetry);
+        return;
+    };
     if (objc.msg(?objc.Object, window, "firstResponder", .{})) |r| {
         if (r == wv or (objc.msg(objc.BOOL, r, "isKindOfClass:", .{objc.class("NSView")}) and objc.msg(objc.BOOL, r, "isDescendantOf:", .{wv}))) return;
     }
@@ -324,6 +339,7 @@ fn field(b: *Browser, c: *ui.Context, p: *const Palette, st: *State, x: f32, y: 
     }
     st.text_id = text_id;
     const res = ui.textField(c, buf, .{ .bare = true, .size = 15.5, .width = .fill, .selection_color = p.ink.alpha(0.12), .caret_color = p.ink });
+    if (focused and c.focus == 0 and showing and (c.input.key == .escape or hasCommand(c, .cancel))) c.focus = text_id;
     if (res.changed) typedChanged(b, c, st, deleting);
     if (res.submitted and showing) b.submit(false, false);
 }

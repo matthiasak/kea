@@ -189,6 +189,7 @@ fn parkedShape(self: *Browser, arena: std.mem.Allocator, space: Uuid, row: *cons
 
 /// `rememberSession`: written a moment from now, once for many changes.
 pub fn rememberSession(self: *Browser) void {
+    if (!self.restoring) if (self.kea.ext) |e| e.follow(self);
     if (self.remembering != null or self.restoring) return;
     // ponytail: c_allocator, so a tick that fires after its browser has gone frees itself.
     const t = std.heap.c_allocator.create(Tick) catch return;
@@ -248,6 +249,7 @@ pub fn restoreSession(self: *Browser) void {
         const t = self.make("", false);
         self.adopt(t);
         self.active_id = t.id;
+        if (self.uses_files) objc.dispatchAfter(std.time.ns_per_s, @ptrFromInt(t.serial), warmBlank);
         return;
     };
     self.active_id = first.id;
@@ -261,6 +263,11 @@ fn wakeVisible(self: *Browser) void {
     for (self.visibleTabIDs()) |id| if (self.tabById(id)) |t| {
         _ = t.wake();
     };
+}
+
+fn warmBlank(ctx: ?*anyopaque) callconv(.c) void {
+    const t = Tab.alive(@intFromPtr(ctx)) orelse return;
+    if (!t.built and t.isBlank()) t.build();
 }
 
 /// A space's row as its session left it, made without touching the one

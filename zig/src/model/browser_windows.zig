@@ -84,12 +84,15 @@ fn contains(r: objc.CGRect, p: objc.CGPoint, outset: f64) bool {
 fn detach(self: *Browser, tab: *Tab) void {
     const index = self.indexOf(tab) orelse return;
     const partner = self.partnerOf(tab);
+    const float = @import("../web/float.zig");
+    if (float.floating(self) == tab.id) float.land(self);
+    tab.floating = false;
     self.detachSplit(tab);
     if (self.active_id == tab.id) {
         if (partner) |p| {
-            self.select(p);
+            @import("browser_tabs.zig").selectEx(self, p, false);
         } else if (self.tabs.items.len > 1) {
-            self.select(self.tabs.items[if (index == self.tabs.items.len - 1) index - 1 else index + 1]);
+            @import("browser_tabs.zig").selectEx(self, self.tabs.items[if (index == self.tabs.items.len - 1) index - 1 else index + 1], false);
         } else self.active_id = 0;
     }
     _ = self.tabs.orderedRemove(index);
@@ -111,7 +114,7 @@ pub fn receive(self: *Browser, tab: *Tab) void {
     defer blanks.deinit(self.gpa);
     for (self.tabs.items) |t| if (t.isBlank() and !self.inSplit(t)) blanks.append(self.gpa, t.id) catch return;
     self.tabs.insert(self.gpa, self.placeForNew(), tab) catch @panic("OOM");
-    self.select(tab);
+    @import("browser_tabs.zig").selectEx(self, tab, false);
     if (self.tabs.items.len - blanks.items.len == 1 + self.pinnedCount()) {
         for (blanks.items) |id| if (self.tabById(id)) |blank| {
             _ = self.tabs.orderedRemove(self.indexOf(blank).?);

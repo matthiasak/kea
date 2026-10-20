@@ -128,7 +128,8 @@ pub fn closeFind(b: *Browser) void {
     // The keyboard back to the page, as in Safari.
     if (b.activeTab()) |t| if (t.web) |wv| if (objc.msg(?objc.Object, wv, "window", .{})) |window| {
         const first = objc.msg(?objc.Object, window, "firstResponder", .{});
-        if (first == null or first.? == window or objc.msg(objc.BOOL, first.?, "isKindOfClass:", .{objc.class("NSText")}))
+        const nsview = if (b.window) |w| if (w.surface) |s| s.nsview else null else null;
+        if (first == null or first.? == window or first == nsview or objc.msg(objc.BOOL, first.?, "isKindOfClass:", .{objc.class("NSText")}))
             _ = objc.msg(objc.BOOL, window, "makeFirstResponder:", .{wv});
     };
     b.redraw();

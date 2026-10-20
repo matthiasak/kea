@@ -29,6 +29,7 @@ pub const Item = struct {
     kind: Kind,
     checked: bool,
     click: ?Click,
+    selector: ?[:0]const u8 = null,
     on_open: ?Click = null,
     /// The submenu it holds, if it holds one.
     submenu: ?objc.Object = null,
@@ -213,9 +214,9 @@ pub const Menu = struct {
             } else group = 0;
             const ns = makeItem(t, self.app_name);
             defer objc.release(ns);
-            const it = try self.track(.{ .menu = self, .ns = ns, .id = t.id, .kind = t.kind, .checked = t.checked, .click = t.click, .group = group, .parent = parent });
+            const it = try self.track(.{ .menu = self, .ns = ns, .id = t.id, .kind = t.kind, .checked = t.checked, .click = t.click, .selector = t.selector, .group = group, .parent = parent });
             objc.msg(void, menu, "addItem:", .{ns});
-            if (t.role == null or t.click != null) {
+            if ((t.role == null and t.selector == null) or t.click != null) {
                 objc.msg(void, ns, "setTarget:", .{self.target});
                 objc.msg(void, ns, "setAction:", .{objc.sel("itemClicked:")});
             }
@@ -299,7 +300,7 @@ fn makeItem(t: MenuItem, app_name: []const u8) objc.Object {
             info.label;
         if (accel.len == 0) accel = info.accel;
         action = info.action;
-    }
+    } else if (t.selector) |sel| action = sel;
     const parsed = parseAccelerator(accel);
     var key_buf: [8]u8 = undefined;
     const key = parsed.keyString(&key_buf);

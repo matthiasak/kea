@@ -2,9 +2,10 @@
 //! its tab in front told to WebKit — tabs opened, closed, moved within a
 //! row or between windows, changed, activated. Swift subscribes to each
 //! browser's `$tabs`/`$activeID` and each tab's title/address/loading/pin;
-//! here `follow(b)` runs where the browser draws again (`Browser.redraw`,
-//! which every change of row, tab or front goes through) and diffs what
-//! WebKit last heard against what is there now.
+//! here `follow(b)` runs when a tab's address, title or loading state
+//! changes (`delegates_nav.zig` `tabChanged`) or when the row/active tab
+//! changes (`browser_rows.zig` `rememberSession`), diffing what WebKit last
+//! heard against what is there now.
 const std = @import("std");
 const objc = @import("nanoui").objc;
 const Extensions = @import("controller.zig").Extensions;
@@ -96,6 +97,24 @@ pub fn focused(self: *Extensions, b: *Browser) void {
 
 fn indexIn(list: []const u64, id: u64) ?usize {
     return std.mem.indexOfScalar(u64, list, id);
+}
+
+/// What changed in `b`'s row since WebKit last heard, told.
+pub fn followRow(self: *Extensions, b: *Browser) void {
+    const s = &self.following;
+    if (s.busy) return;
+    const r0 = s.rows.getPtr(b) orelse return;
+    if (r0.active == b.active_id and r0.order.items.len == b.tabs.items.len) {
+        var same = true;
+        for (r0.order.items, b.tabs.items) |id, t| {
+            if (!self.seen(t) or id != t.id) {
+                same = false;
+                break;
+            }
+        }
+        if (same) return;
+    }
+    follow(self, b);
 }
 
 /// What changed in `b`'s row since WebKit last heard, told.

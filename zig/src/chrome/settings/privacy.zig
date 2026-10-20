@@ -51,8 +51,10 @@ fn sites(b: *Browser, c: *ui.Context, p: *const Palette) void {
         }
     };
     frame.rule(c, p);
-    if (frame.switchLine(c, p, "Prevent cross-site tracking", "As in Safari. Off, sites you rarely open keep their sign-ins, and trackers inside other sites can follow you across them again, as in Chrome. Private tabs keep it on", !prefs.keeps_sign_ins))
+    if (frame.switchLine(c, p, "Prevent cross-site tracking", "As in Safari. Off, sites you rarely open keep their sign-ins, and trackers inside other sites can follow you across them again, as in Chrome. Private tabs keep it on", !prefs.keeps_sign_ins)) {
         prefs.set("keeps_sign_ins", !prefs.keeps_sign_ins);
+        @import("../../web/config.zig").followSignInsAll(kea, prefs.keeps_sign_ins);
+    }
     frame.rule(c, p);
     plate.line(c, p, "Camera, microphone, location and notifications", "What each site was allowed or refused, and the sites whose videos don't float");
     if (controls.pill(c, p, "Forget choices", .{}).clicked) forgetCaptureChoices(b);

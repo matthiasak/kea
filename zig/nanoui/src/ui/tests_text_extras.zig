@@ -3,7 +3,6 @@
 const std = @import("std");
 const testing = std.testing;
 const ui = @import("ui.zig");
-const turn = @import("turn.zig");
 
 const path = "/Users/someone/Library/Application Support/Somewhere/deep/down/report-final.pdf";
 
@@ -65,21 +64,20 @@ test "rounded is its own face where the system has one" {
         try testing.expect(@abs(w - t.text.width("Return ⌘", .{ .size = 12 })) > 0.01);
 }
 
-test "a quarter turn is the square it turns in, on the same centre" {
-    try testing.expectEqual(@as(u8, 30), turn.quantize(std.math.pi / 2.0));
-    try testing.expectEqual(@as(u8, 0), turn.quantize(0));
+test "a quarter turn sets xf rotation on the same centre" {
     var r: Row = .{};
     var t: ui.Tester = undefined;
     try t.init(testing.allocator, .init(&r, Row.view), .{});
     defer t.deinit();
     const before = glyph(&t) orelse return error.SkipZigTest;
+    try testing.expectEqual(@as(f32, 0), before.xf[0]);
     r.turned = true;
     t.frame();
     const after = glyph(&t).?;
-    try testing.expectApproxEqAbs(after.rect[2], after.rect[3], 0.01);
-    try testing.expectApproxEqAbs(before.rect[0] + before.rect[2] / 2, after.rect[0] + after.rect[2] / 2, 0.51);
-    try testing.expectApproxEqAbs(before.rect[1] + before.rect[3] / 2, after.rect[1] + after.rect[3] / 2, 0.51);
-    try testing.expect(!std.mem.eql(f32, &before.uv, &after.uv));
+    try testing.expectApproxEqAbs(std.math.pi / 2.0, after.xf[0], 0.001);
+    try testing.expectApproxEqAbs(before.rect[0] + before.rect[2] / 2, after.xf[2], 0.51);
+    try testing.expectApproxEqAbs(before.rect[1] + before.rect[3] / 2, after.xf[3], 0.51);
+    try testing.expectEqualSlices(f32, &before.uv, &after.uv);
 }
 
 /// The one symbol's quad: the text-kind instance in the icon's row.

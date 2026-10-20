@@ -97,7 +97,10 @@ pub fn show(b: *Browser, url: []const u8, front: bool) ?*Little {
     if (monitor == null) monitor = appkit.addLocalMonitor(1 << 10, &monitor_ctx, keyDown);
     if (win.surface) |s| {
         self.host = StageHost.create(gpa, s) catch null;
-        if (self.host) |h| h.setPage(tab.web, false);
+        if (self.host) |h| {
+            h.setPage(tab.web, false);
+            if (tab.web) |wv| _ = objc.msg(objc.BOOL, win.nswindow, "makeFirstResponder:", .{wv});
+        }
         s.frame();
     }
     // Never a test run's in front: a run started hidden stays off every screen.
@@ -124,7 +127,11 @@ pub fn owning(window: ?objc.Object) ?*Little {
 /// A tab said something changed: its small window draws again.
 pub fn changed(t: *const Tab) void {
     if (of(t)) |l| {
-        if (l.host) |h| if (t.web) |wv| h.setPage(wv, false);
+        if (l.host) |h| if (t.web) |wv| {
+            const had = h.slots.items.len > 0 and h.slots.items[0].webview == wv;
+            h.setPage(wv, false);
+            if (!had) _ = objc.msg(objc.BOOL, l.window.nswindow, "makeFirstResponder:", .{wv});
+        };
         l.window.redraw();
     }
 }

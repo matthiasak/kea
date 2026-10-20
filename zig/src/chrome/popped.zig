@@ -163,6 +163,7 @@ pub fn windowOf(b: *Browser, panel: SidePanel) ?*nanoui.Window {
 pub fn followBookmarks(kea: *Kea) void {
     const want = kea.prefs.bookmarks_sidebar and kea.prefs.marks_popped;
     if (want == (kea.marks_window != null)) return;
+    for (kea.browsers.items) |b| b.marks_ui.hunt_focus = true;
     if (want) {
         kea.marks_window = open(kea, .bookmarks, null);
     } else {

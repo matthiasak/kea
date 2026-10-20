@@ -100,7 +100,7 @@ fn nameField(b: *Browser, c: *ui.Context, p: *const Palette, group: *const TabGr
     const w: ui.Length = if (horizontal) px(@max(60, headingWidth(c, group.name) - 20)) else .fill;
     const placeholder = st.group_draft.text().len == 0;
     _ = c.open(.{ .width = w }, null);
-    if (claim) ui.focusNext(c, false);
+    if (claim) ui.focusNext(c, true);
     const res = ui.textField(c, &st.group_draft, .{ .bare = true, .size = name_style.size, .width = .fill, .selection_color = p.ink.alpha(0.12), .caret_color = p.ink });
     // After the field, so the first key typed leaves its id (its focus) be.
     if (placeholder) _ = c.leaf(.{ .absolute = true }, .{ .text = .{ .str = "Group name", .style = name_style, .color = p.faint } }, null);

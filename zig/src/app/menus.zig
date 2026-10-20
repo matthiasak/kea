@@ -45,6 +45,7 @@ pub fn install(kea: *Kea) void {
         kea.menus.arenas[i] = arena;
     }
     app.setMenu(&made) catch return;
+    setServices(app, kea);
     kea.menus.installed = true;
     kea.shortcuts.on_change = keysChanged;
 }
@@ -106,6 +107,7 @@ fn opened(kea: *Kea, item: *Item) void {
     const arena = fresh(kea) orelse return;
     const made = items(arena.allocator(), kea, b, top) catch return drop(kea, arena);
     item.setSubmenu(made) catch return drop(kea, arena);
+    if (top == .app) if (kea.ui_app) |app| setServices(app, kea);
     const i = @intFromEnum(top);
     if (kea.menus.arenas[i]) |old| drop(kea, old);
     kea.menus.arenas[i] = arena;
@@ -114,6 +116,11 @@ fn opened(kea: *Kea, item: *Item) void {
 fn drop(kea: *Kea, a: *std.heap.ArenaAllocator) void {
     a.deinit();
     kea.gpa.destroy(a);
+}
+
+fn setServices(app: *nanoui.App, _: *Kea) void {
+    if (app.menuItem("menu.services")) |it| if (it.submenu) |sub|
+        nanoui.objc.msg(void, app.nsapp, "setServicesMenu:", .{sub});
 }
 
 /// Settings › Shortcuts changed a key: every command's item wears its own now.
@@ -157,6 +164,8 @@ const Act = struct {
 
     fn fire(self: *Act, _: *Item) void {
         const b = browsers.acting(self.kea) orelse return;
+        const opens_window = self.what == .command and std.mem.eql(u8, self.what.command, "file.newWindow");
+        if (b.shut and !opens_window) browsers.show(b);
         switch (self.what) {
             .command => |id| run(id, b),
             .close_both => b.closeSplit(),
@@ -270,6 +279,8 @@ pub fn items(a: std.mem.Allocator, kea: *Kea, b: *Browser, top: Top) ![]const Me
             // ponytail: Passkeys require AuthenticationServices / signed app entitlements; Extensions require WKWebExtensionController on macOS 15.4+.
             try m.command("app.passwords", .{});
             try m.line();
+            try m.add(.{ .label = "Services", .id = "menu.services", .submenu = &.{} });
+            try m.line();
             try m.role(.hide);
             try m.role(.hide_others);
             try m.role(.unhide);
@@ -291,6 +302,7 @@ pub fn items(a: std.mem.Allocator, kea: *Kea, b: *Browser, top: Top) ![]const Me
             try m.command("file.import", .{});
             try m.line();
             try m.command("file.closeTab", .{});
+            try m.add(.{ .role = .close, .label = "Close Window", .accelerator = "Cmd+Shift+W" });
             try m.line();
             try m.command("file.share", .{ .disabled = blank });
             try m.command("file.print", .{ .disabled = blank });
@@ -299,7 +311,10 @@ pub fn items(a: std.mem.Allocator, kea: *Kea, b: *Browser, top: Top) ![]const Me
             // ponytail: .undo and .redo route through the responder chain (NanoUIView.undo:/redo: on s.ctx when a nanoui text field has focus, falling back to WKWebView when a page has focus).
             for ([_]nanoui.menu.Role{ .undo, .redo }) |r| try m.role(r);
             try m.line();
-            for ([_]nanoui.menu.Role{ .cut, .copy, .paste, .select_all }) |r| try m.role(r);
+            for ([_]nanoui.menu.Role{ .cut, .copy, .paste }) |r| try m.role(r);
+            try m.add(.{ .label = "Paste and Match Style", .accelerator = "Cmd+Alt+Shift+V", .selector = "pasteAsPlainText:" });
+            try m.add(.{ .label = "Delete", .selector = "delete:" });
+            try m.role(.select_all);
             try m.line();
             try m.command("edit.find", .{ .disabled = blank });
             try m.command("edit.findNext", .{ .disabled = !b.finder.finding });

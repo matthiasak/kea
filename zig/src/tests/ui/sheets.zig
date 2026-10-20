@@ -192,3 +192,17 @@ test "Settings fields with a placeholder keep focus past the first key" {
     for ("ht") |ch| f.tester.typeText(&.{ch});
     try t.expectEqualStrings("ht", b.prefs.custom_engine);
 }
+
+test "Welcome keeps keys off the hidden field" {
+    var f: Fixture = undefined;
+    try f.init(gpa, .{ .welcome = true });
+    defer f.deinit();
+    const b = f.browser;
+    try t.expect(b.welcoming);
+    f.tester.typeText("a");
+    f.tester.frame();
+    try t.expectEqual(@as(usize, 0), b.omni.typed.items.len);
+    f.tester.key(.enter);
+    f.tester.frame();
+    try t.expectEqual(@as(u32, 0), b.refusals);
+}

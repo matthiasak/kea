@@ -135,6 +135,8 @@ pub const Glass = struct {
     };
 };
 
+pub const Pulse = struct { period: f32, scale_amp: f32, alpha_low: f32 };
+
 pub const Style = struct {
     direction: Direction = .column,
     gap: f32 = 0,
@@ -201,6 +203,11 @@ pub const Style = struct {
     /// it is, as SwiftUI animates a stack's rows; its ancestors' offsets
     /// and scrolling aside.
     settle_y: ?Spring = null,
+    rotation: f32 = 0,
+    spin: f32 = 0,
+    pulse: ?Pulse = null,
+    motion_blur: bool = false,
+    group: bool = false,
 };
 
 /// A spring as SwiftUI writes one (`motion.zig`).

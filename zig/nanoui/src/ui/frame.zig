@@ -26,6 +26,8 @@ pub fn run(c: *Context, view: View, ts: *text.TextSystem, instances: *std.ArrayL
     c.theme = theme;
     c.animating = false;
     c.frame_in = null;
+    c.time_driven = .none;
+    c.painting_group = false;
     ts.setFamilies(theme.font, theme.mono_font);
     ts.beginFrame();
 
@@ -54,6 +56,7 @@ pub fn run(c: *Context, view: View, ts: *text.TextSystem, instances: *std.ArrayL
     c.scroll_moved.clearRetainingCapacity();
     _ = layout.measure(c, 0, size.w);
     layout.arrange(c, 0, .{ .w = size.w, .h = size.h });
+    std.mem.swap(std.AutoHashMapUnmanaged(u64, types.Rect), &c.prev_rects, &c.rects);
     c.rects.clearRetainingCapacity();
     for (c.nodes.items) |n| c.rects.put(c.gpa, n.id, n.rect) catch {};
     for (c.stage_nodes[0..c.stage_count], 0..) |nidx, si| {

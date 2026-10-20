@@ -19,6 +19,9 @@ struct Instance {
     float border_width;  // blur radius for shadows
     float kind;
     float clip_round;    // corners * 4096 + radius (gpu.zig's clipRound)
+    float4 xf;           // angle0 rad, spin rad/s, pivot x, pivot y
+    float4 pulse;        // period s, scale_amp, alpha_low, unused
+    float4 vel;          // blur vector x, y in points, unused, unused
 };
 
 struct VOut {
@@ -26,22 +29,53 @@ struct VOut {
     float2 local;
     float2 world;
     float2 uv;
+    float2 vel [[flat]];
+    float pulse_alpha [[flat]];
     uint inst [[flat]];
 };
 
 vertex VOut vs(uint vid [[vertex_id]], uint iid [[instance_id]],
                constant Instance *instances [[buffer(0)]],
-               constant float2 &viewport [[buffer(1)]]) {
+               constant float2 &viewport [[buffer(1)]],
+               constant float &time [[buffer(2)]]) {
     Instance i = instances[iid];
     float2 corner = float2(vid & 1, vid >> 1);
     // Shadows reach three standard deviations past their box.
     float grow = (i.kind == 2 || i.kind == 5) ? i.border_width * 3.0 : 0.0;
-    float2 p = i.rect.xy - grow + corner * (i.rect.zw + 2.0 * grow);
+    float2 v = i.vel.xy;
+    float vlen = length(v);
+    if (vlen > 24.0) {
+        v *= 24.0 / vlen;
+        vlen = 24.0;
+    }
+    bool has_blur = (vlen > 0.5) && (i.kind == 0.0 || i.kind == 1.0 || i.kind == 3.0);
+    float2 grow2 = float2(grow) + (has_blur ? abs(v) * 0.5 : float2(0.0));
+    float2 p_unrot = i.rect.xy - grow2 + corner * (i.rect.zw + 2.0 * grow2);
+    float2 p = p_unrot;
+    float pulse_alpha = 1.0;
+    float angle = i.xf.x + i.xf.y * time;
+    if (angle != 0.0 || i.pulse.x > 0.0) {
+        float2 d = p - i.xf.zw;
+        if (i.pulse.x > 0.0) {
+            float s = 0.5 - 0.5 * cos(2.0 * M_PI_F * time / i.pulse.x);
+            float k = 1.0 + i.pulse.y * (2.0 * s - 1.0);
+            d *= k;
+            pulse_alpha = mix(i.pulse.z, 1.0, s);
+        }
+        if (angle != 0.0) {
+            float ca = cos(angle);
+            float sa = sin(angle);
+            d = float2(ca * d.x - sa * d.y, sa * d.x + ca * d.y);
+        }
+        p = i.xf.zw + d;
+    }
     VOut o;
     o.pos = float4(p / viewport * float2(2.0, -2.0) + float2(-1.0, 1.0), 0.0, 1.0);
-    o.local = p - i.rect.xy;
+    o.local = p_unrot - i.rect.xy;
     o.world = p;
-    o.uv = mix(i.uv.xy, i.uv.zw, corner);
+    o.uv = has_blur ? (i.uv.xy + (p_unrot - i.rect.xy) / max(i.rect.zw, float2(1e-4)) * (i.uv.zw - i.uv.xy)) : mix(i.uv.xy, i.uv.zw, corner);
+    o.vel = has_blur ? v : float2(0.0);
+    o.pulse_alpha = pulse_alpha;
     o.inst = iid;
     return o;
 }
@@ -129,7 +163,7 @@ static float corner_sdf(float2 p, float2 half_size, float r_in) {
     float2 q = float2(cx - dx, cx - dy);
     return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - cr;
 }
-static float4 shade(VOut in, Instance i, texture2d<float> atlas, texture2d<float> images);
+static float4 shade(VOut in, Instance i, texture2d<float> atlas, texture2d<float> images, texture2d<float> layer_tex);
 
 // How much of the fragment the instance's clip lets through: discarded
 // outside it, cut in its rounded corners.
@@ -155,16 +189,37 @@ static float clip_coverage(VOut in, Instance i) {
 fragment float4 fs(VOut in [[stage_in]],
                    constant Instance *instances [[buffer(0)]],
                    texture2d<float> atlas [[texture(0)]],
-                   texture2d<float> images [[texture(1)]]) {
+                   texture2d<float> images [[texture(1)]],
+                   texture2d<float> layer_tex [[texture(2)]]) {
     Instance i = instances[in.inst];
     float clip_cover = clip_coverage(in, i);
-    return shade(in, i, atlas, images) * clip_cover;
+    return shade(in, i, atlas, images, layer_tex) * (clip_cover * in.pulse_alpha);
 }
 
-static float4 shade(VOut in, Instance i, texture2d<float> atlas, texture2d<float> images) {
+static float4 shade(VOut in, Instance i, texture2d<float> atlas, texture2d<float> images, texture2d<float> layer_tex) {
+    if (i.kind == 8.0) {
+        return layer_tex.read(uint2(in.pos.xy)) * i.color.a;
+    }
+    if (i.kind == 6.0 || i.kind == 7.0) {
+        return float4(0.0);
+    }
+
+    bool blur = length(in.vel) > 0.5;
     if (i.kind == 1.0) {
         constexpr sampler s(filter::linear, address::clamp_to_edge);
-        float a = atlas.sample(s, in.uv).r * i.color.a;
+        float a = 0.0;
+        if (blur) {
+            float2 duv = in.vel / max(i.rect.zw, float2(1e-4)) * (i.uv.zw - i.uv.xy);
+            for (int k = 0; k < 5; k++) {
+                float2 uvk = in.uv - duv * (float(k) * 0.25 - 0.5);
+                if (uvk.x >= i.uv.x && uvk.x <= i.uv.z && uvk.y >= i.uv.y && uvk.y <= i.uv.w) {
+                    a += atlas.sample(s, uvk).r;
+                }
+            }
+            a *= 0.2 * i.color.a;
+        } else {
+            a = atlas.sample(s, in.uv).r * i.color.a;
+        }
         return float4(i.color.rgb * a, a);
     }
 
@@ -173,12 +228,21 @@ static float4 shade(VOut in, Instance i, texture2d<float> atlas, texture2d<float
     float r_abs = min(abs(i.radius), min(half_size.x, half_size.y));
     float r = i.radius < 0.0 ? -r_abs : r_abs;
     float d = corner_sdf(p, half_size, r);
+    float aa = max(fwidth(d), 0.0001) * 0.5;
 
     if (i.kind == 3.0) {
         // Premultiplied already: scaled by the corners' coverage and opacity.
         constexpr sampler s(filter::linear, address::clamp_to_edge);
-        float aa = max(fwidth(d), 0.0001) * 0.5;
-        float coverage = 1.0 - smoothstep(-aa, aa, d);
+        float coverage = 0.0;
+        if (blur) {
+            for (int k = 0; k < 5; k++) {
+                float dk = corner_sdf(p - in.vel * (float(k) * 0.25 - 0.5), half_size, r);
+                coverage += 1.0 - smoothstep(-aa, aa, dk);
+            }
+            coverage *= 0.2;
+        } else {
+            coverage = 1.0 - smoothstep(-aa, aa, d);
+        }
         float4 px = images.sample(s, in.uv);
         // Tinted: the picture's shape in one color (a mark following the theme).
         if (i.border_color.a > 0.0) {
@@ -187,7 +251,6 @@ static float4 shade(VOut in, Instance i, texture2d<float> atlas, texture2d<float
         }
         return px * (coverage * i.color.a);
     }
-
     if (i.kind == 2.0 || i.kind == 5.0) {
         float sigma = max(i.border_width, 0.25);
         float a = shadow_alpha(p, half_size, r, sigma) * i.color.a;
@@ -198,8 +261,16 @@ static float4 shade(VOut in, Instance i, texture2d<float> atlas, texture2d<float
         return float4(i.color.rgb * a, a);
     }
 
-    float aa = max(fwidth(d), 0.0001) * 0.5;
-    float coverage = 1.0 - smoothstep(-aa, aa, d);
+    float coverage = 0.0;
+    if (blur) {
+        for (int k = 0; k < 5; k++) {
+            float dk = corner_sdf(p - in.vel * (float(k) * 0.25 - 0.5), half_size, r);
+            coverage += 1.0 - smoothstep(-aa, aa, dk);
+        }
+        coverage *= 0.2;
+    } else {
+        coverage = 1.0 - smoothstep(-aa, aa, d);
+    }
     float4 c = i.color;
     if (i.border_width > 0.0 && i.border_color.a > 0.0) {
         float inner = smoothstep(-i.border_width - aa, -i.border_width + aa, d);

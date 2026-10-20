@@ -12,6 +12,10 @@ pub const cases = [_]Case{
     .{ .name = "second window cascades and persists", .run = cascades },
     .{ .name = "closed window reopens and the last one is kept", .run = closing },
     .{ .name = "lights sit centred in the strip and follow a right column", .run = lights },
+    .{ .name = "⌘N opens a window with its field focused", .run = cmdNFocus },
+    .{ .name = "⇧⌘N makes a private tab", .run = shiftCmdNPrivate },
+    .{ .name = "start fresh keeps one window", .run = startFresh },
+    .{ .name = "dock reopen deminiaturizes", .run = dockReopen },
 };
 
 fn frameOf(b: *app.Browser) objc.CGRect {
@@ -116,4 +120,85 @@ fn lights(h: *Harness) !void {
     const zoom = objc.msg(objc.Object, ns, "standardWindowButton:", .{@as(objc.NSUInteger, 2)});
     const gap = (objc.msg(objc.CGRect, zoom, "frame", .{}).origin.x - objc.msg(objc.CGRect, close, "frame", .{}).origin.x) / 2;
     try h.expect(gap >= 16 and gap <= 32, "spacing {d}", .{gap});
+}
+
+fn cmdNFocus(h: *Harness) !void {
+    _ = try h.start();
+    const k = h.kea.?;
+    h.press("n", 45, true, false);
+    h.pump(0.1);
+    try h.expect(k.browsers.items.len == 2, "want 2 browsers, got {d}", .{k.browsers.items.len});
+    const sec = k.browsers.items[1];
+    const s = sec.window.?.surface.?;
+    try h.expect(sec.omnibox.text_id != 0 and s.ctx.focus == sec.omnibox.text_id, "new window field not focused", .{});
+    try h.expect(objc.msg(?objc.Object, sec.window.?.nswindow, "firstResponder", .{}) == s.nsview, "new window surface is not firstResponder", .{});
+}
+
+fn shiftCmdNPrivate(h: *Harness) !void {
+    const b = try h.start();
+    h.pressShift("n", 45, true, false);
+    h.frame();
+    const t = b.activeTab() orelse return h.fail("no active tab", .{});
+    try h.expect(t.shy, "active tab is not private", .{});
+}
+
+fn startFresh(h: *Harness) !void {
+    {
+        var store = try app.store.Store.init(h.gpa, h.temp.root, h.temp.suite);
+        defer store.deinit();
+        const recs = [_]app.windows_file.WindowRecord{
+            .{ .id = app.json.Uuid.random(), .frame = "{{100, 100}, {1000, 700}}" },
+            .{ .id = app.json.Uuid.random(), .frame = "{{120, 120}, {1000, 700}}" },
+        };
+        app.windows_file.write(&store, &recs, true);
+        const tabs = [_]app.session.Entry{
+            .{ .url = "https://pin.example/", .title = "Pin", .pin = "P" },
+            .{ .url = "https://loose.example/", .title = "Loose" },
+        };
+        app.session.write(&store, app.json.Uuid.first, .{ .tabs = &tabs, .active = 1 }, true);
+        store.setBool("start.fresh", true);
+    }
+    const b = try h.start();
+    const k = h.kea.?;
+    app.browsers.restore(k);
+    try h.expect(k.browsers.items.len == 1, "want 1 window after start fresh, got {d}", .{k.browsers.items.len});
+    const recs = app.windows_file.read(&k.store);
+    defer recs.deinit();
+    try h.expect(recs.value.len == 1, "windows.json has {d} records", .{recs.value.len});
+    try h.expect(b.pinnedCount() == 1 and b.tabs.items.len == 2 and b.activeTab().?.isBlank(), "pins={d} tabs={d}", .{ b.pinnedCount(), b.tabs.items.len });
+}
+
+fn dockReopen(h: *Harness) !void {
+    const b = try h.start();
+    const k = h.kea.?;
+    k.opts.hidden = false;
+    defer k.opts.hidden = true;
+    var called = false;
+    const cls = objc.defineClass(.{
+        .name = "KeaZigDeminiaturizeProbe",
+        .superclass = "NSWindow",
+        .methods = &.{
+            .{ .name = "isMiniaturized", .imp = &struct {
+                fn f(_: objc.Object, _: objc.SEL) callconv(.c) objc.BOOL {
+                    return objc.YES;
+                }
+            }.f, .types = "B@:" },
+            .{ .name = "deminiaturize:", .imp = &struct {
+                fn f(self_obj: objc.Object, _: objc.SEL, _: ?objc.Object) callconv(.c) void {
+                    if (objc.getZig(bool, self_obj)) |p| p.* = true;
+                }
+            }.f, .types = "v@:@" },
+            .{ .name = "makeKeyAndOrderFront:", .imp = &struct {
+                fn f(_: objc.Object, _: objc.SEL, _: ?objc.Object) callconv(.c) void {}
+            }.f, .types = "v@:@" },
+        },
+    });
+    const probe = objc.msg(objc.Object, cls, "new", .{});
+    defer objc.release(probe);
+    objc.setZig(probe, &called);
+    const saved = b.window.?.nswindow;
+    b.window.?.nswindow = probe;
+    defer b.window.?.nswindow = saved;
+    try h.expect(app.browsers.ensureWindow(k) == b, "ensureWindow did not return existing browser", .{});
+    try h.expect(called, "ensureWindow/show did not call deminiaturize: on miniaturized window", .{});
 }

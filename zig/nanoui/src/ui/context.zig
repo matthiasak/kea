@@ -34,8 +34,6 @@ pub const Content = union(enum) {
         size: f32,
         weight: types.Weight,
         color: types.Color,
-        /// Turned this many of `turn.steps` clockwise.
-        step: u8 = 0,
     };
 
     pub const Text = struct {
@@ -148,6 +146,7 @@ pub const Context = struct {
     a11y_items: std.ArrayList(A11yItem) = .empty,
     // Kept across frames.
     rects: std.AutoHashMapUnmanaged(u64, types.Rect) = .empty,
+    prev_rects: std.AutoHashMapUnmanaged(u64, types.Rect) = .empty,
     hits: std.ArrayList(Hit) = .empty,
     next_hits: std.ArrayList(Hit) = .empty,
     anims: std.AutoHashMapUnmanaged(u64, Anim) = .empty,
@@ -239,6 +238,8 @@ pub const Context = struct {
     scroll_x: std.AutoHashMapUnmanaged(u64, f32) = .empty,
     truncates: std.AutoHashMapUnmanaged(u64, text.Cut) = .empty,
     text_warmed: bool = false,
+    time_driven: enum { none, slow, fast } = .none,
+    painting_group: bool = false,
 
     pub fn init(gpa: std.mem.Allocator, ts: *text.TextSystem) Context {
         return .{ .gpa = gpa, .arena = .init(gpa), .text = ts };
@@ -250,6 +251,7 @@ pub const Context = struct {
         c.stack.deinit(c.gpa);
         c.a11y_items.deinit(c.gpa);
         c.rects.deinit(c.gpa);
+        c.prev_rects.deinit(c.gpa);
         c.hits.deinit(c.gpa);
         c.next_hits.deinit(c.gpa);
         c.hot_path.deinit(c.gpa);
@@ -333,6 +335,7 @@ pub const Context = struct {
 
     pub fn finish(c: *Context) void {
         c.building = false;
+        if (c.focus != 0 and std.mem.indexOfScalar(u64, c.focusable_ids.items, c.focus) == null) c.focus = 0;
         std.mem.swap(std.ArrayList(u64), &c.last_focusable_ids, &c.focusable_ids);
         if (c.right_press) {
             c.input.down = false;
@@ -361,12 +364,14 @@ pub const Context = struct {
         }
         c.motion.prune(c.frame);
         if (c.text_warmed) text.retainLayouts(c.text);
+        if (@hasField(@TypeOf(c.text.images), "wants_frame") and c.text.images.wants_frame) c.animationFrame();
     }
 
     fn warmMaps(c: *Context) void {
         c.nodes.ensureTotalCapacity(c.gpa, 4096) catch {};
         c.stack.ensureTotalCapacity(c.gpa, 128) catch {};
         c.rects.ensureTotalCapacity(c.gpa, 4096) catch {};
+        c.prev_rects.ensureTotalCapacity(c.gpa, 4096) catch {};
         c.hits.ensureTotalCapacity(c.gpa, 1024) catch {};
         c.next_hits.ensureTotalCapacity(c.gpa, 1024) catch {};
         c.a11y_items.ensureTotalCapacity(c.gpa, 1024) catch {};

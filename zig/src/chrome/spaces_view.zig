@@ -400,7 +400,10 @@ pub fn iconsPopover(b: *Browser, c: *ui.Context, p: *const Palette) void {
 fn create(b: *Browser, c: *ui.Context) void {
     const st = &b.spaces_ui;
     const named = std.mem.trim(u8, st.name.text(), " \t\r\n");
-    if (named.len == 0) return;
+    if (named.len == 0) {
+        st.focus_name = true;
+        return;
+    }
     const copy = b.gpa.dupe(u8, named) catch return;
     defer b.gpa.free(copy);
     st.card_open = false;

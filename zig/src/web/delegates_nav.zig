@@ -62,9 +62,19 @@ pub fn tabOf(delegate: objc.Object) ?*Tab {
 /// draws again.
 pub fn tabChanged(b: *Browser, t: *Tab, what: Change) void {
     switch (what) {
-        .address => if (!b.restoring and b.indexOf(t) != null) b.rememberSession(),
-        .title => if (t.page_title.len > 0) retitle(t),
-        .state => {},
+        .address => {
+            if (!b.restoring and b.indexOf(t) != null) b.rememberSession();
+            if (b.kea.ext) |e| e.follow(b);
+        },
+        .title => {
+            if (t.page_title.len > 0) retitle(t);
+            if (b.kea.ext) |e| e.follow(b);
+        },
+        .state => {
+            if (b.kea.ext) |e| if (e.following.seen.get(t.id)) |was| {
+                if (was.loading != t.loading or was.pinned != (t.pin != null)) e.follow(b);
+            };
+        },
     }
     b.redraw();
     // A small window's page draws in that window (Little.swift).

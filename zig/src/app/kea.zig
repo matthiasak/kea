@@ -117,6 +117,13 @@ pub const Kea = struct {
         self.site_search = SiteSearch.init(gpa, &self.store);
         self.pins = Pins.init(gpa, &self.store);
         self.spaces = spaces.read(&self.store);
+        if (self.prefs.starts_fresh) {
+            var ids: std.ArrayList(Uuid) = .empty;
+            defer ids.deinit(gpa);
+            for (self.spaces.value) |s| ids.append(gpa, s.id) catch {};
+            @import("../data/session.zig").startFresh(&self.store, ids.items);
+            @import("../data/windows_file.zig").startFresh(&self.store);
+        }
         // What a deleted space left behind, if WebKit wouldn't let it go then.
         @import("../model/spaces.zig").sweep(self);
         self.favicons = try Favicons.create(self);

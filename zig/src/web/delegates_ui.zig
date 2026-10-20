@@ -28,6 +28,7 @@ pub const methods = [_]objc.Method{
     .{ .name = "webView:requestMediaCapturePermissionForOrigin:initiatedByFrame:type:decisionHandler:", .imp = &askedForCapture, .types = "v@:@@@q@?" },
     .{ .name = "_webView:requestNotificationPermissionForSecurityOrigin:decisionHandler:", .imp = &@import("notifications.zig").asked, .types = "v@:@@@?" },
     .{ .name = "_webView:requestGeolocationPermissionForOrigin:initiatedByFrame:decisionHandler:", .imp = &askedForLocation, .types = "v@:@@@@?" },
+    .{ .name = "_webView:printFrame:pdfFirstPageSize:completionHandler:", .imp = &printFrame, .types = "v@:@@{CGSize=dd}@?" },
     .{ .name = "webViewDidClose:", .imp = &didClose, .types = "v@:@" },
     .{ .name = "webViewWebContentProcessDidTerminate:", .imp = &didTerminate, .types = "v@:@" },
 };
@@ -325,4 +326,38 @@ fn didTerminate(self: objc.Object, _: objc.SEL, _: objc.Object) callconv(.c) voi
             t.changed(.state);
         } else state.recoverFromCrash(t);
     } else t.stale = true;
+}
+
+extern "c" fn _Block_copy(block: ?*const anyopaque) ?objc.Object;
+extern "c" fn _Block_release(block: objc.Object) void;
+
+fn printFrame(self: objc.Object, _: objc.SEL, wv: objc.Object, frame: objc.Object, _: objc.CGSize, comp: *const anyopaque) callconv(.c) void {
+    const t = nav.tabOf(self) orelse return dialogs.call(comp, .{});
+    const pool = objc.Pool.push();
+    defer pool.pop();
+    const job = @import("../app/handoff.zig").printing(wv, frame);
+    if (t.kea.opts.root != null or t.kea.opts.hidden or t.isBlank()) return dialogs.call(comp, .{});
+    const b = t.browser orelse return dialogs.call(comp, .{});
+    if (t.id != b.active_id) return dialogs.call(comp, .{});
+    const window = objc.msg(?objc.Object, wv, "window", .{}) orelse return dialogs.call(comp, .{});
+    if (!objc.msg(objc.BOOL, window, "isKeyWindow", .{}) or objc.msg(?objc.Object, window, "attachedSheet", .{}) != null)
+        return dialogs.call(comp, .{});
+    const copied = _Block_copy(comp) orelse return dialogs.call(comp, .{});
+    const cls = objc.defineClass(.{
+        .name = "KeaZigPrintDelegate",
+        .methods = &.{
+            .{ .name = "printOperationDidRun:success:contextInfo:", .imp = &printDidRun, .types = "v@:@B^v" },
+        },
+    });
+    const del = objc.msg(objc.Object, cls, "new", .{});
+    objc.msg(void, job, "runOperationModalForWindow:delegate:didRunSelector:contextInfo:", .{
+        window, del, objc.sel("printOperationDidRun:success:contextInfo:"), @as(?*anyopaque, @ptrCast(copied)),
+    });
+}
+
+fn printDidRun(self_obj: objc.Object, _: objc.SEL, _: objc.Object, _: objc.BOOL, ctx: ?*anyopaque) callconv(.c) void {
+    defer objc.release(self_obj);
+    const b: objc.Object = @ptrCast(ctx orelse return);
+    dialogs.call(b, .{});
+    _Block_release(b);
 }

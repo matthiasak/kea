@@ -395,6 +395,7 @@ fn made(self: *Extensions, id: []const u8, found: objc.Object) bool {
     _ = self.loads_this_run.put(self.gpa, id);
     // Keys you gave its commands in Settings › Shortcuts (#189).
     @import("commands.zig").adopt(self, context, id);
+    @import("external.zig").generation +%= 1;
     self.actions_changed += 1;
     self.changed();
     return true;
@@ -416,6 +417,7 @@ pub fn unload(self: *Extensions, id: []const u8) void {
     const kv = self.contexts.fetchOrderedRemove(id).?;
     objc.release(kv.value);
     self.gpa.free(kv.key);
+    @import("external.zig").generation +%= 1;
     self.actions_changed += 1;
     self.changed();
 }

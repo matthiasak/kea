@@ -33,6 +33,7 @@ pub fn remove(self: *Extensions, id_: []const u8) void {
     const id = gpa.dupe(u8, id_) catch return;
     defer gpa.free(id);
     load_ops.unload(self, id);
+    @import("external.zig").generation +%= 1;
     @import("capture.zig").forget(self, id);
     self.clearErrors(id);
     self.setSettings(id, .null);

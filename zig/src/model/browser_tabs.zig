@@ -134,6 +134,7 @@ pub fn setActive(self: *Browser, id: u64) void {
     @import("../chrome/link_bubble.zig").dismiss(self);
     if (self.tabById(id)) |front| @import("../web/dialogs.zig").presentHeld(front);
     self.handOff();
+    if (!self.restoring) if (self.kea.ext) |e| e.follow(self);
 }
 
 /// A tab's page off the stage, then the tab gone (`tab.close()`).
@@ -270,6 +271,10 @@ pub fn visit(self: *Browser, url: []const u8, apart: bool) void {
 /// `select(_:floatPrevious:)`. Within the pair on screen, a focus change;
 /// otherwise its folded group opens and a page asleep wakes.
 pub fn select(self: *Browser, tab: *Tab) void {
+    selectEx(self, tab, true);
+}
+
+pub fn selectEx(self: *Browser, tab: *Tab, float_previous: bool) void {
     if (self.splitFor(tab)) |s| if (self.activeSplit()) |front| if (s.id.eql(front.id) and self.active_id != tab.id) {
         return self.focusPane(tab);
     };
@@ -288,7 +293,11 @@ pub fn select(self: *Browser, tab: *Tab) void {
     self.passwords.accounts.away();
     if (tab.id == self.active_id) return self.redraw();
     // The tab whose video is out comes home first; the one left may float.
-    @import("../web/float.zig").selecting(self, tab);
+    const float = @import("../web/float.zig");
+    if (float_previous) float.selecting(self, tab) else {
+        if (float.floating(self) == tab.id) float.land(self);
+        tab.floating = false;
+    }
     self.setActive(tab.id);
     tab.touch();
     // A tab brought back from last time opens the moment you look at it.
@@ -458,9 +467,9 @@ pub fn finishMove(self: *Browser, tab: *Tab, id: Uuid) void {
     self.detachSplit(tab);
     if (self.active_id == tab.id) {
         if (partner) |p| {
-            self.select(p);
+            selectEx(self, p, false);
         } else if (self.tabs.items.len > 1) {
-            self.select(self.tabs.items[if (index == self.tabs.items.len - 1) index - 1 else index + 1]);
+            selectEx(self, self.tabs.items[if (index == self.tabs.items.len - 1) index - 1 else index + 1], false);
         } else self.active_id = 0;
     }
     _ = self.tabs.orderedRemove(index);

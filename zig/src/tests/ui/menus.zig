@@ -32,7 +32,7 @@ test "menu bar menus and the File menu in App.swift's order" {
     try expectLabels(&.{ app.kea.app_name, "File", "Edit", "View", "Tabs", "Bookmarks", "History", "Window" }, try labels(a, bar));
     // App.swift:47-78: `.newItem` replaced, then `.printItem`.
     const file = bar[1].submenu.?;
-    const want = [_][]const u8{ "New Window", "New Tab", "New Private Tab", "Reopen Closed Tab", "─", "Open Address…", "─", "Bring Things Over…", "─", "Close Tab", "─", "Share…", "Print…" };
+    const want = [_][]const u8{ "New Window", "New Tab", "New Private Tab", "Reopen Closed Tab", "─", "Open Address…", "─", "Bring Things Over…", "─", "Close Tab", "Close Window", "─", "Share…", "Print…" };
     try expectLabels(&want, try labels(a, file));
     // Nothing to share or print from a blank tab; nothing closed to reopen.
     try t.expect(file[3].disabled);
@@ -124,4 +124,84 @@ fn escEvent() nanoui.objc.Object {
         @as(objc.NSUInteger, 10), objc.CGPoint{}, @as(objc.NSUInteger, 0), @as(f64, 0), @as(objc.NSInteger, 0),
         @as(?objc.Object, null), objc.nsString("\x1b"), objc.nsString("\x1b"), false, @as(u16, 53),
     });
+}
+
+fn codeFor(key: []const u8) u16 {
+    const table = .{
+        .{ ",", 43 },      .{ "l", 37 },     .{ "n", 45 },      .{ "t", 17 },    .{ "w", 13 },    .{ "p", 35 },
+        .{ "f", 3 },       .{ "g", 5 },      .{ "s", 1 },       .{ "r", 15 },    .{ ".", 47 },    .{ "y", 16 },
+        .{ "h", 4 },       .{ "u", 32 },     .{ "+", 24 },      .{ "-", 27 },    .{ "0", 29 },    .{ "i", 34 },
+        .{ "j", 38 },      .{ "c", 8 },      .{ "[", 33 },      .{ "]", 30 },    .{ "k", 40 },    .{ "d", 2 },
+        .{ "v", 9 },       .{ "m", 46 },     .{ "b", 11 },      .{ "left", 123 }, .{ "right", 124 }, .{ "delete", 51 },
+    };
+    inline for (table) |row| if (std.mem.eql(u8, row[0], key)) return row[1];
+    return 0;
+}
+
+test "default combos run" {
+    const skip = [_][]const u8{
+        "file.print",         "view.reload",        "view.reloadOrigin", "view.stop",     "view.reader",
+        "view.float",         "view.hide",          "view.inspector",    "view.console",  "view.inspect",
+        "tabs.focusLeftPane", "tabs.focusRightPane", "tabs.pasteAndGo",   "tabs.mute",
+    };
+    for (app.commands.all) |cmd| {
+        const kc = cmd.default_key orelse continue;
+        var skipped = false;
+        for (skip) |id| if (std.mem.eql(u8, id, cmd.id)) {
+            skipped = true;
+            break;
+        };
+        if (skipped) continue;
+        var f: Fixture = undefined;
+        try f.init(gpa, .{ .tabs = 2 });
+        defer f.deinit();
+        const b = f.browser;
+        b.prefs.set("ai", true);
+        b.prefs.set("split_view", true);
+        b.select(b.tabs.items[1]);
+        b.finder.finding = true;
+        const chars = if (std.mem.eql(u8, kc.key, "left") or std.mem.eql(u8, kc.key, "right") or std.mem.eql(u8, kc.key, "delete")) "" else kc.key;
+        try t.expect(f.press(chars, codeFor(kc.key), .{ .cmd = kc.command, .shift = kc.shift, .alt = kc.option, .ctrl = kc.control }));
+    }
+
+    // Spot-check ⌘T, ⌘Y, ⇧⌘J, ⌘D, ⌘F and ⌘+.
+    var f: Fixture = undefined;
+    try f.init(gpa, .{});
+    defer f.deinit();
+    const b = f.browser;
+    const page = b.activeTab().?;
+    page.own(&page.address, "https://www.example.com/a");
+    const before = b.tabs.items.len;
+    try t.expect(f.press("t", 17, .{ .cmd = true }));
+    try t.expectEqual(before + 1, b.tabs.items.len);
+    b.select(page);
+    try t.expect(f.press("y", 16, .{ .cmd = true }));
+    try t.expect(b.recalling);
+    _ = app.sheet.closePanel(b);
+    try t.expect(f.press("j", 38, .{ .cmd = true, .shift = true }));
+    try t.expect(b.hoarding);
+    _ = app.sheet.closePanel(b);
+    const before_dup = b.tabs.items.len;
+    try t.expect(f.press("d", 2, .{ .cmd = true }));
+    try t.expectEqual(before_dup + 1, b.tabs.items.len);
+    try t.expect(f.press("f", 3, .{ .cmd = true }));
+    try t.expect(b.finder.finding);
+    try t.expect(f.press("+", 24, .{ .cmd = true }));
+    try t.expect(b.activeTab().?.zoom > 1.05);
+}
+
+test "⌘3 selects the third tab, ⌘9 the last, ⌘0 resets zoom" {
+    var f: Fixture = undefined;
+    try f.init(gpa, .{ .tabs = 4 });
+    defer f.deinit();
+    const b = f.browser;
+    try t.expect(f.press("3", 20, .{ .cmd = true }));
+    try t.expectEqual(b.tabs.items[2].id, b.active_id);
+    try t.expect(f.press("9", 25, .{ .cmd = true }));
+    try t.expectEqual(b.tabs.items[b.tabs.items.len - 1].id, b.active_id);
+    const active = b.activeTab().?;
+    active.magnifyBy(1.5);
+    try t.expect(active.zoom > 1.4);
+    try t.expect(f.press("0", 29, .{ .cmd = true }));
+    try t.expectApproxEqAbs(@as(f64, 1.0), active.zoom, 0.01);
 }

@@ -63,6 +63,7 @@ pub fn view(b: *Browser, c: *ui.Context) void {
     @import("bookmarks/manager.zig").frame(b);
     // The address typed into a tab, done with: the next takes the keys again.
     if (b.editing_tab == null) b.tab_field.claimed = null;
+    if (b.editing_pin == null) b.column.pin_claimed = 0;
     space_swipe.frame(b, c);
     groups_view.beginFrame(b);
     // The panels' own windows follow the prefs, before anything is laid out.

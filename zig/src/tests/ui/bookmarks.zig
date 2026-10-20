@@ -146,3 +146,20 @@ test "bookmark door opens the list and a row opens its page" {
     try std.testing.expect(b.overlay == null);
     try std.testing.expectEqualStrings("https://b.example/", b.activeTab().?.url());
 }
+
+test "card name arrives selected" {
+    var f: Fixture = undefined;
+    try f.init(gpa, .{ .sidebar = false });
+    defer f.deinit();
+    const b = f.browser;
+    const tab = b.activeTab().?;
+    tab.own(&tab.address, "https://www.example.com/a");
+    tab.setTitle("Example Page");
+    f.tester.settle(1);
+    try std.testing.expect(f.press("B", 11, .{ .cmd = true, .shift = true }));
+    f.tester.settle(1);
+    const id = (b.bookmarks.bookmarkFor("https://www.example.com/a") orelse return error.NotKept).id;
+    f.tester.typeText("x");
+    f.tester.settle(1);
+    try std.testing.expectEqualStrings("x", b.bookmarks.bookmark(id).?.title);
+}

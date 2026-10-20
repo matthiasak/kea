@@ -147,7 +147,7 @@ fn half(b: *Browser, c: *ui.Context, p: *const Palette, t: *Tab, o: HalfOptions)
     const sliding = focused and o.stacked and o.interactive and b.column.pill_drawn;
     c.node(i).style.background = if (focused) (if (sliding) null else p.side_wash) else p.side_hover.alpha(h);
     if (focused and !o.narrow and b.prefs.shows_reading) {
-        const fill = ui.tween(c, it.id, 1, std.math.clamp(t.reading, 0, 1), 0.15, .ease_out);
+        const fill = std.math.clamp(t.reading, 0, 1);
         const w = if (it.rect) |r| r.w else 0;
         _ = c.leaf(.{ .absolute = true, .width = px(w * fill), .height = .fill, .background = p.ink.alpha(0.055) }, .none, null);
     }

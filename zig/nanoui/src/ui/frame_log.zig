@@ -6,6 +6,7 @@ const std = @import("std");
 pub const Kind = enum {
     link,
     input,
+    retained,
 };
 
 pub const Record = struct {
@@ -26,6 +27,7 @@ pub const Record = struct {
     instances: usize,
     atlas_reset: bool,
     animating: bool = false,
+    queued: u8 = 0,
 
     pub fn cpuMs(r: Record) f64 {
         return r.build_ms + r.layout_ms + r.paint_ms + r.after_frame_ms + r.encode_ms;
@@ -44,6 +46,7 @@ pub const Percentiles = struct {
 
 pub const Summary = struct {
     frames: usize = 0,
+    retained: usize = 0,
     animating_frames: usize = 0,
     missed_vsyncs: usize = 0,
     missed_share: f64 = 0,
@@ -61,6 +64,7 @@ pub const FrameLog = struct {
     jsonl: std.ArrayList(u8) = .empty,
     flushed: usize = 0,
     last_t: f64 = 0,
+    prev_last_t: f64 = 0,
     buffered_since_flush: usize = 0,
     lock: std.atomic.Value(bool) = .init(false),
 
@@ -94,6 +98,8 @@ pub const FrameLog = struct {
     pub fn append(self: *FrameLog, rec: Record) usize {
         self.acquire();
         const idx = self.records.items.len;
+        self.prev_last_t = self.last_t;
+        self.last_t = rec.t;
         self.records.append(self.gpa, rec) catch {
             self.release();
             return idx;
@@ -105,6 +111,16 @@ pub const FrameLog = struct {
         return idx;
     }
 
+    pub fn dropLast(self: *FrameLog) void {
+        self.acquire();
+        defer self.release();
+        if (self.records.items.len > self.flushed) {
+            _ = self.records.pop();
+            if (self.buffered_since_flush > 0) self.buffered_since_flush -= 1;
+            self.last_t = self.prev_last_t;
+        }
+    }
+
     pub fn setGpuMs(self: *FrameLog, idx: usize, gpu_ms: f64) void {
         self.acquire();
         defer self.release();
@@ -114,13 +130,14 @@ pub const FrameLog = struct {
     }
 
 
-    pub fn setDraw(self: *FrameLog, idx: usize, drawable_wait_ms: f64, encode_ms: f64, sync: bool) void {
+    pub fn setDraw(self: *FrameLog, idx: usize, drawable_wait_ms: f64, encode_ms: f64, sync: bool, queued: u8) void {
         self.acquire();
         defer self.release();
         if (idx < self.records.items.len) {
             self.records.items[idx].drawable_wait_ms = drawable_wait_ms;
             self.records.items[idx].encode_ms = encode_ms;
             self.records.items[idx].sync = sync;
+            self.records.items[idx].queued = queued;
         }
     }
     pub fn mark(self: *FrameLog) usize {
@@ -148,12 +165,13 @@ pub const FrameLog = struct {
         var aw: std.Io.Writer.Allocating = .fromArrayList(self.gpa, &self.jsonl);
         for (self.records.items[self.flushed..]) |r| {
             aw.writer.print(
-                "{{\"t\":{d:.6},\"kind\":\"{s}\",\"interval_ms\":{d:.3},\"duration\":{d:.6},\"dt\":{d:.6},\"build_ms\":{d:.3},\"layout_ms\":{d:.3},\"paint_ms\":{d:.3},\"after_frame_ms\":{d:.3},\"drawable_wait_ms\":{d:.3},\"encode_ms\":{d:.3},\"sync\":{},\"gpu_ms\":{d:.3},\"nodes\":{d},\"instances\":{d},\"atlas_reset\":{}}}\n",
+                "{{\"t\":{d:.6},\"kind\":\"{s}\",\"interval_ms\":{d:.3},\"duration\":{d:.6},\"dt\":{d:.6},\"build_ms\":{d:.3},\"layout_ms\":{d:.3},\"paint_ms\":{d:.3},\"after_frame_ms\":{d:.3},\"drawable_wait_ms\":{d:.3},\"encode_ms\":{d:.3},\"sync\":{},\"gpu_ms\":{d:.3},\"nodes\":{d},\"instances\":{d},\"atlas_reset\":{},\"queued\":{d}}}\n",
                 .{
-                    r.t,            @tagName(r.kind), r.interval_ms,    r.duration,
-                    r.dt,           r.build_ms,       r.layout_ms,      r.paint_ms,
-                    r.after_frame_ms, r.drawable_wait_ms, r.encode_ms,  r.sync,
-                    r.gpu_ms,       r.nodes,          r.instances,      r.atlas_reset,
+                    r.t,              @tagName(r.kind), r.interval_ms,    r.duration,
+                    r.dt,             r.build_ms,       r.layout_ms,      r.paint_ms,
+                    r.after_frame_ms, r.drawable_wait_ms, r.encode_ms,    r.sync,
+                    r.gpu_ms,         r.nodes,          r.instances,      r.atlas_reset,
+                    r.queued,
                 },
             ) catch break;
         }
@@ -166,7 +184,7 @@ pub const FrameLog = struct {
 
     pub fn summary(records: []const Record) Summary {
         if (records.len == 0) return .{};
-        var out: Summary = .{ .frames = records.len };
+        var out: Summary = .{};
         var sync_count: usize = 0;
         var interval_buf: [8192]f64 = undefined;
         var cpu_buf: [8192]f64 = undefined;
@@ -175,6 +193,9 @@ pub const FrameLog = struct {
         const cap = @min(records.len, interval_buf.len);
         var interval_n: usize = 0;
 
+        for (records) |r| {
+            if (r.kind == .retained) out.retained += 1 else out.frames += 1;
+        }
         for (records[0..cap], 0..) |r, i| {
             if (r.sync) sync_count += 1;
             const dur_ms = if (r.duration > 0) r.duration * 1000.0 else 1000.0 / 60.0;

@@ -140,7 +140,7 @@ const act = struct {
         sheet.show(b, .bringing);
     }
     fn newWindow(b: *Browser) void {
-        _ = browsers.newWindow(b.kea) catch {};
+        _ = browsers.newWindow(b.kea) catch b.announce("Couldn't open a window");
     }
     fn findNext(b: *Browser) void {
         page_find.look(b, true);

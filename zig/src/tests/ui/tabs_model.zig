@@ -343,3 +343,18 @@ test "⌘D duplicates an address of any length" {
     try t.expect(b.activeTab().? != tab);
     try t.expectEqualStrings(long, b.activeTab().?.url());
 }
+
+test "moving a floating tab lands it" {
+    var f: Fixture = undefined;
+    try f.init(t.allocator, .{ .tabs = 2 });
+    defer f.deinit();
+    const b = f.browser;
+    const other = try secondWindow(f.kea);
+    const moving = b.tabs.items[1];
+    b.select(moving);
+    moving.floating = true;
+    b.moveToWindow(moving, other, null);
+    try t.expect(!moving.floating);
+    try t.expect(!app.float.showing());
+    try t.expectEqual(moving.id, other.active_id);
+}

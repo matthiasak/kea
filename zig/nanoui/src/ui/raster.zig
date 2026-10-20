@@ -26,21 +26,100 @@ pub fn draw(out: gpu.Pixels, instances: []const gpu.Instance, mask: Mask, pictur
     const px: [4]u8 = .{ unit(clear.b), unit(clear.g), unit(clear.r), 255 };
     const words: []u32 = @alignCast(std.mem.bytesAsSlice(u32, out.bytes[0 .. out.width * out.height * 4]));
     @memset(words, @bitCast(px));
-    for (instances) |*i| drawOne(out, i, mask, pictures, scale);
+    var k: usize = 0;
+    while (k < instances.len) {
+        const inst = &instances[k];
+        if (inst.kind == gpu.Kind.layer_begin) {
+            var end_at = k + 1;
+            while (end_at < instances.len and instances[end_at].kind != gpu.Kind.layer_end) : (end_at += 1) {}
+            if (end_at > k + 1 and end_at < instances.len) {
+                drawGroup(out, instances[k + 1 .. end_at], &instances[k], &instances[end_at], mask, pictures, scale);
+            }
+            k = if (end_at < instances.len) end_at + 1 else instances.len;
+            continue;
+        }
+        drawOne(out, inst, mask, pictures, scale);
+        k += 1;
+    }
+}
+
+fn drawGroup(out: gpu.Pixels, span: []const gpu.Instance, begin_inst: *const gpu.Instance, end_inst: *const gpu.Instance, mask: Mask, pictures: Pictures, scale: f32) void {
+    for (span) |*gi| {
+        if (gi.kind == gpu.Kind.glass) drawOne(out, gi, mask, pictures, scale);
+    }
+    const b = bounds(out, begin_inst, scale) orelse return;
+    const tmp_bytes = std.heap.page_allocator.alloc(u8, out.width * out.height * 4) catch return;
+    defer std.heap.page_allocator.free(tmp_bytes);
+    @memset(tmp_bytes, 0);
+    const tmp: gpu.Pixels = .{ .bytes = tmp_bytes, .width = out.width, .height = out.height };
+    for (span) |*gi| {
+        if (gi.kind == gpu.Kind.glass or gi.kind == gpu.Kind.layer_begin or gi.kind == gpu.Kind.layer_end) continue;
+        drawOne(tmp, gi, mask, pictures, scale);
+    }
+    const alpha = std.math.clamp(end_inst.color[3], 0, 1);
+    if (alpha <= 0) return;
+    const inv = 1 / scale;
+    for (b[1]..b[3]) |y| {
+        const wy = (@as(f32, @floatFromInt(y)) + 0.5) * inv;
+        const row = y * out.width * 4;
+        for (b[0]..b[2]) |x| {
+            const wx = (@as(f32, @floatFromInt(x)) + 0.5) * inv;
+            const s = tmp.bytes[row + x * 4 ..][0..4];
+            if (s[3] == 0) continue;
+            const k = alpha * clipCover(end_inst, wx, wy, inv) / 255.0;
+            blend(out.bytes, row + x * 4, @as(f32, @floatFromInt(s[2])) * k, @as(f32, @floatFromInt(s[1])) * k, @as(f32, @floatFromInt(s[0])) * k, @as(f32, @floatFromInt(s[3])) * k);
+        }
+    }
 }
 
 fn unit(v: f32) u8 {
     return @intFromFloat(@round(std.math.clamp(v, 0, 1) * 255));
 }
 
+inline fn unrotate(i: *const gpu.Instance, wx: f32, wy: f32) [2]f32 {
+    const a = i.xf[0];
+    if (a == 0) return .{ wx, wy };
+    const dx = wx - i.xf[2];
+    const dy = wy - i.xf[3];
+    const ca = @cos(a);
+    const sa = @sin(a);
+    return .{ i.xf[2] + ca * dx + sa * dy, i.xf[3] - sa * dx + ca * dy };
+}
+
 /// The pixels an instance covers: its quad (grown for a shadow's blur),
 /// within its clip and the frame.
 fn bounds(out: gpu.Pixels, i: *const gpu.Instance, scale: f32) ?[4]usize {
     const grow: f32 = if (i.kind == gpu.Kind.shadow or i.kind == gpu.Kind.shadow_out) i.border_width * 3 else 0;
-    const x0 = @max(i.rect[0] - grow, i.clip[0]);
-    const y0 = @max(i.rect[1] - grow, i.clip[1]);
-    const x1 = @min(i.rect[0] + i.rect[2] + grow, i.clip[2]);
-    const y1 = @min(i.rect[1] + i.rect[3] + grow, i.clip[3]);
+    var rx0 = i.rect[0] - grow;
+    var ry0 = i.rect[1] - grow;
+    var rx1 = i.rect[0] + i.rect[2] + grow;
+    var ry1 = i.rect[1] + i.rect[3] + grow;
+    if (i.xf[0] != 0) {
+        const ca = @cos(i.xf[0]);
+        const sa = @sin(i.xf[0]);
+        const px = i.xf[2];
+        const py = i.xf[3];
+        const xs = [4]f32{ rx0, rx1, rx0, rx1 };
+        const ys = [4]f32{ ry0, ry0, ry1, ry1 };
+        rx0 = 1e9;
+        ry0 = 1e9;
+        rx1 = -1e9;
+        ry1 = -1e9;
+        for (0..4) |k| {
+            const dx = xs[k] - px;
+            const dy = ys[k] - py;
+            const tx = px + ca * dx - sa * dy;
+            const ty = py + sa * dx + ca * dy;
+            rx0 = @min(rx0, tx);
+            ry0 = @min(ry0, ty);
+            rx1 = @max(rx1, tx);
+            ry1 = @max(ry1, ty);
+        }
+    }
+    const x0 = @max(rx0, i.clip[0]);
+    const y0 = @max(ry0, i.clip[1]);
+    const x1 = @min(rx1, i.clip[2]);
+    const y1 = @min(ry1, i.clip[3]);
     if (x1 <= x0 or y1 <= y0) return null;
     const w: f32 = @floatFromInt(out.width);
     const h: f32 = @floatFromInt(out.height);
@@ -54,6 +133,7 @@ fn bounds(out: gpu.Pixels, i: *const gpu.Instance, scale: f32) ?[4]usize {
 }
 
 fn drawOne(out: gpu.Pixels, i: *const gpu.Instance, mask: Mask, pictures: Pictures, scale: f32) void {
+    if (i.kind == gpu.Kind.layer_begin or i.kind == gpu.Kind.layer_end or i.kind == gpu.Kind.layer_composite) return;
     const b = bounds(out, i, scale) orelse return;
     if (i.kind == gpu.Kind.text) return glyph(out, i, mask, scale, b);
     if (i.kind == gpu.Kind.image) return picture(out, i, pictures, scale, b);
@@ -163,14 +243,17 @@ fn quad(out: gpu.Pixels, i: *const gpu.Instance, scale: f32, b: [4]usize) void {
     const corner_ext: f32 = if (r > 0) 1.52866495 * r else r_abs;
     const solid = @max(corner_ext, if (has_border) bw else 0) + 2 / scale;
     const inv = 1 / scale;
+    const rot = i.xf[0] != 0;
     for (b[1]..b[3]) |y| {
         const wy = (@as(f32, @floatFromInt(y)) + 0.5) * inv;
-        const py = wy - cy;
         const row = y * out.width * 4;
-        const inner_y = @abs(py) < hh - solid;
+        const inner_y = !rot and @abs(wy - cy) < hh - solid;
         for (b[0]..b[2]) |x| {
             const wx = (@as(f32, @floatFromInt(x)) + 0.5) * inv;
-            const pxl = wx - cx;
+            const u = unrotate(i, wx, wy);
+            if (rot and (u[0] < i.rect[0] or u[1] < i.rect[1] or u[0] > i.rect[0] + i.rect[2] or u[1] > i.rect[1] + i.rect[3])) continue;
+            const pxl = u[0] - cx;
+            const py = u[1] - cy;
             const cut = clipCover(i, wx, wy, inv);
             if (inner_y and @abs(pxl) < hw - solid) {
                 const a = c[3] * cut;
@@ -220,15 +303,18 @@ fn glyph(out: gpu.Pixels, i: *const gpu.Instance, mask: Mask, scale: f32, b: [4]
     if (mask.size == 0) return;
     const inv = 1 / scale;
     const c = i.color;
+    const rot = i.xf[0] != 0;
     for (b[1]..b[3]) |y| {
         const wy = (@as(f32, @floatFromInt(y)) + 0.5) * inv;
-        const ty = (wy - i.rect[1]) / i.rect[3];
-        const v = i.uv[1] + (i.uv[3] - i.uv[1]) * ty;
         const row = y * out.width * 4;
         for (b[0]..b[2]) |x| {
             const wx = (@as(f32, @floatFromInt(x)) + 0.5) * inv;
-            const tx = (wx - i.rect[0]) / i.rect[2];
+            const up = unrotate(i, wx, wy);
+            if (rot and (up[0] < i.rect[0] or up[1] < i.rect[1] or up[0] > i.rect[0] + i.rect[2] or up[1] > i.rect[1] + i.rect[3])) continue;
+            const tx = (up[0] - i.rect[0]) / i.rect[2];
+            const ty = (up[1] - i.rect[1]) / i.rect[3];
             const u = i.uv[0] + (i.uv[2] - i.uv[0]) * tx;
+            const v = i.uv[1] + (i.uv[3] - i.uv[1]) * ty;
             const a = sample(mask, u, v) * c[3] * clipCover(i, wx, wy, inv);
             blend(out.bytes, row + x * 4, c[0] * a, c[1] * a, c[2] * a, a);
         }
@@ -263,21 +349,23 @@ fn picture(out: gpu.Pixels, i: *const gpu.Instance, p: Pictures, scale: f32, b: 
     const hh = i.rect[3] * 0.5;
     const r_abs = @min(@abs(i.radius), @min(hw, hh));
     const r: f32 = if (i.radius < 0) -r_abs else r_abs;
+    const rot = i.xf[0] != 0;
     for (b[1]..b[3]) |y| {
         const wy = (@as(f32, @floatFromInt(y)) + 0.5) * inv;
-        const ty = (wy - i.rect[1]) / i.rect[3];
-        const v = i.uv[1] + (i.uv[3] - i.uv[1]) * ty;
         const row = y * out.width * 4;
         for (b[0]..b[2]) |x| {
             const wx = (@as(f32, @floatFromInt(x)) + 0.5) * inv;
-            const tx = (wx - i.rect[0]) / i.rect[2];
-            const sd = cornerSdf(wx - i.rect[0] - hw, wy - i.rect[1] - hh, hw, hh, r);
+            const up = unrotate(i, wx, wy);
+            if (rot and (up[0] < i.rect[0] or up[1] < i.rect[1] or up[0] > i.rect[0] + i.rect[2] or up[1] > i.rect[1] + i.rect[3])) continue;
+            const tx = (up[0] - i.rect[0]) / i.rect[2];
+            const ty = (up[1] - i.rect[1]) / i.rect[3];
+            const v = i.uv[1] + (i.uv[3] - i.uv[1]) * ty;
+            const sd = cornerSdf(up[0] - i.rect[0] - hw, up[1] - i.rect[1] - hh, hw, hh, r);
             const aa = @max(sd[1] * inv, 0.0001) * 0.5;
             const k = (1 - smoothstep(-aa, aa, sd[0])) * i.color[3] * clipCover(i, wx, wy, inv);
             if (k <= 0) continue;
             const t = samplePicture(p, i.uv[0] + (i.uv[2] - i.uv[0]) * tx, v);
             if (i.border_color[3] > 0) {
-                // Tinted: the shape in one color, as the shader draws it.
                 const a = t[3] * i.border_color[3] * k;
                 blend(out.bytes, row + x * 4, i.border_color[0] * a, i.border_color[1] * a, i.border_color[2] * a, a);
                 continue;
@@ -380,11 +468,12 @@ fn shadow(out: gpu.Pixels, i: *const gpu.Instance, scale: f32, b: [4]usize) void
     const inv = 1 / scale;
     for (b[1]..b[3]) |y| {
         const wy = (@as(f32, @floatFromInt(y)) + 0.5) * inv;
-        const py = wy - cy;
         const row = y * out.width * 4;
         for (b[0]..b[2]) |x| {
             const wx = (@as(f32, @floatFromInt(x)) + 0.5) * inv;
-            const pxl = wx - cx;
+            const up = unrotate(i, wx, wy);
+            const pxl = up[0] - cx;
+            const py = up[1] - cy;
             var a = shadowAlpha(pxl, py, hw, hh, r, sigma) * c[3] * clipCover(i, wx, wy, inv);
             // Knocked out: nothing inside the box (`uv` its offset from the shadow's rect).
             if (i.kind == gpu.Kind.shadow_out) a *= std.math.clamp(cornerSdf(pxl - i.uv[0], py - i.uv[1], hw, hh, r)[0] + 0.5, 0, 1);

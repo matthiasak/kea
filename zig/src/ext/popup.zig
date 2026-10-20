@@ -273,6 +273,7 @@ fn reveal(self: *Popup) void {
     if (self.shown) return;
     self.shown = true;
     if (self.host) |h| h.setPage(self.web, false);
+    _ = objc.msg(objc.BOOL, self.window.nswindow, "makeFirstResponder:", .{self.web});
     // Faded in over 0.12 s, as Swift's `web.animator().alphaValue = 1`
     // (the stage shows a new page at once: from nothing again).
     objc.msg(void, self.web, "setAlphaValue:", .{@as(f64, 0)});
@@ -441,6 +442,13 @@ pub fn closeFor(kea: *Kea) void {
 pub fn of(web: objc.Object) ?*Popup {
     const p = current orelse return null;
     return if (p.web == web) p else null;
+}
+
+/// Whether `window` is the extension popup's own panel.
+pub fn owns(window: ?objc.Object) bool {
+    const p = current orelse return false;
+    const w = window orelse return false;
+    return p.window.nswindow == w;
 }
 
 /// Transient, as a popover: it goes when anything else takes the keys. A

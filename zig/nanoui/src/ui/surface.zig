@@ -19,6 +19,7 @@ const a11y = @import("a11y.zig");
 const events = @import("surface_events.zig");
 const frame_log_mod = @import("frame_log.zig");
 pub const FrameLog = frame_log_mod.FrameLog;
+pub const KeysReleased = struct { ctx: ?*anyopaque, func: *const fn (ctx: ?*anyopaque, s: *Surface) void };
 extern "c" fn getenv(name: [*:0]const u8) ?[*:0]const u8;
 pub const Surface = struct {
     gpa: std.mem.Allocator,
@@ -47,6 +48,10 @@ pub const Surface = struct {
     max_fps: f32 = 60,
     link_duration: f64 = 0,
     last_present_target: f64 = 0,
+    paced: bool = false,
+    in_frame: bool = false,
+    full_pending: bool = false,
+    frame_in_due: f64 = 0,
     pending_sync: bool = false,
     /// A frame was wanted while the window was hidden: run it once visible.
     pending: bool = false,
@@ -62,6 +67,7 @@ pub const Surface = struct {
     transparent: bool = false,
     after_frame_ctx: ?*anyopaque = null,
     after_frame: ?*const fn (ctx: ?*anyopaque, s: *Surface) bool = null,
+    keys_released: ?KeysReleased = null,
     a11y_cache: std.AutoHashMapUnmanaged(u64, objc.Object) = .empty,
     /// Behind a stage (`attachBackdrop`): presents in a transaction when
     /// native views or geometry move.
@@ -245,6 +251,7 @@ pub const Surface = struct {
     }
 
     pub fn frame(self: *Surface) void {
+        self.full_pending = true;
         const now = @max(cf.CACurrentMediaTime(), self.last_frame_time);
         const fallback_dur = 1.0 / @as(f64, @max(60.0, self.max_fps));
         self.frameAt(.input, now, if (self.link_duration > 0) self.link_duration else fallback_dur);
@@ -253,6 +260,9 @@ pub const Surface = struct {
     pub fn frameAt(self: *Surface, kind: frame_log_mod.Kind, target_in: f64, duration_in: f64) void {
         const vis = self.visible();
         self.pending = !vis;
+        self.in_frame = true;
+        defer self.in_frame = false;
+        self.full_pending = false;
         const pool = objc.Pool.push();
         defer pool.pop();
         const c = &self.ctx;
@@ -270,6 +280,7 @@ pub const Surface = struct {
         c.reduce_motion = self.reduce_motion;
         c.window_focused = if (vis) self.window.isFocused() else true;
         const r = frame_mod.run(c, self.view, &self.text, &self.instances, self.size, self.scale, self.theme(), dt, now - self.start_time);
+        self.frame_in_due = if (c.frame_in) |fi| now + @as(f64, fi) else 0;
         const t_af0 = if (self.frame_log != null) cf.CACurrentMediaTime() else 0;
         const native_changed = if (self.after_frame) |af| af(self.after_frame_ctx, self) else false;
         const after_frame_ms = if (self.frame_log != null) (cf.CACurrentMediaTime() - t_af0) * 1000 else 0;
@@ -294,11 +305,11 @@ pub const Surface = struct {
         self.renderer.syncImages(&self.text.images);
         const clear = if (self.transparent) types.Color.transparent else c.theme.background;
         const present_at = if (target_in > 0) target_in else if (self.last_present_target > 0) @max(wall_now, self.last_present_target + dur) else wall_now;
-        self.last_present_target = present_at;
         self.renderer.present_at = present_at;
+        self.renderer.time = @floatCast(now - self.start_time);
+        var presented = true;
         if (self.frame_log) |*fl| {
             const interval_ms: f64 = if (fl.last_t > 0) @max(0, (now - fl.last_t) * 1000) else 0;
-            fl.last_t = now;
             const idx = fl.append(.{
                 .t = now,
                 .kind = kind,
@@ -318,18 +329,93 @@ pub const Surface = struct {
                 .animating = c.animating,
             });
             const ds = self.renderer.drawLogged(self.instances.items, self.atlasTexture(), self.size, clear, fl, idx);
-            fl.setDraw(idx, ds.drawable_wait_ms, ds.encode_ms, ds.sync);
+            presented = ds.presented;
+            if (presented) {
+                fl.setDraw(idx, ds.drawable_wait_ms, ds.encode_ms, ds.sync, ds.queued);
+            } else {
+                fl.dropLast();
+            }
         } else {
-            self.renderer.draw(self.instances.items, self.atlasTexture(), self.size, clear);
+            const ds = self.renderer.drawLogged(self.instances.items, self.atlasTexture(), self.size, clear, null, 0);
+            presented = ds.presented;
         }
+        if (presented) self.last_present_target = present_at;
         self.updateCursor();
+        if (!presented) {
+            self.requestFrame();
+            return;
+        }
         const more = c.animating or r.hot_changed;
         if (self.display_link != null) {
-            // Something changes now and then: the link, at that pace.
-            self.setRate(if (more) null else c.frame_in);
-            self.setPaced(more or c.frame_in != null);
-        } else if (more or c.frame_in != null) self.scheduleTick();
+            if (more) {
+                self.setRate(null);
+                self.setPaced(true);
+            } else if (c.frame_in) |fi| {
+                self.setRate(fi);
+                self.setPaced(true);
+            } else if (c.time_driven != .none) {
+                self.setRate(if (c.time_driven == .fast) null else 1.0 / 30.0);
+                self.setPaced(true);
+            } else {
+                self.setPaced(false);
+            }
+        } else if (more or c.frame_in != null or c.time_driven != .none) self.scheduleTick();
         if (!c.animating) self.last_frame_time = 0;
+    }
+
+    pub fn redrawRetained(self: *Surface, target_in: f64, duration_in: f64) void {
+        if (!self.visible()) {
+            self.setPaced(false);
+            return;
+        }
+        self.in_frame = true;
+        defer self.in_frame = false;
+        const pool = objc.Pool.push();
+        defer pool.pop();
+        const c = &self.ctx;
+        const fallback_dur = 1.0 / @as(f64, @max(60.0, self.max_fps));
+        const dur: f64 = if (duration_in > 0) duration_in else fallback_dur;
+        if (duration_in > 0) self.link_duration = duration_in;
+        const wall_now = cf.CACurrentMediaTime();
+        const now = if (target_in > 0) target_in else wall_now;
+        const present_at = if (target_in > 0) target_in else if (self.last_present_target > 0) @max(wall_now, self.last_present_target + dur) else wall_now;
+        self.renderer.setLiveResize(false);
+        self.renderer.present_at = present_at;
+        self.renderer.time = @floatCast(now - self.start_time);
+        const clear = if (self.transparent) types.Color.transparent else c.theme.background;
+        var presented = true;
+        if (self.frame_log) |*fl| {
+            const interval_ms: f64 = if (fl.last_t > 0) @max(0, (now - fl.last_t) * 1000) else 0;
+            const idx = fl.append(.{
+                .t = now,
+                .kind = .retained,
+                .interval_ms = interval_ms,
+                .duration = dur,
+                .dt = @floatCast(dur),
+                .build_ms = 0,
+                .layout_ms = 0,
+                .paint_ms = 0,
+                .after_frame_ms = 0,
+                .drawable_wait_ms = 0,
+                .encode_ms = 0,
+                .sync = false,
+                .nodes = c.stats.nodes,
+                .instances = self.instances.items.len,
+                .atlas_reset = false,
+                .animating = true,
+            });
+            const ds = self.renderer.drawLogged(self.instances.items, self.atlasTexture(), self.size, clear, fl, idx);
+            presented = ds.presented;
+            if (presented) {
+                fl.setDraw(idx, ds.drawable_wait_ms, ds.encode_ms, ds.sync, ds.queued);
+            } else {
+                fl.dropLast();
+            }
+        } else {
+            const ds = self.renderer.drawLogged(self.instances.items, self.atlasTexture(), self.size, clear, null, 0);
+            presented = ds.presented;
+        }
+        if (presented) self.last_present_target = present_at;
     }
 
     pub fn setTransparent(self: *Surface, on: bool) void {
@@ -359,6 +445,7 @@ pub const Surface = struct {
         objc.msg(void, self.nsview, "setAutoresizingMask:", .{@as(objc.NSUInteger, 2 | 16)});
         objc.msg(void, host, "addSubview:", .{stage_view});
         objc.msg(void, host, "addSubview:", .{self.nsview});
+        if (self.ctx.focus != 0) _ = objc.msg(objc.BOOL, self.window.nswindow, "makeFirstResponder:", .{self.nsview});
         objc.release(host);
         self.setTransparent(true);
         self.hosted = true;
@@ -368,6 +455,11 @@ pub const Surface = struct {
     /// Draws a frame at the display's next refresh: for changes from
     /// outside the view (a process's output, a network reply).
     pub fn requestFrame(self: *Surface) void {
+        self.full_pending = true;
+        if (!self.paced and !self.in_frame and cf.CACurrentMediaTime() >= self.last_present_target) {
+            self.frame();
+            return;
+        }
         if (self.display_link != null) {
             self.setRate(null);
             self.setPaced(true);
@@ -378,7 +470,7 @@ pub const Surface = struct {
     /// `seconds`.
     fn setRate(self: *Surface, seconds: ?f32) void {
         const link = self.display_link orelse return;
-        const fps: f32 = if (seconds) |s| std.math.clamp(1 / @max(s, 0.001), 1, 60) else 0;
+        const fps: f32 = if (seconds) |s| (if (s < 0.009) 0 else std.math.clamp(1 / @max(s, 0.001), 1, 60)) else 0;
         if (fps == self.link_fps) return;
         self.link_fps = fps;
         const s = self.max_fps;
@@ -398,6 +490,8 @@ pub const Surface = struct {
     }
 
     fn setPaced(self: *Surface, on: bool) void {
+        if (self.paced == on) return;
+        self.paced = on;
         if (self.display_link) |link| objc.msg(void, link, "setPaused:", .{!on});
     }
 
@@ -438,9 +532,14 @@ pub const Surface = struct {
     /// (`focusNext` while a page had it), and the hot box's help shows.
     fn afterFocus(self: *Surface) void {
         const c = &self.ctx;
-        if (c.focus != 0 and c.focus != self.last_focus) {
+        if (c.focus != 0) {
             const first = objc.msg(?objc.Object, self.window.nswindow, "firstResponder", .{});
             if (first == null or first.? != self.nsview) _ = objc.msg(objc.BOOL, self.window.nswindow, "makeFirstResponder:", .{self.nsview});
+        } else if (self.last_focus != 0 and c.focus == 0) {
+            const first = objc.msg(?objc.Object, self.window.nswindow, "firstResponder", .{});
+            if (first != null and first.? == self.nsview) {
+                if (self.keys_released) |kr| kr.func(kr.ctx, self);
+            }
         }
         self.last_focus = c.focus;
         self.refreshTip();

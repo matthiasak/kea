@@ -39,6 +39,10 @@ pub fn allowed(pattern: []const u8) bool {
     return true;
 }
 
+pub var generation: u64 = 1;
+var cached_gen: u64 = 0;
+var cached_script: ?[]u8 = null;
+
 /// The `externally_connectable` patterns of every extension loaded now,
 /// those Chrome would take, unique and sorted; borrowed from the manifests
 /// (push a Pool around the call).
@@ -83,6 +87,17 @@ fn dict(o: objc.Object, key: []const u8) ?objc.Object {
 /// For the page about to load, in its own world before any of its
 /// scripts, on `gpa`; null with nothing listed anywhere.
 pub fn script(owner: *Extensions, gpa: std.mem.Allocator) ?[]u8 {
+    if (owner.contexts.count() == 0) return null;
+    if (cached_gen != generation) {
+        const ca = std.heap.c_allocator;
+        if (cached_script) |old| ca.free(old);
+        cached_script = buildScript(owner, ca);
+        cached_gen = generation;
+    }
+    return if (cached_script) |s| gpa.dupe(u8, s) catch null else null;
+}
+
+fn buildScript(owner: *Extensions, gpa: std.mem.Allocator) ?[]u8 {
     const pool = objc.Pool.push();
     defer pool.pop();
     var list = patterns(owner, gpa) catch return null;

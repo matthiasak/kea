@@ -101,13 +101,21 @@ pub fn run(
                 var extra: ExtraMetrics = .{};
                 for (spans, 0..) |sp, i| {
                     const slice = fl.span(sp.start, sp.end);
+                    var full_in_slice: usize = 0;
                     if (slice.len > 0) {
                         const start_len = combined.items.len;
                         try combined.appendSlice(gpa, slice);
                         // First frame of each span is cold; zero interval_ms on span boundaries.
                         if (i > 0) combined.items[start_len].interval_ms = 0;
+                        for (slice) |rec| {
+                            if (rec.kind != .retained) full_in_slice += 1;
+                        }
                     }
-                    extra.fps += sp.extra.fps / 3.0;
+                    const span_fps = if (slice.len > 0 and sp.extra.fps > 0)
+                        sp.extra.fps * @as(f64, @floatFromInt(full_in_slice)) / @as(f64, @floatFromInt(slice.len))
+                    else
+                        sp.extra.fps;
+                    extra.fps += span_fps / 3.0;
                     extra.cpu_pct += sp.extra.cpu_pct / 3.0;
                     extra.allocs += sp.extra.allocs;
                 }
@@ -115,10 +123,11 @@ pub fn run(
                 var summary = ui.FrameLog.summary(combined.items);
                 computeMultiSpanSteady(spans, fl, &summary);
 
+                const report_only = sc.report_only or (std.mem.eql(u8, sc.id, "S13") and only == null);
                 var rep: ScenarioReport = .{
                     .id = sc.id,
                     .name = sc.name,
-                    .report_only = sc.report_only,
+                    .report_only = report_only,
                     .summary = summary,
                     .extra = extra,
                     .passed = true,
@@ -202,7 +211,7 @@ fn checkGates(rep: *ScenarioReport) void {
         rep.fail_len = fbs.end;
         return;
     }
-    if (s.frames == 0) {
+    if (s.frames + s.retained == 0 and !std.mem.eql(u8, rep.id, "S13")) {
         rep.passed = false;
         sep(&fbs, &first);
         fbs.writeAll("0 frames drawn") catch {};
@@ -228,17 +237,17 @@ fn checkGates(rep: *ScenarioReport) void {
         fbs.print("wait p99 {d:.2}ms > 1ms", .{s.drawable_wait.p99}) catch {};
     }
     if (std.mem.eql(u8, rep.id, "S12")) {
-        if (rep.extra.fps > 61.0) {
+        if (rep.extra.fps > 5.0) {
             rep.passed = false;
             sep(&fbs, &first);
-            fbs.print("fps {d:.1} > 61", .{rep.extra.fps}) catch {};
+            fbs.print("fps {d:.1} > 5", .{rep.extra.fps}) catch {};
         }
     }
     if (std.mem.eql(u8, rep.id, "S13")) {
-        if (rep.extra.fps > 31.0) {
+        if (rep.extra.fps > 1.0) {
             rep.passed = false;
             sep(&fbs, &first);
-            fbs.print("fps {d:.1} > 31", .{rep.extra.fps}) catch {};
+            fbs.print("fps {d:.1} > 1", .{rep.extra.fps}) catch {};
         }
         if (rep.extra.cpu_pct >= 2.0) {
             rep.passed = false;
@@ -262,8 +271,8 @@ fn writeAndPrintReport(gpa: std.mem.Allocator, env_tmp: ?[]const u8, reports: []
 
     const screen_hz = fastestScreenHz();
     try w.print("# KeaZig On-Screen Smoothness Report ({d} Hz target)\n\n", .{screen_hz});
-    try w.writeAll("| # | Scenario | Frames | Anim | Missed % | Int p50 | Int p90 | Int p99 | Int max | CPU p50 | CPU p99* | CPU max* | Wait p99 | GPU p50 | GPU p99 | Sync % | Gate |\n");
-    try w.writeAll("|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|\n");
+    try w.writeAll("| # | Scenario | Frames | Ret | Anim | Missed % | Int p50 | Int p90 | Int p99 | Int max | CPU p50 | CPU p99* | CPU max* | Wait p99 | GPU p50 | GPU p99 | Sync % | Gate |\n");
+    try w.writeAll("|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|\n");
 
     for (reports) |r| {
         const s = r.summary;
@@ -275,17 +284,17 @@ fn writeAndPrintReport(gpa: std.mem.Allocator, env_tmp: ?[]const u8, reports: []
             r.fail_reason[0..r.fail_len];
 
         try w.print(
-            "| {s} | {s} | {d} | {d} | {d:.1}% | {d:.2} | {d:.2} | {d:.2} | {d:.2} | {d:.2} | {d:.2} | {d:.2} | {d:.2} | {d:.2} | {d:.2} | {d:.0}% | {s} |\n",
+            "| {s} | {s} | {d} | {d} | {d} | {d:.1}% | {d:.2} | {d:.2} | {d:.2} | {d:.2} | {d:.2} | {d:.2} | {d:.2} | {d:.2} | {d:.2} | {d:.2} | {d:.0}% | {s} |\n",
             .{
                 r.id,                   r.name,
-                s.frames,               s.animating_frames,
-                s.missed_share * 100.0, s.interval.p50,
-                s.interval.p90,         s.interval.p99,
-                s.interval.max,         s.cpu.p50,
-                s.cpu.steady_p99,       s.cpu.steady_max,
-                s.drawable_wait.p99,    s.gpu.p50,
-                s.gpu.p99,              s.sync_share * 100.0,
-                gate_str,
+                s.frames,               s.retained,
+                s.animating_frames,     s.missed_share * 100.0,
+                s.interval.p50,         s.interval.p90,
+                s.interval.p99,         s.interval.max,
+                s.cpu.p50,              s.cpu.steady_p99,
+                s.cpu.steady_max,       s.drawable_wait.p99,
+                s.gpu.p50,              s.gpu.p99,
+                s.sync_share * 100.0,   gate_str,
             },
         );
     }

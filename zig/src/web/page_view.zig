@@ -282,6 +282,7 @@ pub fn showFirstFrame(view: objc.Object) void {
     const page = pageOf(view) orelse return;
     if (!page.unpainted) return;
     page.unpainted = false;
+    if (page.tab()) |t| if (t.browser) |b| if (b.stage_host) |sh| if (sh.holds(view)) return b.redraw();
     objc.msg(void, view, "setAlphaValue:", .{@as(f64, 1)});
 }
 
