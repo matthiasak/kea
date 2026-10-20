@@ -488,7 +488,7 @@ fn insetFraction(r: objc.CGRect, f: f64) objc.CGRect {
 
 fn pictureViewClass() objc.Class {
     return objc.defineClass(.{
-        .name = "KeaZigStagePictureView",
+        .name = "KeaStagePictureView",
         .superclass = "NSImageView",
         .methods = &.{
             .{ .name = "hitTest:", .imp = &hitNothing, .types = "@@:{CGPoint=dd}" },

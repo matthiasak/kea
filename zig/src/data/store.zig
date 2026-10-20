@@ -1,4 +1,4 @@
-//! Where KeaZig keeps things (`Store` in Store.swift): its folder
+//! Where Kea keeps things (`Store` in Store.swift): its folder
 //! (`opts.root`, else `~/Library/Application Support/Kea`), its defaults
 //! (`opts.suite`, else `app.kea.browser`'s defaults), and the `Disk` every file
 //! is written through.

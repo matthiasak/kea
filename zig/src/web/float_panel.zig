@@ -262,7 +262,7 @@ fn keep(self: objc.Object, _: objc.SEL, _: objc.Object) callconv(.c) void {
 }
 
 fn watchClass() objc.Class {
-    return objc.defineClass(.{ .name = "KeaZigFloatWatch", .methods = &.{.{ .name = "keep:", .imp = &keep, .types = "v@:@" }} });
+    return objc.defineClass(.{ .name = "KeaFloatWatch", .methods = &.{.{ .name = "keep:", .imp = &keep, .types = "v@:@" }} });
 }
 
 /// A wash at the top and bottom, so white buttons hold against a bright

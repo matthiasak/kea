@@ -17,7 +17,7 @@ const currentUrl = @import("../web/tab.zig").currentUrl;
 const Browser = @import("../model/browser.zig").Browser;
 const ai = @import("ai.zig");
 const more = @import("client_more.zig");
-const app_name = "KeaZig";
+const app_name = "Kea";
 
 pub const callback = "http://localhost:3000/kea/ai/callback";
 const b64 = std.base64.url_safe_no_pad.Encoder;

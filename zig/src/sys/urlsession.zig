@@ -78,7 +78,7 @@ pub fn send(
 // MARK: streamed, on the main queue
 
 /// A session whose answers arrive a piece at a time, each on the main queue
-/// (`delegateQueue = [NSOperationQueue mainQueue]`), to a `KeaZigStream`
+/// (`delegateQueue = [NSOperationQueue mainQueue]`), to a `KeaStream`
 /// delegate that hands them to the task's `Events`.
 pub const Config = struct {
     request_timeout: f64 = 60,
@@ -212,7 +212,7 @@ pub const Task = struct {
 
 fn streamClass() objc.Class {
     return objc.defineClass(.{
-        .name = "KeaZigStream",
+        .name = "KeaStream",
         .protocols = &.{ "NSURLSessionDataDelegate", "NSURLSessionTaskDelegate" },
         .methods = &.{
             .{ .name = "URLSession:dataTask:didReceiveResponse:completionHandler:", .imp = &received, .types = "v@:@@@@?" },

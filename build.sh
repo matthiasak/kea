@@ -1,11 +1,13 @@
 #!/bin/bash
-# Builds KeaZig.app (the Zig 0.17 + nanoui WebKit browser) alongside Kea.app
-# and puts it in /Applications/KeaZig.app.
+# Builds Kea (Zig 0.17 + nanoui, on WebKit) and puts it in /Applications.
+# Kea is a browser you build yourself: there is no download and nothing
+# checks for updates — pull and run this again.
 #
-#   ./build-zig.sh                 release build, installed as /Applications/KeaZig.app
-#   ./build-zig.sh debug           debug build, installed as /Applications/KeaZig.app
-#   ./build-zig.sh release test    stops at build/KeaZig.app and touches nothing else
-#   KEA_INSTALL=0 ./build-zig.sh   the same as `test`
+#   ./build.sh                 release build, installed as /Applications/Kea.app
+#   ./build.sh debug           debug build, installed as /Applications/Kea.app
+#   ./build.sh release test    stops at build/Kea.app and touches nothing else
+#   KEA_INSTALL=0 ./build.sh   the same as `test`
+#   KEA_SIGN_IDENTITY="…"      a Developer ID to sign with (default: the first in the keychain, else ad-hoc)
 set -euo pipefail
 
 cd "$(dirname "$0")"
@@ -16,11 +18,10 @@ fi
 
 CONFIG="${1:-release}"
 STEP="${2:-app}"
-case "$STEP" in app|test) ;; *) echo "usage: ./build-zig.sh [release|debug] [app|test]" >&2; exit 1 ;; esac
-ARCH="${KEA_ARCH:-$(uname -m)}"
-case "$ARCH" in arm64|x86_64) ;; *) echo "KEA_ARCH is arm64 or x86_64, not “$ARCH”" >&2; exit 1 ;; esac
+case "$STEP" in app|test) ;; *) echo "usage: ./build.sh [release|debug] [app|test]" >&2; exit 1 ;; esac
+ARCH="$(uname -m)"
 
-NAME="KeaZig"
+NAME="Kea"
 APP="build/$NAME.app"
 VERSION="$(tr -d '[:space:]' < VERSION)"
 BUILD="$(date +%Y%m%d%H%M)"
@@ -29,7 +30,7 @@ INSTALL=1
 { [ "$STEP" = "test" ] || [ "${KEA_INSTALL:-1}" = "0" ]; } && INSTALL=0
 
 if [ "$INSTALL" = 1 ] && pgrep -f "/Applications/$NAME.app/Contents/MacOS/$NAME" >/dev/null; then
-  echo "$NAME is running from /Applications — quit it, then run ./build-zig.sh again" >&2
+  echo "$NAME is running from /Applications — quit it, then run ./build.sh again" >&2
   exit 1
 fi
 
@@ -47,11 +48,7 @@ cp Kea.sdef "$APP/Contents/Resources/"
 cp Icon/kea.gif "$APP/Contents/Resources/"
 [ "$CONFIG" = "release" ] && strip -x "$APP/Contents/MacOS/$NAME"
 
-ICONSET="build/AppIconZig.iconset"
-rm -rf "$ICONSET"
-swift Icon/icon.swift Icon/kea.png "$ICONSET" > /dev/null
-iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/AppIcon.icns"
-rm -rf "$ICONSET"
+cp Icon/AppIcon.icns "$APP/Contents/Resources/"
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -68,7 +65,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>LSMinimumSystemVersion</key><string>$MINIMUM</string>
   <key>LSApplicationCategoryType</key><string>public.app-category.productivity</string>
-  <key>NSHumanReadableCopyright</key><string>KeaZig · MIT License</string>
+  <key>NSHumanReadableCopyright</key><string>Kea · MIT License</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSAppleScriptEnabled</key><true/>
   <key>NSUserActivityTypes</key><array><string>NSUserActivityTypeBrowsingWeb</string></array>

@@ -1,4 +1,4 @@
-//! Throwaway state for one test: a folder `keazig-test-<16 hex>` under
+//! Throwaway state for one test: a folder `kea-test-<16 hex>` under
 //! `NSTemporaryDirectory()` holding the Application Support root (`support/`)
 //! and the defaults suite. The suite is named by path,
 //! `<folder>/app.kea.zig.test.<16 hex>`, so cfprefsd keeps its plist there
@@ -22,7 +22,7 @@ pub const Temp = struct {
         arc4random_buf(&bytes, bytes.len);
         const hex = std.fmt.bytesToHex(bytes, .lower);
         const tmp = std.mem.trimEnd(u8, objc.fromNSString(NSTemporaryDirectory()), "/");
-        const folder = try std.fmt.allocPrint(gpa, "{s}/keazig-test-{s}", .{ tmp, &hex });
+        const folder = try std.fmt.allocPrint(gpa, "{s}/kea-test-{s}", .{ tmp, &hex });
         errdefer gpa.free(folder);
         const root = try std.fmt.allocPrint(gpa, "{s}/support", .{folder});
         errdefer gpa.free(root);

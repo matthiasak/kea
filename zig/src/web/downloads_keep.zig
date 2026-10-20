@@ -25,7 +25,7 @@ const ca = std.heap.c_allocator;
 
 fn class() objc.Class {
     return objc.defineClass(.{
-        .name = "KeaZigDownloads",
+        .name = "KeaDownloads",
         .protocols = &.{"WKDownloadDelegate"},
         .methods = &.{
             .{ .name = "download:decideDestinationUsingResponse:suggestedFilename:completionHandler:", .imp = &decideDestination, .types = "v@:@@@@?" },
@@ -213,7 +213,7 @@ fn whereToSave(f: *Fetches, owner: ?*Browser, name: []const u8, op: *Op, comptim
 
 /// `_webView:saveDataToFile:suggestedFilename:mimeType:originatingURL:`:
 /// the download button WebKit draws over a PDF, which has the file whole.
-/// An imp on the tab's `KeaZigWebDelegate` (`delegates_nav.zig`).
+/// An imp on the tab's `KeaWebDelegate` (`delegates_nav.zig`).
 pub fn saveDataToFile(self: objc.Object, _: objc.SEL, _: objc.Object, data: ?objc.Object, suggested: ?objc.Object, _: ?objc.Object, origin: ?objc.Object) callconv(.c) void {
     const t = objc.getZig(Tab, self) orelse return;
     const d = data orelse return;

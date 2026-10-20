@@ -427,7 +427,7 @@ fn watchFrames(kea: *Kea) void {
     const pool = objc.Pool.push();
     defer pool.pop();
     const cls = objc.defineClass(.{
-        .name = "KeaZigFrames",
+        .name = "KeaFrames",
         .methods = &.{
             .{ .name = "framed:", .imp = &framed, .types = "v@:@" },
             .{ .name = "menuEnded:", .imp = &menuEnded, .types = "v@:@" },

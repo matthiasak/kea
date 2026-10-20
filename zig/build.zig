@@ -63,33 +63,33 @@ pub fn build(b: *std.Build) void {
 
     const nanoui = b.dependency("nanoui", .{ .target = target, .optimize = optimize }).module("nanoui");
 
-    // KeaZig executable (KeaZig.app/Contents/MacOS/KeaZig)
+    // Kea executable (Kea.app/Contents/MacOS/Kea)
     const exe_mod = appModule(b, "src/main.zig", target, optimize, &.{.{ .name = "nanoui", .module = nanoui }});
-    const exe = b.addExecutable(.{ .name = "KeaZig", .root_module = exe_mod });
+    const exe = b.addExecutable(.{ .name = "Kea", .root_module = exe_mod });
     b.installArtifact(exe);
     const run_exe = b.addRunArtifact(exe);
     run_exe.addPassthruArgs();
-    b.step("run", "Run KeaZig").dependOn(&run_exe.step);
+    b.step("run", "Run Kea").dependOn(&run_exe.step);
 
     // Unit and HistoryRegression tests. `-Dtest-root=src/<file>.zig` tests one
     // module tree in isolation (parallel work on separate modules).
     const test_root = b.option([]const u8, "test-root", "Root file for `zig build test` (default src/main.zig)");
     const test_mod = if (test_root) |r| appModule(b, r, target, optimize, &.{.{ .name = "nanoui", .module = nanoui }}) else exe_mod;
     const tests = b.addTest(.{ .root_module = test_mod });
-    b.step("test", "Run KeaZig unit and HistoryRegression tests").dependOn(&b.addRunArtifact(tests).step);
+    b.step("test", "Run Kea unit and HistoryRegression tests").dependOn(&b.addRunArtifact(tests).step);
 
     // Headless chrome suites on ui.Tester
     const ui_tests = b.addTest(.{ .root_module = harness(b, "src/tests/ui/root.zig", target, optimize) });
     b.step("ui-test", "Run the headless chrome suites (ui.Tester)").dependOn(&b.addRunArtifact(ui_tests).step);
 
     // Frame-time gate while the sidebar edge is dragged
-    const perf = b.addExecutable(.{ .name = "keazig-perf", .root_module = harness(b, "src/tests/perf.zig", target, .ReleaseFast) });
+    const perf = b.addExecutable(.{ .name = "kea-perf", .root_module = harness(b, "src/tests/perf.zig", target, .ReleaseFast) });
     const run_perf = b.addRunArtifact(perf);
     run_perf.has_side_effects = true;
     b.step("perf", "Measure frame times dragging the sidebar edge (fails at CPU p90 >= 4 ms)").dependOn(&run_perf.step);
 
     // WebKit end to end, in process, windows hidden
-    const e2e = b.addExecutable(.{ .name = "keazig-e2e", .root_module = harness(b, "src/tests/e2e/main.zig", target, .Debug) });
+    const e2e = b.addExecutable(.{ .name = "kea-e2e", .root_module = harness(b, "src/tests/e2e/main.zig", target, .Debug) });
     // The app's scripting dictionary, which the bundle ships (scripting case).
     e2e.root_module.addAnonymousImport("kea_sdef", .{ .root_source_file = b.path("../Kea.sdef") });
     const run_e2e = b.addRunArtifact(e2e);
@@ -97,31 +97,19 @@ pub fn build(b: *std.Build) void {
     run_e2e.has_side_effects = true;
     b.step("e2e", "Run the in-process WebKit end-to-end cases").dependOn(&run_e2e.step);
     // The same binary in zig-out/bin, to run under `leaks --atExit --`.
-    b.step("e2e-bin", "Install keazig-e2e into zig-out/bin").dependOn(&b.addInstallArtifact(e2e, .{}).step);
-    const smooth = b.addExecutable(.{ .name = "keazig-smooth", .root_module = harness(b, "src/tests/e2e/main.zig", target, .ReleaseFast) });
+    b.step("e2e-bin", "Install kea-e2e into zig-out/bin").dependOn(&b.addInstallArtifact(e2e, .{}).step);
+    const smooth = b.addExecutable(.{ .name = "kea-smooth", .root_module = harness(b, "src/tests/e2e/main.zig", target, .ReleaseFast) });
     smooth.root_module.addAnonymousImport("kea_sdef", .{ .root_source_file = b.path("../Kea.sdef") });
     const run_smooth = b.addRunArtifact(smooth);
     run_smooth.addArg("--onscreen");
     run_smooth.has_side_effects = true;
     b.step("smooth", "Run on-screen smoothness scenarios S1-S13").dependOn(&run_smooth.step);
 
-    // Chrome states rendered to PNGs ($KEAZIG_SNAPSHOTS or $TMPDIR/keazig-snapshots)
-    const snaps = b.addExecutable(.{ .name = "keazig-snapshots", .root_module = harness(b, "src/tests/snapshots.zig", target, optimize) });
+    // Chrome states rendered to PNGs ($KEA_SNAPSHOTS or $TMPDIR/kea-snapshots)
+    const snaps = b.addExecutable(.{ .name = "kea-snapshots", .root_module = harness(b, "src/tests/snapshots.zig", target, optimize) });
     const run_snaps = b.addRunArtifact(snaps);
     run_snaps.has_side_effects = true;
     b.step("snapshots", "Render named chrome states to PNG").dependOn(&run_snaps.step);
-    const run_film = b.addRunArtifact(snaps);
-    run_film.addArg("film");
-    run_film.addPassthruArgs();
-    run_film.has_side_effects = true;
-    b.step("film", "Render motion film frames for peek, unpeek and fold").dependOn(&run_film.step);
-
-    const compare = b.addExecutable(.{ .name = "keazig-compare", .root_module = harness(b, "src/tests/compare.zig", target, .ReleaseFast) });
-    const run_compare = b.addRunArtifact(compare);
-    run_compare.addPassthruArgs();
-    run_compare.has_side_effects = true;
-    b.step("compare", "Compare Swift reference and KeaZig snapshots and films").dependOn(&run_compare.step);
-
     // Line limit check (<= 600 lines per file across zig/src)
     const lines = b.addExecutable(.{
         .name = "lines",

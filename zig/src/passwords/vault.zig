@@ -1,5 +1,5 @@
 //! Where passwords live (Vault.swift): the macOS keychain, as internet
-//! passwords keyed by site and account under KeaZig's own label. A run with
+//! passwords keyed by site and account under Kea's own label. A run with
 //! its own folder (`kea.opts.root`, tests) never touches the keychain or
 //! asks the Mac who you are: writes report saved, reads find nothing, and
 //! proving succeeds (plan P10.2).

@@ -36,7 +36,7 @@ const pressure_critical = dispatch.pressure_critical;
 
 fn timerClass() objc.Class {
     return objc.defineClass(.{
-        .name = "KeaZigSleepTimer",
+        .name = "KeaSleepTimer",
         .methods = &.{.{ .name = "fire:", .imp = &fire, .types = "v@:@" }},
     });
 }

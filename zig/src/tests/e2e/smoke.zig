@@ -1,4 +1,4 @@
-//! The portable checks of the old `Tests/keazig_smoke.py`, plus P0's
+//! The portable checks of the old Python smoke script, plus P0's
 //! lifetime check: closing a split's active tab leaves no slot holding it.
 const std = @import("std");
 const nanoui = @import("nanoui");

@@ -1,4 +1,4 @@
-//! Foundation's `URL`/`URLComponents` for what KeaZig reads of an address:
+//! Foundation's `URL`/`URLComponents` for what Kea reads of an address:
 //! its scheme, user, password, host, port, path, query and fragment, each
 //! kept as written (percent-encoded), and put back together by `string`.
 const std = @import("std");

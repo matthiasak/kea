@@ -1,7 +1,7 @@
 .{
-    .name = .kea_zig,
+    .name = .kea,
     .version = "0.1.0",
-    .fingerprint = 0x4557d1124b79722e,
+    .fingerprint = 0x99fc33ff78c4e0b9,
     .minimum_zig_version = "0.17.0",
     .dependencies = .{
         .nanoui = .{

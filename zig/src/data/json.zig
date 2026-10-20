@@ -1,4 +1,4 @@
-//! The one way KeaZig reads and writes JSON, shaped like Swift's `Codable`
+//! The one way Kea reads and writes JSON, shaped like Swift's `Codable`
 //! with Foundation's default `JSONEncoder`/`JSONDecoder`: nil optionals are
 //! left out, dates are `SwiftDate` seconds since 2001, UUIDs are uppercase
 //! strings, and `[String: V]` is `Map(V)`.

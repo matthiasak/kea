@@ -175,7 +175,7 @@ fn dockReopen(h: *Harness) !void {
     defer k.opts.hidden = true;
     var called = false;
     const cls = objc.defineClass(.{
-        .name = "KeaZigDeminiaturizeProbe",
+        .name = "KeaDeminiaturizeProbe",
         .superclass = "NSWindow",
         .methods = &.{
             .{ .name = "isMiniaturized", .imp = &struct {

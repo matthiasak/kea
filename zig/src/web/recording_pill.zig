@@ -1,5 +1,5 @@
 //! The recording pill (RecordingIndicator.swift 85-217): "● Loom is
-//! recording your screen — Stop", a small panel of KeaZig's own at the foot
+//! recording your screen — Stop", a small panel of Kea's own at the foot
 //! of the screen for as long as an extension records anything, beside
 //! macOS's own sharing item and dots. It never takes the keys or the focus.
 //! What is recording is `ext/capture_watch.zig`'s to say; this shows it.

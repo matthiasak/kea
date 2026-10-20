@@ -21,7 +21,7 @@ const Loot = @import("../data/loot.zig").Loot;
 const Fetches = @import("../web/downloads.zig").Fetches;
 
 /// The app's name wherever Swift's strings name Kea the app.
-pub const app_name = "KeaZig";
+pub const app_name = "Kea";
 
 pub const Options = struct {
     /// Application Support folder override (tests).
@@ -137,7 +137,7 @@ pub const Kea = struct {
         // Failing that, the browser opens without extensions.
         if (@import("../ext/ext.zig").available() and !opts.headless)
             self.ext = @import("../ext/controller.zig").Extensions.create(self) catch null;
-        // Its popups and the recording pill are KeaZig's own windows.
+        // Its popups and the recording pill are Kea's own windows.
         if (self.ext) |e| {
             @import("../ext/popup.zig").install(e);
             @import("../web/recording_pill.zig").install();

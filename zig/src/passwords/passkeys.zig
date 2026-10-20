@@ -140,7 +140,7 @@ fn manager() ?objc.Object {
     return objc.msg(objc.Object, objc.msg(objc.Object, cls, "new", .{}), "autorelease", .{});
 }
 
-/// Whether this Mac lets KeaZig use its passkeys at all (`access`).
+/// Whether this Mac lets Kea use its passkeys at all (`access`).
 pub fn access() Access {
     const pool = objc.Pool.push();
     defer pool.pop();
@@ -151,7 +151,7 @@ pub fn access() Access {
 pub const Passkeys = struct {
     kea: *Kea,
     gpa: std.mem.Allocator,
-    /// The `KeaZigPasskeyRelay` every tab's controller gets, made on first use.
+    /// The `KeaPasskeyRelay` every tab's controller gets, made on first use.
     relay_object: ?objc.Object = null,
     /// The `ASAuthorizationController`'s delegate and anchor provider.
     delegate: ?objc.Object = null,

@@ -1,4 +1,4 @@
-//! `KeaZigWebDelegate`: Browser's `WKNavigationDelegate` (Browser.swift
+//! `KeaWebDelegate`: Browser's `WKNavigationDelegate` (Browser.swift
 //! 4184-4955) — which navigations go ahead, where links that ask for a new
 //! tab go, what a commit, a finish and a failure do to the tab, History's
 //! one visit per load — plus the tab's events reaching its window
@@ -25,7 +25,7 @@ pub const Change = enum { address, title, state };
 
 fn class() objc.Class {
     return objc.defineClass(.{
-        .name = "KeaZigWebDelegate",
+        .name = "KeaWebDelegate",
         .protocols = &.{ "WKNavigationDelegate", "WKUIDelegate", "WKScriptMessageHandler" },
         .methods = &([_]objc.Method{
             .{ .name = "webView:decidePolicyForNavigationAction:preferences:decisionHandler:", .imp = &decideAction, .types = "v@:@@@@?" },

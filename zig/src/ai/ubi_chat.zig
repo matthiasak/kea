@@ -16,7 +16,7 @@ const Browser = @import("../model/browser.zig").Browser;
 const Kea = @import("../app/kea.zig").Kea;
 const address = @import("../model/address.zig");
 const url = @import("../data/url.zig");
-const app_name = "KeaZig";
+const app_name = "Kea";
 
 pub const Slash = struct { name: []const u8, hint: []const u8 };
 pub const Starter = struct { label: []const u8, prompt: []const u8 };

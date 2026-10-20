@@ -1,5 +1,5 @@
 //! AppleScript, read-only, in Safari's words (Scripting.swift, Kea.sdef,
-//! which `build-zig.sh` puts in the app): a window's `tabs` and its
+//! which `build.sh` puts in the app): a window's `tabs` and its
 //! `current tab`, and each tab's `URL` and `name`. `count` is AppKit's own
 //! `NSCountCommand`. Nothing here changes anything, runs anything in a
 //! page, or opens or closes a tab. Private tabs are never shown to a

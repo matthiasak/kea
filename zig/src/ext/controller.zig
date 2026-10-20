@@ -263,7 +263,7 @@ pub const Extensions = struct {
         return self.loaded_before.has(id);
     }
 
-    /// `Extensions.folder(for:)`: <KeaZig folder>/Extensions/<id>, on gpa.
+    /// `Extensions.folder(for:)`: <Kea folder>/Extensions/<id>, on gpa.
     pub fn folderFor(self: *Extensions, id: []const u8) ![]u8 {
         return std.fmt.allocPrint(self.gpa, "{s}/Extensions/{s}", .{ self.kea.store.folder, id });
     }

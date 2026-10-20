@@ -170,7 +170,7 @@ pub fn allowed(alloc: std.mem.Allocator, kea: *const Kea) ![][]u8 {
 
 fn class() objc.Class {
     return objc.defineClass(.{
-        .name = "KeaZigSiteNotifications",
+        .name = "KeaSiteNotifications",
         .protocols = &.{"UNUserNotificationCenterDelegate"},
         .methods = &.{
             .{ .name = "notificationPermissionsForWebsiteDataStore:", .imp = &permissions, .types = "@@:@" },

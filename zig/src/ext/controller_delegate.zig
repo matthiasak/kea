@@ -31,7 +31,7 @@ const H = *const anyopaque;
 /// Makes the delegate, points it at `self`, and sets it on the controller.
 pub fn attach(self: *Extensions) void {
     const cls = objc.defineClass(.{
-        .name = "KeaZigExtensionsDelegate",
+        .name = "KeaExtensionsDelegate",
         .protocols = &.{"WKWebExtensionControllerDelegate"},
         .methods = &.{
             .{ .name = "webExtensionController:openWindowsForExtensionContext:", .imp = &openWindows, .types = "@@:@@" },

@@ -1,4 +1,4 @@
-//! A headless KeaZig in a temp root and defaults suite, drawn by `ui.Tester`.
+//! A headless Kea in a temp root and defaults suite, drawn by `ui.Tester`.
 //! Holes the page would show through are `tester.ctx.stage_rects[0..stage_count]`.
 const std = @import("std");
 const nanoui = @import("nanoui");

@@ -84,11 +84,11 @@ test "store offer shows on a store page and not once installed" {
     _ = b.open(elsewhere, .{ .foreground = true });
     f.tester.settle(2);
     try t.expect(app.ext_ui.offered(b) != null);
-    try t.expect(f.tester.hasText("Add this extension to KeaZig"));
+    try t.expect(f.tester.hasText("Add this extension to Kea"));
     // The one installed: no offer.
     const mine = try std.fmt.bufPrint(&buf, "https://chromewebstore.google.com/detail/fixture/{s}", .{e.installed.items[0].id});
     _ = b.open(mine, .{ .foreground = true });
     f.tester.settle(2);
     try t.expect(app.ext_ui.offered(b) == null);
-    try t.expect(!f.tester.hasText("Add this extension to KeaZig"));
+    try t.expect(!f.tester.hasText("Add this extension to Kea"));
 }

@@ -131,7 +131,7 @@ const Consented = *const fn (job: *Job, yes: bool) void;
 
 /// `consent(_:)`: yes from you now, or before and you have just used this
 /// extension (its button within a minute, its pages within seconds).
-/// Refused once, not asked again until KeaZig starts afresh.
+/// Refused once, not asked again until Kea starts afresh.
 fn consent(job: *Job, then: Consented) void {
     const owner = job.owner;
     const id = idOf(job.context);
@@ -264,7 +264,7 @@ pub fn instance() objc.Object {
     };
     if (S.made) |m| return m;
     const cls = objc.defineClass(.{
-        .name = "KeaZigCapture",
+        .name = "KeaCapture",
         .protocols = &.{"WKScriptMessageHandlerWithReply"},
         .methods = &.{
             .{ .name = "userContentController:didReceiveScriptMessage:replyHandler:", .imp = &received, .types = "v@:@@@?" },
@@ -425,7 +425,7 @@ fn chosen(job: *Job, yes: bool) void {
 
 // MARK: recording
 
-/// Pages where KeaZig's own call is under way, and the picker it asks for
+/// Pages where Kea's own call is under way, and the picker it asks for
 /// (1 a screen, 2 a window).
 var in_flight: std.AutoHashMapUnmanaged(usize, objc.NSInteger) = .empty;
 
@@ -437,7 +437,7 @@ fn display_decision(_: *Capture, web: objc.Object) objc.NSInteger {
 pub const display_selector = "_webView:requestDisplayCapturePermissionForOrigin:initiatedByFrame:withSystemAudio:decisionHandler:";
 
 /// The private UI-delegate method, for offscreen documents, the page
-/// delegate and the popup: yes only while KeaZig's own call is under way.
+/// delegate and the popup: yes only while Kea's own call is under way.
 pub fn displayCapture(_: objc.Object, _: objc.SEL, web: objc.Object, _: objc.Object, _: objc.Object, _: objc.BOOL, decide: *const anyopaque) callconv(.c) void {
     dialogs.call(decide, .{the.displayDecision(web)});
 }

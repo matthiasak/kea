@@ -122,7 +122,7 @@ const H = *const anyopaque; // completion handler
 
 fn tabClass() objc.Class {
     return objc.defineClass(.{
-        .name = "KeaZigExtensionTab",
+        .name = "KeaExtensionTab",
         .protocols = &.{"WKWebExtensionTab"},
         .methods = &.{
             .{ .name = "windowForWebExtensionContext:", .imp = &tWindow, .types = "@@:@" },
@@ -314,7 +314,7 @@ fn tSnapshot(self: objc.Object, _: Sel, configuration: objc.Object, c: C, h: H) 
 
 fn windowClass() objc.Class {
     return objc.defineClass(.{
-        .name = "KeaZigExtensionWindow",
+        .name = "KeaExtensionWindow",
         .protocols = &.{"WKWebExtensionWindow"},
         .methods = &.{
             .{ .name = "tabsForWebExtensionContext:", .imp = &wTabs, .types = "@@:@" },

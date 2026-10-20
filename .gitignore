@@ -1,18 +1,12 @@
 # Build output — build.sh regenerates all of this.
-.build/
 build/
-.swiftpm/
 .zig-cache/
 zig-out/
 zig/.zig-cache/
 zig/zig-out/
 zig/nanoui/.zig-cache/
 zig/nanoui/zig-out/
-*.xcuserstate
 .DS_Store
-
-# Python's bytecode cache, left in Tests/ by the probe scripts.
-__pycache__/
 
 # Signing material that's tied to one Apple Developer account and should
 # never be committed, even though the scripts happily run without it.

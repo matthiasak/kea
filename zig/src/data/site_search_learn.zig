@@ -54,7 +54,7 @@ pub fn learn(ss: *SiteSearch, page: []const u8, description: []const u8) bool {
     objc.msg(void, req, "setHTTPShouldHandleCookies:", .{objc.NO});
     const config = objc.msg(objc.Object, objc.class("NSURLSessionConfiguration"), "ephemeralSessionConfiguration", .{});
     _ = redirectsClass();
-    const redirects = objc.msg(objc.Object, objc.alloc("KeaZigSameSiteRedirects"), "init", .{});
+    const redirects = objc.msg(objc.Object, objc.alloc("KeaSameSiteRedirects"), "init", .{});
     objc.setZig(redirects, job);
     const main_queue = objc.msg(objc.Object, objc.class("NSOperationQueue"), "mainQueue", .{});
     const session = objc.msg(objc.Object, objc.class("NSURLSession"), "sessionWithConfiguration:delegate:delegateQueue:", .{ config, redirects, main_queue });
@@ -93,7 +93,7 @@ fn arrived(job: *Job, data: ?objc.Object, response: ?objc.Object, _: ?objc.Objec
 
 fn redirectsClass() objc.Class {
     return objc.defineClass(.{
-        .name = "KeaZigSameSiteRedirects",
+        .name = "KeaSameSiteRedirects",
         .protocols = &.{"NSURLSessionTaskDelegate"},
         .methods = &.{.{
             .name = "URLSession:task:willPerformHTTPRedirection:newRequest:completionHandler:",
@@ -131,7 +131,7 @@ pub fn parse(gpa: std.mem.Allocator, data: []const u8) ?[]u8 {
         const pool = objc.Pool.push();
         defer pool.pop();
         const cls = objc.defineClass(.{
-            .name = "KeaZigOpenSearchReader",
+            .name = "KeaOpenSearchReader",
             .protocols = &.{"NSXMLParserDelegate"},
             .methods = &.{.{
                 .name = "parser:didStartElement:namespaceURI:qualifiedName:attributes:",
@@ -143,7 +143,7 @@ pub fn parse(gpa: std.mem.Allocator, data: []const u8) ?[]u8 {
         const bytes = objc.msg(objc.Object, objc.class("NSData"), "dataWithBytes:length:", .{ data.ptr, @as(objc.NSUInteger, data.len) });
         const parser = objc.msg(objc.Object, objc.alloc("NSXMLParser"), "initWithData:", .{bytes});
         defer objc.release(parser);
-        const delegate = objc.msg(objc.Object, objc.alloc("KeaZigOpenSearchReader"), "init", .{});
+        const delegate = objc.msg(objc.Object, objc.alloc("KeaOpenSearchReader"), "init", .{});
         defer objc.release(delegate);
         objc.setZig(delegate, &reader);
         objc.msg(void, parser, "setDelegate:", .{delegate});

@@ -206,7 +206,7 @@ fn received(ctx: *anyopaque, message: ?objc.Object, _: ?objc.Object) void {
 
 fn delegateClass() objc.Class {
     return objc.defineClass(.{
-        .name = "KeaZigExtensionSocket",
+        .name = "KeaExtensionSocket",
         .protocols = &.{"NSURLSessionWebSocketDelegate"},
         .methods = &[_]objc.Method{
             .{ .name = "URLSession:webSocketTask:didOpenWithProtocol:", .imp = &didOpen, .types = "v@:@@@" },

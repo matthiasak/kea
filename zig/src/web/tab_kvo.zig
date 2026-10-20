@@ -1,4 +1,4 @@
-//! `KeaZigObserver`: KVO on a tab's page (Tab.swift 654-692 `watch`,
+//! `KeaObserver`: KVO on a tab's page (Tab.swift 654-692 `watch`,
 //! `AudioWatch` 1391-1423, the capture states RecordingIndicator reads).
 //! Removed before the view is let go (`discard`).
 const std = @import("std");
@@ -15,7 +15,7 @@ const audio = "_isPlayingAudio";
 
 fn class() objc.Class {
     return objc.defineClass(.{
-        .name = "KeaZigObserver",
+        .name = "KeaObserver",
         .methods = &.{
             .{ .name = "observeValueForKeyPath:ofObject:change:context:", .imp = &observe, .types = "v@:@@@^v" },
         },

@@ -76,7 +76,7 @@ pub const Op = struct {
 
 fn watchClass() objc.Class {
     return objc.defineClass(.{
-        .name = "KeaZigDownloadWatch",
+        .name = "KeaDownloadWatch",
         .methods = &.{
             .{ .name = "observeValueForKeyPath:ofObject:change:context:", .imp = &observed, .types = "v@:@@@^v" },
         },

@@ -433,7 +433,7 @@ const Watcher = struct { serial: u64, id: []u8, context: objc.Object };
 
 fn watcherClass() objc.Class {
     return objc.defineClass(.{
-        .name = "KeaZigExtensionErrors",
+        .name = "KeaExtensionErrors",
         .methods = &.{.{ .name = "errorsChanged:", .imp = &errorsChanged, .types = "v@:@" }},
     });
 }

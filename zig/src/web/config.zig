@@ -117,7 +117,7 @@ pub fn configuration(kea: *Kea, shy: bool, data_store: ?objc.Object) objc.Object
     objc.msg(void, config, "setApplicationNameForUserAgent:", .{objc.nsString(userAgentName())});
     objc.msg(void, config, "setAllowsAirPlayForMediaPlayback:", .{objc.YES});
     if (objc.msg(objc.BOOL, config, "respondsToSelector:", .{objc.sel("_setProcessDisplayName:")}))
-        objc.msg(void, config, "_setProcessDisplayName:", .{objc.nsString("KeaZig Web Content")});
+        objc.msg(void, config, "_setProcessDisplayName:", .{objc.nsString("Kea Web Content")});
     const prefs = objc.msg(objc.Object, config, "preferences", .{});
     objc.msg(void, prefs, "setElementFullscreenEnabled:", .{objc.YES});
     objc.msg(void, prefs, "setJavaScriptCanOpenWindowsAutomatically:", .{objc.NO});

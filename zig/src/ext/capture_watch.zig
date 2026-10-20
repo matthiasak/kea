@@ -402,7 +402,7 @@ pub fn set(name: [:0]const u8, on: bool, prefs: objc.Object) void {
 /// get one, and keep WebKit's own way: the Mac's picker.
 fn pageClass() objc.Class {
     return objc.defineClass(.{
-        .name = "KeaZigExtensionPageDelegate",
+        .name = "KeaExtensionPageDelegate",
         .protocols = &.{"WKUIDelegate"},
         .methods = &.{
             .{ .name = "respondsToSelector:", .imp = &pageResponds, .types = "B@::" },

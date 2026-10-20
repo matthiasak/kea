@@ -2,7 +2,7 @@
 //! 335-390): its page, in the browser's window but not among its tabs
 //! (`PopupPage`, where Chrome puts a popup too), and the delegate of its
 //! view — a camera or microphone asked on the front window's bar, screen
-//! recording only through KeaZig's own call, window.close() and links out.
+//! recording only through Kea's own call, window.close() and links out.
 const std = @import("std");
 const objc = @import("nanoui").objc;
 const popup = @import("popup.zig");
@@ -24,7 +24,7 @@ var shared: ?objc.Object = null;
 pub fn delegate() objc.Object {
     if (shared) |d| return d;
     const cls = objc.defineClass(.{
-        .name = "KeaZigPopupDelegate",
+        .name = "KeaPopupDelegate",
         .protocols = &.{ "WKUIDelegate", "WKNavigationDelegate" },
         .methods = &.{
             .{ .name = "webView:requestMediaCapturePermissionForOrigin:initiatedByFrame:type:decisionHandler:", .imp = &askedForCapture, .types = "v@:@@@q@?" },
@@ -83,7 +83,7 @@ fn createWebView(_: C, _: Sel, wv: C, _: C, action: C, _: C) callconv(.c) ?objc.
 
 fn pageClass() objc.Class {
     return objc.defineClass(.{
-        .name = "KeaZigPopupPage",
+        .name = "KeaPopupPage",
         .protocols = &.{"WKWebExtensionTab"},
         .methods = &.{
             .{ .name = "windowForWebExtensionContext:", .imp = &pWindow, .types = "@@:@" },

@@ -1,4 +1,4 @@
-//! `KeaZigPageView`, a `WKWebView` that reads the two-finger swipe for
+//! `KeaPageView`, a `WKWebView` that reads the two-finger swipe for
 //! itself (`PageView`, Tab.swift 1509-2070): the link menu's renames and
 //! its ⌥ alternate, "Search with <engine>", the mouse's back and forward
 //! buttons, keys the page didn't use kept quiet, the first frame held back
@@ -39,7 +39,7 @@ const Action = struct { target: ?objc.Object = null, action: ?objc.SEL = null };
 
 fn class() objc.Class {
     return objc.defineClass(.{
-        .name = "KeaZigPageView",
+        .name = "KeaPageView",
         .superclass = "WKWebView",
         .methods = &.{
             .{ .name = "willOpenMenu:withEvent:", .imp = &willOpenMenu, .types = "v@:@@" },

@@ -1,6 +1,6 @@
 //! P5.6, part B: the link under the pointer reaches the status line; a link
 //! from another app opens in a small window that never shows here, and
-//! Open in KeaZig moves its page into a tab, loaded as it is; Escape closes
+//! Open in Kea moves its page into a tab, loaded as it is; Escape closes
 //! one; a playing video's page floats into the panel and comes back.
 const std = @import("std");
 const nanoui = @import("nanoui");
@@ -12,7 +12,7 @@ const web = @import("web.zig");
 
 pub const cases = [_]Case{
     .{ .name = "hovering a link sets the status line", .run = hoverStatus },
-    .{ .name = "little window opens hidden and Open in KeaZig keeps its page", .run = littleKeeps },
+    .{ .name = "little window opens hidden and Open in Kea keeps its page", .run = littleKeeps },
     .{ .name = "little window closes with escape and its page goes", .run = littleCloses },
     .{ .name = "float panel hosts the page and gives it back", .run = floats },
 };
@@ -80,10 +80,10 @@ fn littleKeeps(h: *Harness) !void {
     const s = l.window.surface orelse return h.fail("no surface", .{});
     const pill = blk: {
         for (s.ctx.nodes.items) |n| switch (n.content) {
-            .text => |tx| if (std.mem.eql(u8, tx.str, "Open in KeaZig")) break :blk n.rect,
+            .text => |tx| if (std.mem.eql(u8, tx.str, "Open in Kea")) break :blk n.rect,
             else => {},
         };
-        return h.fail("no Open in KeaZig", .{});
+        return h.fail("no Open in Kea", .{});
     };
     // The window's coordinates run up from its bottom.
     const height = objc.msg(objc.CGRect, objc.msg(objc.Object, l.window.nswindow, "contentView", .{}), "bounds", .{}).size.height;

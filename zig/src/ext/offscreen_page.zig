@@ -1,5 +1,5 @@
 //! The offscreen document's view delegate and the extension's tab adapter
-//! (ExtensionOffscreen.swift 196-283): `KeaZigOffscreen`, conforming to
+//! (ExtensionOffscreen.swift 196-283): `KeaOffscreen`, conforming to
 //! WKNavigationDelegate, WKUIDelegate and WKWebExtensionTab.
 const std = @import("std");
 const nanoui = @import("nanoui");
@@ -20,7 +20,7 @@ const Closed = off.Closed;
 
 pub fn class() objc.Class {
     return objc.defineClass(.{
-        .name = "KeaZigOffscreen",
+        .name = "KeaOffscreen",
         .protocols = &.{ "WKNavigationDelegate", "WKUIDelegate", "WKWebExtensionTab" },
         .methods = &.{
             .{ .name = "webView:didFinishNavigation:", .imp = &didFinish, .types = "v@:@@" },

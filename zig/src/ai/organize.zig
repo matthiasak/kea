@@ -15,7 +15,7 @@ const Asking = @import("assistant_runs.zig").Asking;
 const Bookmark = bm.Bookmark;
 const Bookmarks = bm.Bookmarks;
 const A = std.mem.Allocator;
-const app_name = "KeaZig";
+const app_name = "Kea";
 
 /// What it proposes, and the list it was asked about; all on `arena`.
 pub const Proposal = struct {

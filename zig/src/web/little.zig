@@ -1,7 +1,7 @@
 //! A small window for a link from another app (Little.swift, Settings ›
 //! General `links.little`): the page, and a 34-point line over it with the
-//! site and Open in KeaZig — to read and close, or to keep. The page is a
-//! tab of its own in a window of its own; Open in KeaZig (⌘O) moves it
+//! site and Open in Kea — to read and close, or to keep. The page is a
+//! tab of its own in a window of its own; Open in Kea (⌘O) moves it
 //! into the browser's row, loaded as it is. Its keys are its own, before
 //! the browser's: ⌘O keeps it, Escape and ⌘W close it.
 const std = @import("std");
@@ -213,7 +213,7 @@ fn view(self: *Little, c: *ui.Context) void {
 
 /// `ExtensionPopupView`: an extension's popup window (windows.create with
 /// type "popup") shows its tab in front as the small window shows a page,
-/// the site over it and no Open in KeaZig.
+/// the site over it and no Open in Kea.
 pub fn popupView(b: *Browser, c: *ui.Context) void {
     const p = palette.get(c.theme.dark);
     c.title_bar_height = 0;
@@ -229,7 +229,7 @@ pub fn popupView(b: *Browser, c: *ui.Context) void {
 }
 
 /// `LittleView`: the page, and the line over it — the site, and Open in
-/// KeaZig when there is somewhere to keep it; true when that is pressed.
+/// Kea when there is somewhere to keep it; true when that is pressed.
 fn body(c: *ui.Context, p: *const palette.Palette, tab: *Tab, keeps: bool) bool {
     ui.column(c, .{ .width = .fill, .height = .fill });
     defer ui.end(c);

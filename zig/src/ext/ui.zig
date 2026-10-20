@@ -252,7 +252,7 @@ fn actions(arena: std.mem.Allocator, b: *Browser, at: u64) anyerror![]const Menu
 // MARK: StoreOffer
 
 /// The store page's extension in the tab in front, when it is to be offered:
-/// not where the page's own "Add to KeaZig" is in place, not once installed.
+/// not where the page's own "Add to Kea" is in place, not once installed.
 pub fn offered(b: *Browser) ?crx.Id {
     const e = b.kea.ext orelse return null;
     const tab = b.activeTab() orelse return null;
@@ -262,7 +262,7 @@ pub fn offered(b: *Browser) ?crx.Id {
     return id;
 }
 
-/// The bar: "Add this extension to KeaZig" and Add, or Adding… while it comes.
+/// The bar: "Add this extension to Kea" and Add, or Adding… while it comes.
 pub fn storeOffer(b: *Browser, c: *ui.Context, p: *const Palette, id: crx.Id, t: f32) void {
     const e = b.kea.ext orelse return;
     const busy = if (e.busy) |x| std.mem.eql(u8, x, &id) else false;

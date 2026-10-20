@@ -40,7 +40,7 @@ pub fn openNewTab(d: objc.Object, _: Sel, _: C, configuration: objc.Object, _: C
 }
 
 fn isWindow(o: objc.Object) bool {
-    return objc.msg(objc.BOOL, o, "isKindOfClass:", .{objc.class("KeaZigExtensionWindow")});
+    return objc.msg(objc.BOOL, o, "isKindOfClass:", .{objc.class("KeaExtensionWindow")});
 }
 
 const popup_type: objc.NSInteger = 1;

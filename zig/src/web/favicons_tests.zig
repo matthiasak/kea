@@ -206,7 +206,7 @@ test "square decodes 16px, 48px, multi-frame ico, 32x16 letterbox and SVG into 1
 test "setDark flips cached and clears missing" {
     const ca = std.heap.c_allocator;
     var favs = try ca.create(f.Favicons);
-    favs.* = .{ .kea = null, .folder = try ca.dupe(u8, "/tmp/keazig-favs-test-nonexistent") };
+    favs.* = .{ .kea = null, .folder = try ca.dupe(u8, "/tmp/kea-favs-test-nonexistent") };
     defer favs.deinit();
     const light_png = try solidPng(ca, 16, 16, 10, 20, 30);
     const dark_png = try solidPng(ca, 16, 16, 230, 240, 250);

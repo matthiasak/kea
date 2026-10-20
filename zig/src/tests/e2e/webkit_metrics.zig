@@ -1,4 +1,4 @@
-//! KeaZig-only WebKit performance and footprint report (`webkit metrics (report)`).
+//! WebKit performance and footprint report (`webkit metrics (report)`).
 const std = @import("std");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;

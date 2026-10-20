@@ -84,7 +84,7 @@ pub const StageHost = struct {
         errdefer gpa.destroy(self);
 
         const stage_class = objc.defineClass(.{
-            .name = "KeaZigStageView",
+            .name = "KeaStageView",
             .superclass = "NSView",
             .methods = &.{
                 .{ .name = "isFlipped", .imp = &yes, .types = "c@:" },

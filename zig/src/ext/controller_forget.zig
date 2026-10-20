@@ -328,7 +328,7 @@ const Forget = struct {
 
 fn pageClass() objc.Class {
     return objc.defineClass(.{
-        .name = "KeaZigForgetPage",
+        .name = "KeaForgetPage",
         .protocols = &.{"WKNavigationDelegate"},
         .methods = &.{
             .{ .name = "webView:didFinishNavigation:", .imp = &didFinish, .types = "v@:@@" },

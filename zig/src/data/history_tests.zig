@@ -1,5 +1,5 @@
 //! `History` against its file: fixtures, the cap, coalescing, and the
-//! HistoryRegression cases carried over from the first KeaZig history.
+//! HistoryRegression cases carried over from the first Kea history.
 const std = @import("std");
 const nanoui = @import("nanoui");
 const json = @import("json.zig");

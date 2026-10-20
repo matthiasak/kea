@@ -89,7 +89,7 @@ fn later(t: *Tab, wv: ?objc.Object, url: []const u8, revision: ?u64) void {
     objc.dispatchMain(l, Later.run);
 }
 
-// MARK: the delegate methods (KeaZigWebDelegate)
+// MARK: the delegate methods (KeaWebDelegate)
 
 pub const methods = [_]objc.Method{
     .{ .name = "webView:didStartProvisionalNavigation:", .imp = &didStartProvisional, .types = "v@:@@" },

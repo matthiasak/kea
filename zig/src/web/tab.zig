@@ -40,10 +40,10 @@ pub const Tab = struct {
     /// The window that hears what the tab says (`delegate`, `prepare`).
     browser: ?*Browser = null,
 
-    /// The page (`built`), a `KeaZigPageView`; null until built, and always
+    /// The page (`built`), a `KeaPageView`; null until built, and always
     /// under headless runs.
     web: ?objc.Object = null,
-    /// Its navigation, UI and relay handler (`KeaZigWebDelegate`).
+    /// Its navigation, UI and relay handler (`KeaWebDelegate`).
     delegate: ?objc.Object = null,
     /// Its KVO observer (`watch`, `AudioWatch`, the capture states).
     observer: ?objc.Object = null,

@@ -26,7 +26,7 @@ pub const Harness = struct {
     reason_buf: [512]u8 = undefined,
     reason: []const u8 = "",
 
-    /// Opens the case's KeaZig: one hidden window with one browser.
+    /// Opens the case's Kea: one hidden window with one browser.
     pub fn start(h: *Harness) !*app.Browser {
         return h.startWith(.{});
     }
@@ -50,7 +50,7 @@ pub const Harness = struct {
         return b;
     }
 
-    /// Opens the case's KeaZig on the fastest screen without stealing focus,
+    /// Opens the case's Kea on the fastest screen without stealing focus,
     /// recording frames on the window's surface.
     pub fn startOnscreen(h: *Harness) !*app.Browser {
         const k = try app.Kea.create(h.gpa, ui_app, .{
@@ -78,7 +78,7 @@ pub const Harness = struct {
         return b;
     }
 
-    /// Ends the case's KeaZig as quitting does: windows close, stores flush.
+    /// Ends the case's Kea as quitting does: windows close, stores flush.
     pub fn quit(h: *Harness) void {
         if (h.kea) |k| k.destroy();
         h.kea = null;
@@ -267,8 +267,8 @@ pub fn main(init: std.process.Init) !void {
     }
     var failed: usize = 0;
     var ran: usize = 0;
-    // `KEAZIG_E2E=<text>`: only the cases whose names contain it.
-    const only = init.environ_map.get("KEAZIG_E2E");
+    // `KEA_E2E=<text>`: only the cases whose names contain it.
+    const only = init.environ_map.get("KEA_E2E");
     for (cases) |case| {
         if (only) |o| if (std.mem.indexOf(u8, case.name, o) == null) continue;
         ran += 1;

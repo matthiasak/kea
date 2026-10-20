@@ -1,7 +1,7 @@
-//! On-screen smoothness harness (`zig build smooth` / `keazig-e2e --onscreen`).
+//! On-screen smoothness harness (`zig build smooth` / `kea-e2e --onscreen`).
 //! Places the window on the highest-refresh screen with `orderFrontRegardless`
 //! (never taking focus), drives input directly into `s.nsview`, runs S1–S13
-//! 3 times each, prints and writes `$TMPDIR/keazig-smooth/report.md`, and
+//! 3 times each, prints and writes `$TMPDIR/kea-smooth/report.md`, and
 //! checks the Verification § 3 gates.
 const std = @import("std");
 const nanoui = @import("nanoui");
@@ -61,8 +61,8 @@ pub fn run(
     handler: objc.Object,
     http: []const u8,
 ) !bool {
-    const baseline = init.environ_map.get("KEAZIG_SMOOTH_BASELINE") != null;
-    const only = init.environ_map.get("KEAZIG_SMOOTH");
+    const baseline = init.environ_map.get("KEA_SMOOTH_BASELINE") != null;
+    const only = init.environ_map.get("KEA_SMOOTH");
     const env_tmp = init.environ_map.get("TMPDIR");
 
     var reports: [scenarios.all.len]ScenarioReport = undefined;
@@ -270,7 +270,7 @@ fn writeAndPrintReport(gpa: std.mem.Allocator, env_tmp: ?[]const u8, reports: []
     const w = &aw.writer;
 
     const screen_hz = fastestScreenHz();
-    try w.print("# KeaZig On-Screen Smoothness Report ({d} Hz target)\n\n", .{screen_hz});
+    try w.print("# Kea On-Screen Smoothness Report ({d} Hz target)\n\n", .{screen_hz});
     try w.writeAll("| # | Scenario | Frames | Ret | Anim | Missed % | Int p50 | Int p90 | Int p99 | Int max | CPU p50 | CPU p99* | CPU max* | Wait p99 | GPU p50 | GPU p99 | Sync % | Gate |\n");
     try w.writeAll("|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|\n");
 
@@ -323,7 +323,7 @@ fn writeAndPrintReport(gpa: std.mem.Allocator, env_tmp: ?[]const u8, reports: []
     defer pool.pop();
     const raw_tmp = env_tmp orelse objc.fromNSString(NSTemporaryDirectory());
     const tmp = std.mem.trimEnd(u8, raw_tmp, "/");
-    const dir_path = try std.fmt.allocPrint(gpa, "{s}/keazig-smooth", .{tmp});
+    const dir_path = try std.fmt.allocPrint(gpa, "{s}/kea-smooth", .{tmp});
     defer gpa.free(dir_path);
     const file_path = try std.fmt.allocPrint(gpa, "{s}/report.md", .{dir_path});
     defer gpa.free(file_path);

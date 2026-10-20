@@ -1,4 +1,4 @@
-//! KeaZig's modules as one import (`@import("kea")`) for the test harnesses:
+//! Kea's modules as one import (`@import("kea")`) for the test harnesses:
 //! `zig build ui-test`, `perf`, `e2e` and `snapshots`.
 pub const kea = @import("app/kea.zig");
 pub const Kea = kea.Kea;
@@ -55,7 +55,6 @@ pub const shortcuts = @import("app/shortcuts.zig");
 pub const menus = @import("app/menus.zig");
 pub const keys = @import("app/keys.zig");
 pub const palette = @import("design/palette.zig");
-pub const motion = @import("design/motion.zig");
 pub const store = @import("data/store.zig");
 pub const disk = @import("data/disk.zig");
 pub const json = @import("data/json.zig");

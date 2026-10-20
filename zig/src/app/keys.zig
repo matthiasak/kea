@@ -84,8 +84,8 @@ pub fn modifiers(b: *Browser, event: objc.Object) void {
     if (flags & command == 0) b.landSummon();
 }
 
-/// The last key handed to the page before KeaZig acted on it (`pageFirst`):
-/// if WebKit sends it back unused, it is KeaZig's.
+/// The last key handed to the page before Kea acted on it (`pageFirst`):
+/// if WebKit sends it back unused, it is Kea's.
 /// Swift's `PageView.same`: no two presses share a timestamp.
 const Pressed = struct { at: f64, code: u16, kind: objc.NSUInteger };
 var passed: ?Pressed = null;
@@ -414,7 +414,7 @@ extern "c" fn objc_getClass(name: [*:0]const u8) ?objc.Class;
 
 fn pageHasKeys(event: objc.Object) bool {
     const r = responder(event) orelse return false;
-    const cls = objc_getClass("KeaZigPageView") orelse return false;
+    const cls = objc_getClass("KeaPageView") orelse return false;
     return objc.msg(objc.BOOL, r, "isKindOfClass:", .{cls});
 }
 

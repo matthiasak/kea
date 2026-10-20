@@ -1,6 +1,6 @@
 //! `zig build snapshots`: renders named chrome states to PNG files named
-//! `<phase>-<state>-<light|dark>.png` in `$KEAZIG_SNAPSHOTS`
-//! (default `$TMPDIR/keazig-snapshots`).
+//! `<phase>-<state>-<light|dark>.png` in `$KEA_SNAPSHOTS`
+//! (default `$TMPDIR/kea-snapshots`).
 const std = @import("std");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;
@@ -179,203 +179,14 @@ fn siteChip(f: *Fixture) void {
     b.setTyped("kea");
 }
 
-fn writeBytes(gpa: std.mem.Allocator, path: []const u8, bytes: []const u8) !void {
-    const z = try gpa.dupeSentinel(u8, path, 0);
-    defer gpa.free(z);
-    const file = std.c.fopen(z, "wb") orelse return error.OpenFailed;
-    defer _ = std.c.fclose(file);
-    if (bytes.len > 0 and std.c.fwrite(bytes.ptr, 1, bytes.len, file) != bytes.len) return error.WriteFailed;
-}
-
-const Sidecar = struct {
-    pixels: [2]u32,
-    points: [2]u32,
-    cards: bool,
-    holes: []const nanoui.ui.Rect,
-    card: ?nanoui.ui.Rect = null,
-    icons: []const nanoui.ui.Rect = &.{},
-};
-
-const RefLights = struct {
-    hidden: bool = false,
-    x: i64 = 0,
-};
-
-const RefFilmFrame = struct {
-    lights: ?RefLights = null,
-};
-
-const RefFilmJson = struct {
-    t: []const i64 = &.{},
-    frames: []const RefFilmFrame = &.{},
-};
-
-const FilmJson = struct {
-    action: []const u8 = "",
-    look: []const u8 = "",
-    t: []const i64 = &.{},
-    frames: []const FilmFrame = &.{},
-};
-
-const FilmFrame = struct {
-    t: i64 = 0,
-    file: ?[]const u8 = null,
-    edge_x: f32 = 0,
-};
-
-fn columnEdgePt(f: *Fixture) f32 {
-    const side_id = std.hash.Wyhash.hash(0, "side-bar");
-    const peek_id = std.hash.Wyhash.hash(0, "kea.peek.sheet");
-    if (f.tester.ctx.rects.get(side_id)) |r| return @round(@max(0, r.x + r.w));
-    if (f.tester.ctx.rects.get(peek_id)) |r| return @round(@max(0, r.x + r.w));
-    const w = f.browser.prefs.side_width;
-    const h = f.tester.size.h;
-    for (f.tester.ctx.nodes.items) |n| {
-        if (n.style.absolute and @abs(n.rect.w - w) < 0.5 and @abs(n.rect.h - h) < 0.5) {
-            return @round(@max(0, n.rect.x + n.rect.w));
-        }
-    }
-    return 0;
-}
-
-fn glideProgress(t: f64) f64 {
-    if (t <= 0) return 0;
-    const g = @import("kea").motion.glide;
-    const resp: f64 = g.response;
-    const zeta: f64 = g.damping;
-    const w = 2.0 * std.math.pi / resp;
-    const s = @sqrt(1.0 - zeta * zeta);
-    const wd = w * s;
-    return 1.0 - @exp(-zeta * w * t) * (@cos(wd * t) + (zeta / s) * @sin(wd * t));
-}
-
-fn refEdgeAt(action: []const u8, idx: usize, rf: []const RefFilmFrame) ?f32 {
-    if (idx >= rf.len) return null;
-    const l = rf[idx].lights orelse return null;
-    if (std.mem.eql(u8, action, "peek")) {
-        return if (idx == 0 or l.hidden) 0 else @max(0, 232.0 + @as(f32, @floatFromInt(l.x)));
-    }
-    return if (l.hidden) 0 else @max(0, 232.0 + @as(f32, @floatFromInt(l.x)));
-}
-fn runFilm(gpa: std.mem.Allocator, out_dir: []const u8, ref_dir: []const u8, scale: ?f32) !void {
-    const actions = [_][]const u8{ "peek", "unpeek", "fold" };
-    var default_ts: [30]i64 = undefined;
-    for (&default_ts, 0..) |*v, idx| v.* = @intCast(idx * 20);
-
-    for ([_]bool{ false, true }) |dark| {
-        const look = if (dark) "dark" else "light";
-        var opts: Options = .{ .sidebar = true, .tabs = 3, .dark = dark };
-        if (scale) |sc| opts.scale = sc;
-        var f: Fixture = undefined;
-        try f.init(gpa, opts);
-        defer f.deinit();
-
-        // Start folded and settled before peek -> unpeek -> fold.
-        f.browser.folded = true;
-        f.browser.peeking = false;
-        f.tester.settle(2);
-
-        for (actions) |action| {
-            if (std.mem.eql(u8, action, "fold")) {
-                f.browser.folded = false;
-                f.browser.peeking = false;
-                f.tester.settle(2);
-            }
-
-            const ref_json_path = try std.fmt.allocPrint(gpa, "{s}/film-{s}-{s}.json", .{ ref_dir, action, look });
-            defer gpa.free(ref_json_path);
-            const ref_bytes = @import("kea").disk.read(gpa, ref_json_path);
-            defer if (ref_bytes) |b| gpa.free(b);
-            const parsed = if (ref_bytes) |b| (@import("kea").json.decode(RefFilmJson, gpa, b) catch null) else null;
-            defer if (parsed) |p| p.deinit();
-            const ts: []const i64 = if (parsed) |p| blk: {
-                if (p.value.t.len > 0) break :blk p.value.t;
-                std.debug.print("film {s}-{s}: empty t in {s}, using defaults\n", .{ action, look, ref_json_path });
-                break :blk &default_ts;
-            } else blk: {
-                std.debug.print("film {s}-{s}: no ref sidecar at {s}, using defaults\n", .{ action, look, ref_json_path });
-                break :blk &default_ts;
-            };
-
-            var frames: std.ArrayList(FilmFrame) = .empty;
-            defer {
-                for (frames.items) |fr| if (fr.file) |fp| gpa.free(fp);
-                frames.deinit(gpa);
-            }
-
-            const rf: []const RefFilmFrame = if (parsed) |p| p.value.frames else &.{};
-            var off_ms: f64 = 0;
-            if (ts.len >= 3) if (refEdgeAt(action, 1, rf)) |e1| {
-                const frac1: f64 = if (std.mem.eql(u8, action, "peek")) e1 / 232.0 else 1.0 - (e1 / 232.0);
-                var best_ms: f64 = 0;
-                var best_err: f64 = 1e9;
-                var ms: f64 = 0;
-                while (ms <= 200.0) : (ms += 0.1) {
-                    const err = @abs(glideProgress(ms / 1000.0) - frac1);
-                    if (err < best_err) {
-                        best_err = err;
-                        best_ms = ms;
-                    }
-                }
-                off_ms = best_ms - @as(f64, @floatFromInt(ts[2] - ts[1]));
-            };
-
-            var start_time = f.tester.time;
-            const base_t: i64 = if (ts.len > 1) ts[1] else 0;
-            for (ts, 0..) |cur_t, idx| {
-                if (idx > 0) {
-                    const next_t: i64 = if (idx + 1 < ts.len) ts[idx + 1] else cur_t + 20;
-                    const dt_ref_ms: f64 = if (ts.len >= 3) @floatFromInt(next_t - base_t) else @floatFromInt(@max(0, cur_t));
-                    const target_time = start_time + @max(0, (dt_ref_ms + off_ms) / 1000.0);
-                    while (f.tester.time + 1e-6 < target_time) {
-                        const rem: f32 = @floatCast(target_time - f.tester.time);
-                        f.tester.dt = @min(1.0 / 240.0, rem);
-                        f.tester.frame();
-                    }
-                    f.tester.dt = 1.0 / 60.0;
-                }
-                if (f.browser.applied_ground) |g| f.tester.theme.background = g;
-                const edge_x = columnEdgePt(&f);
-                const frame_path = try std.fmt.allocPrint(gpa, "{s}/film-{s}-{s}-{d:0>2}.png", .{ out_dir, action, look, idx });
-                try f.tester.screenshot(frame_path);
-                try frames.append(gpa, .{ .t = cur_t, .file = frame_path, .edge_x = edge_x });
-                if (idx == 0) {
-                    if (std.mem.eql(u8, action, "peek")) {
-                        f.browser.peeking = true;
-                    } else if (std.mem.eql(u8, action, "unpeek")) {
-                        f.browser.peeking = false;
-                    } else {
-                        @import("kea").fold.toggleFold(f.browser);
-                    }
-                    f.tester.dt = 0;
-                    f.tester.frame();
-                    f.tester.dt = 1.0 / 60.0;
-                    start_time = f.tester.time;
-                }
-            }
-            const out_json = try @import("kea").json.encode(gpa, FilmJson{
-                .action = action,
-                .look = look,
-                .t = ts,
-                .frames = frames.items,
-            });
-            defer gpa.free(out_json);
-            const json_path = try std.fmt.allocPrint(gpa, "{s}/film-{s}-{s}.json", .{ out_dir, action, look });
-            defer gpa.free(json_path);
-            try writeBytes(gpa, json_path, out_json);
-            std.debug.print("film {s}\n", .{json_path});
-        }
-    }
-}
-
 pub fn main(init: std.process.Init) !void {
     const gpa = init.gpa;
-    const dir = if (init.environ_map.get("KEAZIG_SNAPSHOTS")) |d| try gpa.dupe(u8, d) else blk: {
+    const dir = if (init.environ_map.get("KEA_SNAPSHOTS")) |d| try gpa.dupe(u8, d) else blk: {
         const tmp = std.mem.trimEnd(u8, init.environ_map.get("TMPDIR") orelse "/tmp", "/");
-        break :blk try std.fmt.allocPrint(gpa, "{s}/keazig-snapshots", .{tmp});
+        break :blk try std.fmt.allocPrint(gpa, "{s}/kea-snapshots", .{tmp});
     };
     defer gpa.free(dir);
-    const scale_override: ?f32 = if (init.environ_map.get("KEAZIG_SCALE")) |s| (std.fmt.parseFloat(f32, s) catch null) else null;
+    const scale_override: ?f32 = if (init.environ_map.get("KEA_SCALE")) |s| (std.fmt.parseFloat(f32, s) catch null) else null;
     {
         const pool = objc.Pool.push();
         defer pool.pop();
@@ -383,11 +194,6 @@ pub fn main(init: std.process.Init) !void {
         _ = objc.msg(objc.BOOL, fm, "createDirectoryAtPath:withIntermediateDirectories:attributes:error:", .{
             objc.nsString(dir), objc.YES, @as(?objc.Object, null), @as(?*anyopaque, null),
         });
-    }
-    const args = try init.minimal.args.toSlice(init.arena.allocator());
-    if (args.len > 1 and std.mem.eql(u8, args[1], "film")) {
-        const ref_dir = if (args.len > 2) args[2] else (init.environ_map.get("KEAZIG_REF") orelse "/tmp/kea-ref");
-        return runFilm(gpa, dir, ref_dir, scale_override);
     }
     for (states) |s| {
         for ([_]bool{ false, true }) |dark| {
@@ -406,28 +212,6 @@ pub fn main(init: std.process.Init) !void {
             const path = try std.fmt.allocPrint(gpa, "{s}/{s}-{s}.png", .{ dir, s.name, look });
             defer gpa.free(path);
             try f.tester.screenshot(path);
-
-            const pw: u32 = @intFromFloat(@round(opts.width * opts.scale));
-            const ph: u32 = @intFromFloat(@round(opts.height * opts.scale));
-            var icon_rects: std.ArrayList(nanoui.ui.Rect) = .empty;
-            defer icon_rects.deinit(gpa);
-            for (f.tester.ctx.nodes.items) |n| {
-                if (n.content == .image and n.rect.w > 0 and n.rect.w <= 40 and n.rect.h > 0 and n.rect.h <= 40) {
-                    try icon_rects.append(gpa, n.rect);
-                }
-            }
-            const sidecar = try @import("kea").json.encode(gpa, Sidecar{
-                .pixels = .{ pw, ph },
-                .points = .{ @intFromFloat(@round(opts.width)), @intFromFloat(@round(opts.height)) },
-                .cards = f.browser.prefs.sidebar and !f.browser.folded,
-                .holes = f.holes(),
-                .card = f.browser.site_card.rect,
-                .icons = icon_rects.items,
-            });
-            defer gpa.free(sidecar);
-            const jpath = try std.fmt.allocPrint(gpa, "{s}/{s}-{s}.json", .{ dir, s.name, look });
-            defer gpa.free(jpath);
-            try writeBytes(gpa, jpath, sidecar);
             std.debug.print("snapshot {s}\n", .{path});
         }
     }

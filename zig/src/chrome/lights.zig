@@ -270,7 +270,7 @@ fn observe(center: objc.Object, observer: objc.Object, name: []const u8, object:
 
 fn observerClass() objc.Class {
     return objc.defineClass(.{
-        .name = "KeaZigLights",
+        .name = "KeaLights",
         .methods = &.{.{ .name = "place:", .imp = &placeNote, .types = "v@:@" }},
     });
 }
@@ -282,7 +282,7 @@ fn placeNote(self_obj: objc.Object, _: objc.SEL, _: objc.Object) callconv(.c) vo
 
 fn restingClass() objc.Class {
     return objc.defineClass(.{
-        .name = "KeaZigRestingLights",
+        .name = "KeaRestingLights",
         .superclass = "NSView",
         .methods = &.{
             .{ .name = "drawRect:", .imp = &drawResting, .types = "v@:{CGRect={CGPoint=dd}{CGSize=dd}}" },

@@ -15,7 +15,7 @@ const objc = nanoui.objc;
 const Store = @import("../data/store.zig").Store;
 const keychain = @import("../sys/keychain.zig");
 const ai = @import("ai.zig");
-const app_name = "KeaZig";
+const app_name = "Kea";
 
 pub const service = "app.kea.browser.ai";
 /// Kept by account ("provider@host"): were a provider's host to change, the

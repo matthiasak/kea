@@ -1,7 +1,7 @@
 //! `zig build perf`: ReleaseFast headless performance at scale (P0.3).
 //! Measures 11 chrome scenarios at 120 Hz with realistic scale seed data,
-//! prints a markdown summary table to stdout and `$TMPDIR/keazig-perf/report.md`,
-//! and enforces Verification §3 gates unless `KEAZIG_PERF_BASELINE=1`.
+//! prints a markdown summary table to stdout and `$TMPDIR/kea-perf/report.md`,
+//! and enforces Verification §3 gates unless `KEA_PERF_BASELINE=1`.
 const std = @import("std");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;
@@ -166,7 +166,7 @@ fn writeReport(gpa: std.mem.Allocator, init: std.process.Init, metrics: []const 
     defer aw.deinit();
     const w = &aw.writer;
 
-    try w.writeAll("# KeaZig Perf at Scale (120 Hz, ReleaseFast)\n\n");
+    try w.writeAll("# Kea Perf at Scale (120 Hz, ReleaseFast)\n\n");
     try w.writeAll("| Scenario | Cold CPU (ms) | CPU p50 (ms) | CPU p90 (ms) | CPU p99 (ms) | CPU max (ms) | GPU p50 (ms) | GPU p90 (ms) | Nodes | Steady Allocs/f (max) | Gate |\n");
     try w.writeAll("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|\n");
 
@@ -193,7 +193,7 @@ fn writeReport(gpa: std.mem.Allocator, init: std.process.Init, metrics: []const 
     std.debug.print("{s}", .{aw.written()});
 
     const tmp = std.mem.trimEnd(u8, init.environ_map.get("TMPDIR") orelse "/tmp", "/");
-    const dir = try std.fmt.allocPrint(gpa, "{s}/keazig-perf", .{tmp});
+    const dir = try std.fmt.allocPrint(gpa, "{s}/kea-perf", .{tmp});
     defer gpa.free(dir);
     {
         const pool = objc.Pool.push();
@@ -221,7 +221,7 @@ pub fn main(init: std.process.Init) !void {
     }
 
     const all_pass = try writeReport(init.gpa, init, &metrics);
-    const strict = if (init.environ_map.get("KEAZIG_PERF_STRICT")) |v| std.mem.eql(u8, v, "1") else false;
+    const strict = if (init.environ_map.get("KEA_PERF_STRICT")) |v| std.mem.eql(u8, v, "1") else false;
     if (strict and !all_pass) {
         std.process.exit(1);
     }

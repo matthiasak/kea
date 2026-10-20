@@ -28,8 +28,8 @@ test "providers: where each runs, and whether it takes a key" {
     try t.expectEqualStrings("on this Mac · Ollama · llama3", try ubi.place(a, rig.ai, ai.ollama, "llama3"));
     try t.expectEqualStrings("on 127.0.0.1 · qwen", try ubi.place(a, rig.ai, ai.custom, "qwen"));
     const n = try ubi.notice(a, rig.ai, ai.openRouter);
-    try t.expect(std.mem.startsWith(u8, n, "When you ask, KeaZig sends your question, the chat so far, and the text and addresses of the pages you share to openrouter.ai, which passes them"));
-    try t.expect(std.mem.endsWith(u8, n, "\n\nKeaZig asks OpenRouter to use only providers that keep nothing (zero data retention)."));
+    try t.expect(std.mem.startsWith(u8, n, "When you ask, Kea sends your question, the chat so far, and the text and addresses of the pages you share to openrouter.ai, which passes them"));
+    try t.expect(std.mem.endsWith(u8, n, "\n\nKea asks OpenRouter to use only providers that keep nothing (zero data retention)."));
     try t.expect(rig.ai.named("gemini") != null);
     try t.expect(rig.ai.named("nobody") == null);
     try t.expectEqual(@as(usize, 7), (try rig.ai.all(a)).len);
@@ -60,9 +60,9 @@ test "keys: kept in memory in a test run, sources by account" {
     // A variable or a command instead; a bad name is ignored.
     k.setSource(m, .{ .environment = "9BAD" }, ai.openAI);
     try t.expect(k.source(a, m, ai.openAI) == .keychain);
-    k.setSource(m, .{ .environment = "KEAZIG_TEST_NO_SUCH_VAR" }, ai.openAI);
-    try t.expectEqualStrings("KEAZIG_TEST_NO_SUCH_VAR", k.source(a, m, ai.openAI).environment);
-    try t.expectEqualStrings("$KEAZIG_TEST_NO_SUCH_VAR", k.hint(a, m, ai.openAI).?);
+    k.setSource(m, .{ .environment = "KEA_TEST_NO_SUCH_VAR" }, ai.openAI);
+    try t.expectEqualStrings("KEA_TEST_NO_SUCH_VAR", k.source(a, m, ai.openAI).environment);
+    try t.expectEqualStrings("$KEA_TEST_NO_SUCH_VAR", k.hint(a, m, ai.openAI).?);
     k.setSource(m, .{ .command = "op read x" }, ai.gemini);
     try t.expectEqualStrings("from a command", k.hint(a, m, ai.gemini).?);
     // Both live side by side in `ai.keySources`.

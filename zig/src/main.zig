@@ -1,5 +1,5 @@
-//! KeaZig (`KeaZig.app`): native macOS WebKit browser built with Zig 0.17.0
-//! and `nanoui`'s immediate-mode Metal renderer alongside `Kea.app`.
+//! Kea (`Kea.app`): native macOS WebKit browser built with Zig 0.17.0
+//! and `nanoui`'s immediate-mode Metal renderer.
 const std = @import("std");
 const nanoui = @import("nanoui");
 const kea = @import("app/kea.zig");
@@ -13,7 +13,7 @@ pub fn main(init: std.process.Init) !void {
     // Closing the last window keeps the app, as Safari and Chrome do (#327).
     const app = try nanoui.App.create(init, .{ .name = kea.app_name, .quit_on_last_window_closed = false });
     defer app.destroy();
-    refuseBesideKea();
+    refuseSecondCopy();
     const k = try kea.Kea.create(app.gpa, app, .{});
     defer k.destroy();
     links.watchForTrouble(k);
@@ -58,7 +58,8 @@ fn onActive(ctx: ?*anyopaque, active: bool) void {
 
 extern "c" fn exit(code: c_int) noreturn;
 
-fn refuseBesideKea() void {
+/// Another Kea already running (the same bundle id from another place): both would write the same folder, so this one says so and quits.
+fn refuseSecondCopy() void {
     const objc = nanoui.objc;
     const pool = objc.Pool.push();
     defer pool.pop();
@@ -78,9 +79,9 @@ fn refuseBesideKea() void {
     objc.msg(void, nsapp, "activateIgnoringOtherApps:", .{objc.YES});
     const alert = objc.new("NSAlert");
     defer objc.release(alert);
-    objc.msg(void, alert, "setMessageText:", .{objc.nsString("Kea is open")});
-    objc.msg(void, alert, "setInformativeText:", .{objc.nsString("KeaZig and Kea share your tabs, history and settings. Quit Kea, then open KeaZig again.")});
-    _ = objc.msg(objc.Object, alert, "addButtonWithTitle:", .{objc.nsString("Quit KeaZig")});
+    objc.msg(void, alert, "setMessageText:", .{objc.nsString("Kea is already open")});
+    objc.msg(void, alert, "setInformativeText:", .{objc.nsString("Another copy of Kea is running and uses the same tabs, history and settings. Quit it, then open Kea again.")});
+    _ = objc.msg(objc.Object, alert, "addButtonWithTitle:", .{objc.nsString("Quit")});
     _ = objc.msg(objc.NSInteger, alert, "runModal", .{});
     exit(0);
 }

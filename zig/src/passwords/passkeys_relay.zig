@@ -17,7 +17,7 @@ extern "c" const ASAuthorizationErrorDomain: objc.Object;
 
 pub fn makeRelay(p: *Passkeys) objc.Object {
     const cls = objc.defineClass(.{
-        .name = "KeaZigPasskeyRelay",
+        .name = "KeaPasskeyRelay",
         .protocols = &.{"WKScriptMessageHandlerWithReply"},
         .methods = &.{.{ .name = "userContentController:didReceiveScriptMessage:replyHandler:", .imp = @ptrCast(&received), .types = "v@:@@@?" }},
     });
@@ -28,7 +28,7 @@ pub fn makeRelay(p: *Passkeys) objc.Object {
 
 pub fn makeDelegate(p: *Passkeys) objc.Object {
     const cls = objc.defineClass(.{
-        .name = "KeaZigPasskeyDelegate",
+        .name = "KeaPasskeyDelegate",
         .protocols = &.{ "ASAuthorizationControllerDelegate", "ASAuthorizationControllerPresentationContextProviding" },
         .methods = &.{
             .{ .name = "authorizationController:didCompleteWithAuthorization:", .imp = @ptrCast(&completed), .types = "v@:@@" },

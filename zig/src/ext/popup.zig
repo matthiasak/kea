@@ -1,5 +1,5 @@
 //! `ExtensionPopup` (ExtensionPopup.swift): an extension's popup page, in a
-//! small window of KeaZig's own hanging from its button — the page loaded in
+//! small window of Kea's own hanging from its button — the page loaded in
 //! a view built from the extension's configuration, which talks to its
 //! worker where WebKit's own popover sometimes doesn't. Sized the way Chrome
 //! sizes a popup (25…800 × 25…600), measured while still the 25-point square

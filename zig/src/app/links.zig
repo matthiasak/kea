@@ -1,10 +1,10 @@
 //! Links from elsewhere (Links.swift). A click in Mail, in Slack, in a PDF:
 //! macOS hands the address to whichever app owns http, and this is how
-//! KeaZig takes it (`App.Options.on_open_urls`, `on_continue_activity`).
+//! Kea takes it (`App.Options.on_open_urls`, `on_continue_activity`).
 //! Addresses that come while the first window isn't on screen yet wait
 //! until it is; then the first goes into the blank tab and the others fill
 //! in behind it, a few frames apart, in the order they came. Also: whether
-//! KeaZig is the Mac's browser, and the crash log.
+//! Kea is the Mac's browser, and the crash log.
 const std = @import("std");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;
@@ -31,7 +31,7 @@ pub const State = struct {
 // MARK: taking links
 
 /// `application(_:open:)`: addresses, and pages on this Mac (an .html
-/// double-clicked in the Finder once KeaZig is the browser).
+/// double-clicked in the Finder once Kea is the browser).
 pub fn onOpenURLs(ctx: ?*anyopaque, urls: []const []const u8) void {
     const kea: *Kea = @ptrCast(@alignCast(ctx.?));
     for (urls) |u| if (isWeb(u) or schemeIs(u, "file")) take(kea, u);
@@ -217,7 +217,7 @@ const Asked = struct {
 
 extern "c" fn NSSetUncaughtExceptionHandler(handler: ?*const fn (objc.Object) callconv(.c) void) void;
 
-/// `crash.log` in KeaZig's folder, for the handler (process-long).
+/// `crash.log` in Kea's folder, for the handler (process-long).
 var crash_path: ?[:0]u8 = null;
 
 /// The nearest thing to a crash reporter a browser with no server can
