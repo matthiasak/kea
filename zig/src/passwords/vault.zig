@@ -13,7 +13,7 @@ const app = @import("../app/kea.zig");
 const csv = @import("vault_csv.zig");
 
 /// What every item of ours is tagged with (Swift's `label`, by the app-name rule).
-pub const label = app.app_name;
+pub const label = "Kea";
 const never_key = "passwords.never";
 
 /// A name and password, with its secret: only for filling in and saving.

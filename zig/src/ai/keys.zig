@@ -17,7 +17,7 @@ const keychain = @import("../sys/keychain.zig");
 const ai = @import("ai.zig");
 const app_name = "KeaZig";
 
-pub const service = "app.kea.zig.ai";
+pub const service = "app.kea.browser.ai";
 /// Kept by account ("provider@host"): were a provider's host to change, the
 /// variable or command is no longer used for it, so a key never goes to a new host.
 pub const sources_key = "ai.keySources";

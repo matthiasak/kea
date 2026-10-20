@@ -14,7 +14,6 @@ const Browser = @import("../model/browser.zig").Browser;
 const spaces = @import("../data/spaces.zig");
 const Space = spaces.Space;
 const Uuid = @import("../data/json.zig").Uuid;
-const kea_import = @import("../data/kea_import.zig");
 const Favicons = @import("../web/favicons.zig").Favicons;
 const Curtain = @import("../data/curtain.zig").Curtain;
 const Shield = @import("../web/shield.zig").Shield;
@@ -90,8 +89,6 @@ pub const Kea = struct {
     pub fn create(gpa: std.mem.Allocator, ui_app: ?*nanoui.App, opts: Options) !*Kea {
         const self = try gpa.create(Kea);
         errdefer gpa.destroy(self);
-        // Before any store loads: the store makes KeaZig's folder.
-        if (opts.root == null and ui_app != null) kea_import.offer(gpa, opts.suite);
         self.* = .{
             .gpa = gpa,
             .ui_app = ui_app,

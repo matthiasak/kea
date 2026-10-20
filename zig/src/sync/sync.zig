@@ -44,7 +44,7 @@ pub const State = struct {
 };
 
 pub const state_file = "sync.json";
-pub const service = "app.kea.zig.sync";
+pub const service = "app.kea.browser.sync";
 
 extern "c" fn SCDynamicStoreCopyComputerName(store: ?*anyopaque, encoding: ?*u32) ?objc.Object;
 extern "c" const kCFRunLoopDefaultMode: objc.Object;

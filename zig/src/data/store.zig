@@ -1,6 +1,6 @@
 //! Where KeaZig keeps things (`Store` in Store.swift): its folder
-//! (`opts.root`, else `~/Library/Application Support/KeaZig`), its defaults
-//! (`opts.suite`, else the app's standard defaults), and the `Disk` every file
+//! (`opts.root`, else `~/Library/Application Support/Kea`), its defaults
+//! (`opts.suite`, else `app.kea.browser`'s defaults), and the `Disk` every file
 //! is written through.
 const std = @import("std");
 const nanoui = @import("nanoui");
@@ -21,15 +21,21 @@ pub const Store = struct {
     pub fn init(gpa: std.mem.Allocator, root: ?[]const u8, suite: ?[]const u8) !Store {
         const folder = if (root) |r| try gpa.dupe(u8, r) else blk: {
             const home: []const u8 = if (getenv("HOME")) |h| std.mem.span(h) else "/tmp";
-            break :blk try std.fmt.allocPrint(gpa, "{s}/Library/Application Support/KeaZig", .{home});
+            break :blk try std.fmt.allocPrint(gpa, "{s}/Library/Application Support/Kea", .{home});
         };
         disk.makePath(gpa, folder);
         const pool = objc.Pool.push();
         defer pool.pop();
         const defaults = if (suite) |s|
             objc.msg(objc.Object, objc.alloc("NSUserDefaults"), "initWithSuiteName:", .{objc.nsString(s)})
-        else
-            objc.retain(objc.msg(objc.Object, objc.class("NSUserDefaults"), "standardUserDefaults", .{}));
+        else blk: {
+            const bundle = objc.msg(objc.Object, objc.class("NSBundle"), "mainBundle", .{});
+            const bid = objc.fromNSString(objc.msg(?objc.Object, bundle, "bundleIdentifier", .{}));
+            if (std.mem.eql(u8, bid, "app.kea.browser")) {
+                break :blk objc.retain(objc.msg(objc.Object, objc.class("NSUserDefaults"), "standardUserDefaults", .{}));
+            }
+            break :blk objc.msg(objc.Object, objc.alloc("NSUserDefaults"), "initWithSuiteName:", .{objc.nsString("app.kea.browser")});
+        };
         return .{ .gpa = gpa, .folder = folder, .defaults = defaults, .disk = Disk.init(gpa) };
     }
 
