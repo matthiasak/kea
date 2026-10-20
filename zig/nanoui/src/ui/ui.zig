@@ -27,6 +27,9 @@ pub const springFrom = motion.springFrom;
 pub const tween = motion.tween;
 pub const Interaction = ctx_mod.Interaction;
 pub const FrameStats = ctx_mod.FrameStats;
+pub const frame_log = @import("frame_log.zig");
+pub const FrameLog = frame_log.FrameLog;
+pub const Surface = if (@import("builtin").os.tag == .macos) @import("surface.zig").Surface else void;
 pub const Shortcut = ctx_mod.Shortcut;
 /// A text field's editing keys: the system's, Emacs's or Vim's.
 pub const Keymap = @import("keymap.zig").Keymap;
@@ -127,6 +130,7 @@ pub const View = struct {
 
 test {
     _ = @import("tests_motion.zig");
+    _ = frame_log;
     _ = @import("tests_effects.zig");
     _ = @import("tests_scroll_x.zig");
     _ = @import("tests_a11y_adjust.zig");

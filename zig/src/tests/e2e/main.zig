@@ -45,6 +45,34 @@ pub const Harness = struct {
         return b;
     }
 
+    /// Opens the case's KeaZig on the fastest screen without stealing focus,
+    /// recording frames on the window's surface.
+    pub fn startOnscreen(h: *Harness) !*app.Browser {
+        const k = try app.Kea.create(h.gpa, ui_app, .{
+            .root = h.temp.root,
+            .suite = h.temp.suite,
+            .hidden = true,
+            .scheme_handler = h.handler,
+        });
+        h.kea = k;
+        _ = objc.msg(objc.BOOL, ui_app.nsapp, "setActivationPolicy:", .{@as(objc.NSInteger, 1)});
+        k.prefs.set("welcomed", true);
+        const b = try k.newBrowser();
+        app.menus.install(k);
+        app.keys.install(k);
+        k.opts.hidden = false;
+        const w = b.window orelse return error.NoWindow;
+        const s = w.surface orelse return error.NoSurface;
+        objc.msg(void, w.nswindow, "setCollectionBehavior:", .{@as(objc.NSUInteger, (1 << 0) | (1 << 8))});
+        objc.msg(void, w.nswindow, "setLevel:", .{@as(objc.NSInteger, 3)});
+        placeOnFastestScreen(w.nswindow);
+        objc.msg(void, w.nswindow, "orderFrontRegardless", .{});
+        pumpWindowVisibility(w.nswindow, 0.3);
+        _ = try s.recordFrames(h.gpa);
+        s.frame();
+        return b;
+    }
+
     /// Ends the case's KeaZig as quitting does: windows close, stores flush.
     pub fn quit(h: *Harness) void {
         if (h.kea) |k| k.destroy();
@@ -122,6 +150,52 @@ pub const Harness = struct {
     }
 };
 
+fn pumpWindowVisibility(nswindow: objc.Object, max_s: f64) void {
+    const deadline = ui.clock.now() + max_s;
+    const mode = objc.nsString("kCFRunLoopDefaultMode");
+    while (ui.clock.now() < deadline) {
+        const pool = objc.Pool.push();
+        defer pool.pop();
+        const until = objc.msg(objc.Object, objc.class("NSDate"), "dateWithTimeIntervalSinceNow:", .{@as(f64, 0.01)});
+        // NSEventMaskAppKitDefined (1 << 13): WindowServer visibility/occlusion updates only.
+        while (objc.msg(?objc.Object, ui_app.nsapp, "nextEventMatchingMask:untilDate:inMode:dequeue:", .{
+            @as(objc.NSUInteger, 1 << 13), until, mode, objc.YES,
+        })) |ev| {
+            objc.msg(void, ui_app.nsapp, "sendEvent:", .{ev});
+        }
+        nanoui.runFor(0.01);
+        if (objc.msg(objc.NSUInteger, nswindow, "occlusionState", .{}) & 2 != 0) break;
+    }
+}
+
+fn placeOnFastestScreen(nswindow: objc.Object) void {
+    const screens = objc.msg(objc.Object, objc.class("NSScreen"), "screens", .{});
+    const count = objc.msg(objc.NSUInteger, screens, "count", .{});
+    if (count == 0) return;
+    var best = objc.msg(objc.Object, screens, "objectAtIndex:", .{@as(objc.NSUInteger, 0)});
+    var best_fps: objc.NSInteger = 0;
+    for (0..count) |i| {
+        const scr = objc.msg(objc.Object, screens, "objectAtIndex:", .{@as(objc.NSUInteger, i)});
+        const fps: objc.NSInteger = if (objc.msg(objc.BOOL, scr, "respondsToSelector:", .{objc.sel("maximumFramesPerSecond")}))
+            objc.msg(objc.NSInteger, scr, "maximumFramesPerSecond", .{})
+        else
+            60;
+        if (fps > best_fps) {
+            best_fps = fps;
+            best = scr;
+        }
+    }
+    const vis = objc.msg(objc.CGRect, best, "visibleFrame", .{});
+    const w = @min(1440.0, vis.size.width);
+    const h = @min(900.0, vis.size.height);
+    const x = vis.origin.x + @floor((vis.size.width - w) * 0.5);
+    const y = vis.origin.y + @floor((vis.size.height - h) * 0.5);
+    objc.msg(void, nswindow, "setFrame:display:", .{
+        objc.CGRect{ .origin = .{ .x = x, .y = y }, .size = .{ .width = w, .height = h } },
+        objc.YES,
+    });
+}
+
 var ui_app: *nanoui.App = undefined;
 
 /// Every allocation (and growing remap) the cases make on `gpa`, from any
@@ -155,13 +229,17 @@ const Counting = struct {
 };
 
 pub fn main(init: std.process.Init) !void {
+    var onscreen = false;
+    for (try init.minimal.args.toSlice(init.arena.allocator())) |arg| {
+        if (std.mem.eql(u8, arg, "--onscreen")) onscreen = true;
+    }
     // Cases get their own allocator so a leak fails the run, not just prints.
     var dbg: std.heap.DebugAllocator(.{}) = .init;
-    var counting: Counting = .{ .child = dbg.allocator() };
+    var counting: Counting = .{ .child = if (onscreen) std.heap.smp_allocator else dbg.allocator() };
     const gpa = counting.allocator();
     ui_app = try nanoui.App.create(init, .{ .name = app.kea.app_name, .quit_on_last_window_closed = false });
     defer ui_app.destroy();
-    _ = objc.msg(objc.BOOL, ui_app.nsapp, "setActivationPolicy:", .{@as(objc.NSInteger, 2)});
+    _ = objc.msg(objc.BOOL, ui_app.nsapp, "setActivationPolicy:", .{@as(objc.NSInteger, if (onscreen) 1 else 2)});
     objc.msg(void, ui_app.nsapp, "finishLaunching", .{});
 
     const handler = scheme.handler();
@@ -170,6 +248,11 @@ pub fn main(init: std.process.Init) !void {
     var http_buf: [64]u8 = undefined;
     const http = try std.fmt.bufPrint(&http_buf, "http://127.0.0.1:{d}", .{port});
 
+    if (onscreen) {
+        const ok = try @import("smooth.zig").run(init, gpa, ui_app, handler, http);
+        if (!ok) std.process.exit(1);
+        return;
+    }
     var failed: usize = 0;
     // `KEAZIG_E2E=<text>`: only the cases whose names contain it.
     const only = init.environ_map.get("KEAZIG_E2E");

@@ -369,6 +369,8 @@ fn performDragOperation(obj: objc.Object, _: objc.SEL, info: objc.Object) callco
 
 fn displayLinkFired(obj: objc.Object, _: objc.SEL, _: objc.Object) callconv(.c) void {
     const s = surfaceOf(obj) orelse return;
+    s.frame_kind = .link;
+    defer s.frame_kind = .input;
     s.frame();
 }
 

@@ -98,12 +98,29 @@ pub fn build(b: *std.Build) void {
     b.step("e2e", "Run the in-process WebKit end-to-end cases").dependOn(&run_e2e.step);
     // The same binary in zig-out/bin, to run under `leaks --atExit --`.
     b.step("e2e-bin", "Install keazig-e2e into zig-out/bin").dependOn(&b.addInstallArtifact(e2e, .{}).step);
+    const smooth = b.addExecutable(.{ .name = "keazig-smooth", .root_module = harness(b, "src/tests/e2e/main.zig", target, .ReleaseFast) });
+    smooth.root_module.addAnonymousImport("kea_sdef", .{ .root_source_file = b.path("../Kea.sdef") });
+    const run_smooth = b.addRunArtifact(smooth);
+    run_smooth.addArg("--onscreen");
+    run_smooth.has_side_effects = true;
+    b.step("smooth", "Run on-screen smoothness scenarios S1-S13").dependOn(&run_smooth.step);
 
     // Chrome states rendered to PNGs ($KEAZIG_SNAPSHOTS or $TMPDIR/keazig-snapshots)
     const snaps = b.addExecutable(.{ .name = "keazig-snapshots", .root_module = harness(b, "src/tests/snapshots.zig", target, optimize) });
     const run_snaps = b.addRunArtifact(snaps);
     run_snaps.has_side_effects = true;
     b.step("snapshots", "Render named chrome states to PNG").dependOn(&run_snaps.step);
+    const run_film = b.addRunArtifact(snaps);
+    run_film.addArg("film");
+    run_film.addPassthruArgs();
+    run_film.has_side_effects = true;
+    b.step("film", "Render motion film frames for peek, unpeek and fold").dependOn(&run_film.step);
+
+    const compare = b.addExecutable(.{ .name = "keazig-compare", .root_module = harness(b, "src/tests/compare.zig", target, .ReleaseFast) });
+    const run_compare = b.addRunArtifact(compare);
+    run_compare.addPassthruArgs();
+    run_compare.has_side_effects = true;
+    b.step("compare", "Compare Swift reference and KeaZig snapshots and films").dependOn(&run_compare.step);
 
     // Line limit check (<= 600 lines per file across zig/src)
     const lines = b.addExecutable(.{

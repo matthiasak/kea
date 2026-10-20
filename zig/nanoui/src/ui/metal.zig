@@ -16,6 +16,20 @@ pub const color4 = gpu.color4;
 pub const clip4 = gpu.clip4;
 pub const Pixels = gpu.Pixels;
 
+const FrameLog = @import("frame_log.zig").FrameLog;
+
+pub const DrawStats = struct {
+    drawable_wait_ms: f64 = 0,
+    encode_ms: f64 = 0,
+    sync: bool = false,
+    presented: bool = false,
+};
+
+const DoneSlot = struct {
+    renderer: *Renderer = undefined,
+    log: ?*FrameLog = null,
+    record_idx: usize = 0,
+};
 pub const Renderer = struct {
     /// The image atlas on the GPU, copied when its generation changes.
     images_texture: ?objc.Object = null,
@@ -32,6 +46,8 @@ pub const Renderer = struct {
     capacities: [frames_in_flight]usize = @splat(0),
     next_buffer: usize = 0,
     in_flight: objc.dispatch_semaphore_t,
+    done_slots: [frames_in_flight]DoneSlot = @splat(.{}),
+    next_done: usize = 0,
 
     pub fn init() !Renderer {
         const pool = objc.Pool.push();
@@ -109,8 +125,7 @@ pub const Renderer = struct {
     pub fn deinit(self: *Renderer) void {
         if (self.images_texture) |t| objc.release(t);
         // Wait for the frames in flight: their handlers signal this renderer.
-        for (0..frames_in_flight) |_| _ = objc.dispatch_semaphore_wait(self.in_flight, objc.DISPATCH_TIME_FOREVER);
-        for (0..frames_in_flight) |_| _ = objc.dispatch_semaphore_signal(self.in_flight);
+        self.waitIdle();
         objc.dispatch_release(self.in_flight);
         for (self.buffers) |b| if (b) |buf| objc.release(buf);
         objc.release(self.layer);
@@ -118,6 +133,11 @@ pub const Renderer = struct {
         objc.release(self.pipeline);
         objc.release(self.queue);
         objc.release(self.device);
+    }
+
+    pub fn waitIdle(self: *Renderer) void {
+        for (0..frames_in_flight) |_| _ = objc.dispatch_semaphore_wait(self.in_flight, objc.DISPATCH_TIME_FOREVER);
+        for (0..frames_in_flight) |_| _ = objc.dispatch_semaphore_signal(self.in_flight);
     }
 
     pub fn resize(self: *Renderer, size: types.Size, scale: f32) void {
@@ -130,19 +150,30 @@ pub const Renderer = struct {
 
     /// Draws `instances` over `clear` into the window, sized `size` points.
     pub fn draw(self: *Renderer, instances: []const Instance, atlas: objc.Object, size: types.Size, clear: types.Color) void {
+        _ = self.drawLogged(instances, atlas, size, clear, null, 0);
+    }
+
+    pub fn drawLogged(self: *Renderer, instances: []const Instance, atlas: objc.Object, size: types.Size, clear: types.Color, log: ?*FrameLog, record_idx: usize) DrawStats {
         const pool = objc.Pool.push();
         defer pool.pop();
+        const t0 = cf.CACurrentMediaTime();
         _ = objc.dispatch_semaphore_wait(self.in_flight, objc.DISPATCH_TIME_FOREVER);
         const drawable = objc.msg(?objc.Object, self.layer, "nextDrawable", .{}) orelse {
             _ = objc.dispatch_semaphore_signal(self.in_flight);
-            return;
+            return .{ .drawable_wait_ms = (cf.CACurrentMediaTime() - t0) * 1000, .sync = self.live_resize };
         };
+        const t1 = cf.CACurrentMediaTime();
         const texture = objc.msg(objc.Object, drawable, "texture", .{});
         const buffer = self.upload(instances);
         const cmd = self.encode(texture, buffer, instances, atlas, size, clear);
-        var done = objc.Block(Renderer, &.{objc.Object}).init(self, frameDone);
+        const slot_idx = self.next_done;
+        self.next_done = (slot_idx + 1) % frames_in_flight;
+        self.done_slots[slot_idx] = .{ .renderer = self, .log = log, .record_idx = record_idx };
+        var done = objc.Block(DoneSlot, &.{objc.Object}).init(&self.done_slots[slot_idx], frameDone);
         objc.msg(void, cmd, "addCompletedHandler:", .{@as(*anyopaque, @ptrCast(&done))});
-        if (self.live_resize) {
+        const t2 = cf.CACurrentMediaTime();
+        const sync = self.live_resize;
+        if (sync) {
             // In the layer's transaction: a resizing window never shows a
             // stretched or misplaced frame.
             objc.msg(void, cmd, "commit", .{});
@@ -152,10 +183,20 @@ pub const Renderer = struct {
             objc.msg(void, cmd, "presentDrawable:", .{drawable});
             objc.msg(void, cmd, "commit", .{});
         }
+        return .{
+            .drawable_wait_ms = (t1 - t0) * 1000,
+            .encode_ms = (t2 - t1) * 1000,
+            .sync = sync,
+            .presented = true,
+        };
     }
 
-    fn frameDone(self: *Renderer, _: objc.Object) void {
-        _ = objc.dispatch_semaphore_signal(self.in_flight);
+    fn frameDone(slot: *DoneSlot, cmd: objc.Object) void {
+        if (slot.log) |log| {
+            const gpu_s = objc.msg(f64, cmd, "GPUEndTime", .{}) - objc.msg(f64, cmd, "GPUStartTime", .{});
+            log.setGpuMs(slot.record_idx, @max(0, gpu_s * 1000));
+        }
+        _ = objc.dispatch_semaphore_signal(slot.renderer.in_flight);
     }
 
     /// Copies `instances` into the next buffer of the ring, grown as needed.

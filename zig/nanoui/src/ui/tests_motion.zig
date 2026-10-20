@@ -100,3 +100,30 @@ test "reduce_motion returns target immediately" {
     // Their state is dropped.
     try testing.expectEqual(@as(u32, 0), c.motion.entries.count());
 }
+
+fn analyticSpring(t: f32, s: motion.Spring) f32 {
+    const w: f64 = 2.0 * std.math.pi / @as(f64, s.response);
+    const z: f64 = s.damping;
+    const s1 = @sqrt(1.0 - z * z);
+    const wd = w * s1;
+    const tf: f64 = t;
+    const v = 1.0 - @exp(-z * w * tf) * (@cos(wd * tf) + (z / s1) * @sin(wd * tf));
+    return @floatCast(v);
+}
+
+test "spring matches analytic damped oscillator within 0.5% under jittered dt and hitch" {
+    var ts: TextSystem = undefined;
+    var c = context(&ts);
+    defer c.deinit();
+    try testing.expectEqual(@as(f32, 0), motion.spring(&c, 7, 0, 0, glide));
+    var t: f32 = 0;
+    for (0..60) |step| {
+        const dt: f32 = if (step == 20) 0.140 else if (step % 2 == 0) 0.0074 else 0.0093;
+        c.dt = dt;
+        t += dt;
+        nextFrame(&c);
+        const v = motion.spring(&c, 7, 0, 1, glide);
+        const expected = analyticSpring(t, glide);
+        try testing.expectApproxEqAbs(expected, v, 0.005);
+    }
+}

@@ -17,6 +17,9 @@ const ui = @import("ui.zig");
 const Window = @import("../window.zig").Window;
 const a11y = @import("a11y.zig");
 const events = @import("surface_events.zig");
+const frame_log_mod = @import("frame_log.zig");
+pub const FrameLog = frame_log_mod.FrameLog;
+extern "c" fn getenv(name: [*:0]const u8) ?[*:0]const u8;
 pub const Surface = struct {
     gpa: std.mem.Allocator,
     window: *Window,
@@ -56,6 +59,8 @@ pub const Surface = struct {
     /// The focused box after the last frame, and the tooltip shown.
     last_focus: u64 = 0,
     tip: ?[]const u8 = null,
+    frame_log: ?FrameLog = null,
+    frame_kind: frame_log_mod.Kind = .input,
 
     pub fn create(window: *Window, view: ui.View, theme_override: ?Theme) !*Surface {
         const gpa = window.app.gpa;
@@ -88,6 +93,10 @@ pub const Surface = struct {
             .start_time = cf.CACurrentMediaTime(),
         };
         self.ctx = .init(gpa, &self.text);
+        if (getenv("NANOUI_FRAMES")) |raw| {
+            const p = std.mem.span(raw);
+            if (p.len > 0) self.frame_log = FrameLog.init(gpa, p) catch null;
+        }
         objc.setZig(nsview, self);
         // A layer-hosting view: the Metal layer is ours.
         objc.msg(void, nsview, "setLayer:", .{renderer.layer});
@@ -134,7 +143,15 @@ pub const Surface = struct {
         self.text.deinit();
         if (self.atlas_texture) |t| objc.release(t);
         self.renderer.deinit();
+        if (self.frame_log) |*fl| fl.deinit();
         if (self.tick_scheduled) self.dead = true else self.gpa.destroy(self);
+    }
+
+    pub fn recordFrames(self: *Surface, gpa: std.mem.Allocator) !*FrameLog {
+        if (self.frame_log == null) {
+            self.frame_log = try FrameLog.init(gpa, null);
+        }
+        return &self.frame_log.?;
     }
 
     pub fn updateGeometry(self: *Surface) void {
@@ -193,7 +210,9 @@ pub const Surface = struct {
         self.ctx.transparent_root = self.transparent;
         c.reduce_motion = objc.msg(objc.BOOL, objc.msg(objc.Object, objc.class("NSWorkspace"), "sharedWorkspace", .{}), "accessibilityDisplayShouldReduceMotion", .{});
         const r = frame_mod.run(c, self.view, &self.text, &self.instances, self.size, self.scale, self.theme(), dt, now - self.start_time);
+        const t_af0 = if (self.frame_log != null) cf.CACurrentMediaTime() else 0;
         if (self.after_frame) |af| af(self.after_frame_ctx, self);
+        const after_frame_ms = if (self.frame_log != null) (cf.CACurrentMediaTime() - t_af0) * 1000 else 0;
         self.afterFocus();
         if (!vis and self.ctx.frame > 1) {
             self.setPaced(false);
@@ -201,7 +220,34 @@ pub const Surface = struct {
         }
         self.renderer.syncImages(&self.text.images);
         const clear = if (self.transparent) types.Color.transparent else c.theme.background;
-        self.renderer.draw(self.instances.items, self.atlasTexture(), self.size, clear);
+        if (self.frame_log) |*fl| {
+            const dur: f64 = if (self.display_link) |l| objc.msg(f64, l, "duration", .{}) else 1.0 / 60.0;
+            const interval_ms: f64 = if (fl.last_t > 0) (now - fl.last_t) * 1000 else 0;
+            fl.last_t = now;
+            const atlas_reset = self.text.atlas.reset_during_frame or self.text.images.reset_during_frame;
+            const idx = fl.append(.{
+                .t = now,
+                .kind = self.frame_kind,
+                .interval_ms = interval_ms,
+                .duration = if (dur > 0) dur else 1.0 / 60.0,
+                .dt = dt,
+                .build_ms = c.stats.build_ms,
+                .layout_ms = c.stats.layout_ms,
+                .paint_ms = c.stats.paint_ms,
+                .after_frame_ms = after_frame_ms,
+                .drawable_wait_ms = 0,
+                .encode_ms = 0,
+                .sync = self.renderer.live_resize,
+                .nodes = c.stats.nodes,
+                .instances = c.stats.instances,
+                .atlas_reset = atlas_reset,
+                .animating = c.animating,
+            });
+            const ds = self.renderer.drawLogged(self.instances.items, self.atlasTexture(), self.size, clear, fl, idx);
+            fl.setDraw(idx, ds.drawable_wait_ms, ds.encode_ms, ds.sync);
+        } else {
+            self.renderer.draw(self.instances.items, self.atlasTexture(), self.size, clear);
+        }
         self.updateCursor();
         const more = c.animating or r.hot_changed;
         if (self.display_link != null) {
