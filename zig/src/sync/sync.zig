@@ -44,7 +44,7 @@ pub const State = struct {
 };
 
 pub const state_file = "sync.json";
-pub const service = "app.kea.browser.sync";
+pub const service = "app.kea.zig.sync";
 
 extern "c" fn SCDynamicStoreCopyComputerName(store: ?*anyopaque, encoding: ?*u32) ?objc.Object;
 extern "c" const kCFRunLoopDefaultMode: objc.Object;
@@ -121,14 +121,15 @@ pub const Sync = struct {
             .queue = dispatch.dispatch_queue_create("kea.sync", null),
             .inline_jobs = kea.opts.root != null,
         };
-        const saved = store.string("sync.device");
+        const dev_key = if (kea.opts.root != null) "sync.device" else "sync.zig.device";
+        const saved = store.string(dev_key);
         defer if (saved) |s| gpa.free(s);
         self.device = if (saved) |s| json.Uuid.parse(s) catch null orelse self.newDevice() else self.newDevice();
     }
 
     fn newDevice(self: *Sync) json.Uuid {
         const made = json.Uuid.random();
-        self.kea.store.setString("sync.device", &made.string());
+        self.kea.store.setString(if (self.kea.opts.root != null) "sync.device" else "sync.zig.device", &made.string());
         return made;
     }
 
@@ -490,7 +491,7 @@ pub const Sync = struct {
     pub fn saveState(self: *Sync, now: bool) void {
         const bytes = json.encodeSorted(self.gpa, self.state.value) catch return;
         self.setState(self.state.value) catch {};
-        self.kea.store.write(state_file, bytes, now);
+        self.kea.store.write(if (self.kea.opts.root != null) state_file else "sync-zig.json", bytes, now);
     }
 };
 
@@ -560,7 +561,7 @@ fn computerName(gpa: Allocator) []u8 {
 }
 
 fn loadState(kea: *Kea) std.json.Parsed(State) {
-    if (kea.store.readFile(state_file)) |bytes| {
+    if (kea.store.readFile(if (kea.opts.root != null) state_file else "sync-zig.json")) |bytes| {
         defer kea.gpa.free(bytes);
         if (json.decode(State, kea.gpa, bytes)) |p| return p else |_| {}
     }
