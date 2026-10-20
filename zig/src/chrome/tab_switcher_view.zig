@@ -46,7 +46,8 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette) void {
     }
     if (sw.pump(b, c.time)) |next| c.frameIn(@floatCast(next - c.time));
 
-    const l = layout(c.size.w, s.candidates.items.len);
+    const visible_count = @min(s.candidates.items.len, 10);
+    const l = layout(c.size.w, visible_count);
     var picked: ?u64 = null;
     var dismissed = false;
     ui.key(c, "kea.switcher");
@@ -73,15 +74,22 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette) void {
     }
     const pointing = stirred and s.moved;
 
+    const total_rows = (s.candidates.items.len + 4) / 5;
+    const sel_index = if (s.selected) |sel| (std.mem.indexOfScalar(u64, s.candidates.items, sel) orelse 0) else 0;
+    const sel_row = sel_index / 5;
+    const start_row = if (total_rows <= 2 or sel_row < 2) 0 else @min(sel_row - 1, total_rows - 2);
+    const end_row = @min(start_row + 2, total_rows);
+
     _ = c.open(.{ .gap = 8 }, "grid");
     if (s.selected) |sel| if (std.mem.indexOfScalar(u64, s.candidates.items, sel)) |index| {
+        const vis_row = (index / 5) -| start_row;
         const id = c.peekId("highlight");
         const x = motion.glideTo(c, id, 0, @as(f32, @floatFromInt(index % 5)) * (l.width + 8));
-        const y = motion.glideTo(c, id, 1, @as(f32, @floatFromInt(index / 5)) * (l.height + 8));
+        const y = motion.glideTo(c, id, 1, @as(f32, @floatFromInt(vis_row)) * (l.height + 8));
         _ = c.leaf(.{ .absolute = true, .offset = .{ .x = x, .y = y }, .width = px(l.width), .height = px(l.height), .radius = 8, .background = p.faint }, .none, "highlight");
     };
-    var row: usize = 0;
-    while (row * 5 < s.candidates.items.len) : (row += 1) {
+    var row: usize = start_row;
+    while (row < end_row) : (row += 1) {
         ui.key(c, c.print("row-{d}", .{row}));
         ui.row(c, .{ .gap = 8 });
         const end = @min(row * 5 + 5, s.candidates.items.len);

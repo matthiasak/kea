@@ -15,7 +15,20 @@ fn newerFirst(_: void, x: Entry, y: Entry) bool {
     return std.mem.order(u8, &x.id.string(), &y.id.string()) == .lt;
 }
 
+fn isAscii(s: []const u8) bool {
+    for (s) |b| if (b >= 0x80) return false;
+    return true;
+}
+fn asciiContains(hay: []const u8, needle: []const u8) bool {
+    if (needle.len == 0) return true;
+    if (hay.len < needle.len) return false;
+    for (0..hay.len - needle.len + 1) |i| {
+        if (std.ascii.eqlIgnoreCase(hay[i .. i + needle.len], needle)) return true;
+    }
+    return false;
+}
 fn contains(title: []const u8, q: []const u8) bool {
+    if (isAscii(title) and isAscii(q)) return asciiContains(title, q);
     const pool = objc.Pool.push();
     defer pool.pop();
     return objc.msg(objc.BOOL, objc.nsString(title), "localizedCaseInsensitiveContainsString:", .{objc.nsString(q)});

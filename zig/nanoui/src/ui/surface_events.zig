@@ -42,6 +42,9 @@ pub const methods = [_]objc.Method{
     .{ .name = "viewDidChangeEffectiveAppearance", .imp = &appearanceChanged, .types = "v@:" },
     .{ .name = "accessibilityChanged:", .imp = &accessibilityChanged, .types = "v@:@" },
     .{ .name = "updateTrackingAreas", .imp = &updateTrackingAreas, .types = "v@:" },
+    .{ .name = "cursorUpdate:", .imp = &cursorUpdate, .types = "v@:@" },
+    .{ .name = "resetCursorRects", .imp = &resetCursorRects, .types = "v@:" },
+    .{ .name = "draggingSession:sourceOperationMaskForDraggingContext:", .imp = &draggingSourceMask, .types = "Q@:@q" },
     .{ .name = "displayLinkFired:", .imp = &displayLinkFired, .types = "v@:@" },
     .{ .name = "viewWillStartLiveResize", .imp = &liveResizeStart, .types = "v@:" },
     .{ .name = "viewDidEndLiveResize", .imp = &liveResizeEnd, .types = "v@:" },
@@ -85,7 +88,10 @@ fn hitTest(obj: objc.Object, _: objc.SEL, point: objc.CGPoint) callconv(.c) ?obj
     const local = objc.msg(objc.CGPoint, obj, "convertPoint:fromView:", .{ point, super });
     const p: types.Point = .{ .x = @floatCast(local.x), .y = @floatCast(local.y) };
     if (p.x < 0 or p.y < 0 or p.x >= s.size.w or p.y >= s.size.h) return null;
-    if (s.transparent and s.ctx.inStageHoleAt(p)) return null;
+    if (s.transparent and s.ctx.inStageHoleAt(p)) {
+        s.cursor_dirty = true;
+        return null;
+    }
     return obj;
 }
 
@@ -107,8 +113,9 @@ fn press(obj: objc.Object, event: objc.Object, button: input.Button) void {
     setMouse(s, event);
     s.ctx.updateHot();
     s.ctx.input.click_count = @intCast(objc.msg(objc.NSInteger, event, "clickCount", .{}));
-    s.ctx.input.button = button;
-    if (button == .left) {
+    const eff_button: input.Button = if (button == .left and s.ctx.input.ctrl) .right else button;
+    s.ctx.input.button = eff_button;
+    if (eff_button == .left) {
         // Under a hidden title bar, the top strip moves the window as a title bar would.
         if (s.window.title_bar == .hidden and s.ctx.input.mouse.y < s.ctx.title_bar_height and s.ctx.hot == 0) {
             if (s.ctx.input.click_count == 2) s.window.zoom() else objc.msg(void, s.window.nswindow, "performWindowDragWithEvent:", .{event});
@@ -116,8 +123,13 @@ fn press(obj: objc.Object, event: objc.Object, button: input.Button) void {
         }
         if (s.ctx.startsWindowDrag()) return objc.msg(void, s.window.nswindow, "performWindowDragWithEvent:", .{event});
     }
+    s.ctx.text_menu = false;
     s.ctx.pointerDown();
     s.frame();
+    if (s.ctx.text_menu) {
+        s.ctx.text_menu = false;
+        textinput.popMenu(s);
+    }
 }
 
 fn release(obj: objc.Object, event: objc.Object, button: input.Button) void {
@@ -160,6 +172,10 @@ fn mouseDragged(obj: objc.Object, _: objc.SEL, event: objc.Object) callconv(.c) 
     setMouse(s, event);
     s.ctx.updateHot();
     if (s.visible()) s.requestFrame() else s.frame();
+    if (s.ctx.drag_request) |req| {
+        s.ctx.drag_request = null;
+        beginDragSession(s, req, event);
+    }
 }
 
 fn mouseMoved(obj: objc.Object, _: objc.SEL, event: objc.Object) callconv(.c) void {
@@ -204,6 +220,7 @@ fn scrollWheel(obj: objc.Object, _: objc.SEL, event: objc.Object) callconv(.c) v
     in.precise = objc.msg(objc.BOOL, event, "hasPreciseScrollingDeltas", .{});
     const phase = scrollPhase(event);
     if (!s.visible() or in.scroll_phase == .none or in.scroll_phase == .changed or phase == .began or phase == .ended) in.scroll_phase = phase;
+    s.ctx.scroll_holding = in.precise and (phase == .began or phase == .changed);
     var dx: f32 = @floatCast(objc.msg(f64, event, "scrollingDeltaX", .{}));
     var dy: f32 = @floatCast(objc.msg(f64, event, "scrollingDeltaY", .{}));
     if (!in.precise) {
@@ -214,7 +231,8 @@ fn scrollWheel(obj: objc.Object, _: objc.SEL, event: objc.Object) callconv(.c) v
     // and up the scrolling box under the pointer, else a view that takes it.
     const took = dy != 0 and s.ctx.applyScroll(dy);
     const wheel = s.ctx.wants_wheel and !took;
-    if (!took and dx == 0 and !wheel) return;
+    const release_over = !s.ctx.scroll_holding and s.ctx.hasOverscroll();
+    if (!took and dx == 0 and !wheel and !release_over) return;
     if (s.visible()) {
         in.scroll.x += dx;
         if (wheel) in.scroll.y += dy;
@@ -247,6 +265,11 @@ fn keyDown(obj: objc.Object, _: objc.SEL, event: objc.Object) callconv(.c) void 
             in.shortcut = null;
             if (s.ctx.shortcut_taken) return;
         }
+    }
+    if (code == 48 and !in.cmd and !in.ctrl and !in.alt and !s.ctx.focused_multiline and s.ctx.focusable_ids.items.len > 0) {
+        s.ctx.focusNext(in.shift);
+        s.frame();
+        return;
     }
     // A focused text field gets the event through the input system:
     // accents, input methods, the system's key bindings.
@@ -433,11 +456,62 @@ fn updateTrackingAreas(obj: objc.Object, _: objc.SEL) callconv(.c) void {
         objc.msg(void, obj, "removeTrackingArea:", .{t});
         objc.release(t);
     }
-    // Entered and exited, moved, always active, in the visible rect.
-    const opts: objc.NSUInteger = 0x01 | 0x02 | 0x80 | 0x200;
+    // Entered and exited, moved, cursorUpdate, always active, in the visible rect.
+    const opts: objc.NSUInteger = 0x01 | 0x02 | 0x04 | 0x80 | 0x200;
     const area = objc.msg(objc.Object, objc.alloc("NSTrackingArea"), "initWithRect:options:owner:userInfo:", .{
         objc.CGRect{}, opts, obj, @as(?objc.Object, null),
     });
     objc.msg(void, obj, "addTrackingArea:", .{area});
     s.tracking = area;
+}
+
+fn cursorUpdate(obj: objc.Object, _: objc.SEL, _: objc.Object) callconv(.c) void {
+    const s = surfaceOf(obj) orelse return;
+    s.applyCursor();
+}
+
+fn resetCursorRects(obj: objc.Object, _: objc.SEL) callconv(.c) void {
+    const s = surfaceOf(obj) orelse return;
+    s.applyCursor();
+}
+
+fn draggingSourceMask(_: objc.Object, _: objc.SEL, _: objc.Object, _: objc.NSInteger) callconv(.c) objc.NSUInteger {
+    return 1; // NSDragOperationCopy
+}
+
+fn beginDragSession(s: *Surface, req: @import("context_hooks.zig").DragRequest, event: objc.Object) void {
+    const pool = objc.Pool.push();
+    defer pool.pop();
+    const w: f64 = if (req.rect.w > 0) @min(240, @max(80, req.rect.w)) else 160;
+    const h: f64 = if (req.rect.h > 0) @min(48, @max(24, req.rect.h)) else 28;
+    const img = objc.msg(objc.Object, objc.alloc("NSImage"), "initWithSize:", .{objc.CGSize{ .width = w, .height = h }});
+    defer objc.release(img);
+    objc.msg(void, img, "lockFocus", .{});
+    const bg = s.ctx.theme.surface;
+    const fill = objc.msg(objc.Object, objc.class("NSColor"), "colorWithSRGBRed:green:blue:alpha:", .{ @as(f64, bg.r), @as(f64, bg.g), @as(f64, bg.b), @as(f64, 0.85) });
+    objc.msg(void, fill, "setFill", .{});
+    const path = objc.msg(objc.Object, objc.class("NSBezierPath"), "bezierPathWithRoundedRect:xRadius:yRadius:", .{
+        objc.CGRect{ .size = .{ .width = w, .height = h } }, @as(f64, 9), @as(f64, 9),
+    });
+    objc.msg(void, path, "fill", .{});
+    if (req.text.len > 0) {
+        const fg = s.ctx.theme.text;
+        const fg_color = objc.msg(objc.Object, objc.class("NSColor"), "colorWithSRGBRed:green:blue:alpha:", .{ @as(f64, fg.r), @as(f64, fg.g), @as(f64, fg.b), @as(f64, 1) });
+        const attrs = objc.msg(objc.Object, objc.class("NSDictionary"), "dictionaryWithObject:forKey:", .{ fg_color, objc.nsString("NSColor") });
+        const ns_str = objc.nsString(req.text);
+        objc.msg(void, ns_str, "drawInRect:withAttributes:", .{
+            objc.CGRect{ .origin = .{ .x = 10, .y = (h - 16) * 0.5 }, .size = .{ .width = w - 20, .height = 18 } },
+            attrs,
+        });
+    }
+    objc.msg(void, img, "unlockFocus", .{});
+    const pb_item = objc.new("NSPasteboardItem");
+    defer objc.release(pb_item);
+    _ = objc.msg(objc.BOOL, pb_item, "setString:forType:", .{ objc.nsString(req.text), objc.nsString("public.utf8-plain-text") });
+    const drag_item = objc.msg(objc.Object, objc.alloc("NSDraggingItem"), "initWithPasteboardWriter:", .{pb_item});
+    defer objc.release(drag_item);
+    const frame = objc.CGRect{ .origin = .{ .x = s.ctx.input.mouse.x - w * 0.5, .y = s.ctx.input.mouse.y - h * 0.5 }, .size = .{ .width = w, .height = h } };
+    objc.msg(void, drag_item, "setDraggingFrame:contents:", .{ frame, img });
+    const items = objc.msg(objc.Object, objc.class("NSArray"), "arrayWithObject:", .{drag_item});
+    _ = objc.msg(?objc.Object, s.nsview, "beginDraggingSessionWithItems:event:source:", .{ items, event, s.nsview });
 }

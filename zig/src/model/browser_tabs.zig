@@ -50,8 +50,33 @@ fn visible(self: *Browser, id: u64) bool {
     return id != 0 and (ids[0] == id or ids[1] == id);
 }
 
+pub fn reindexTabs(self: *Browser) void {
+    self.tab_index.clearRetainingCapacity();
+    for (self.tabs.items, 0..) |t, i| self.tab_index.put(self.gpa, t.id, i) catch {};
+}
+
+pub fn tabById(self: *Browser, id: u64) ?*Tab {
+    if (id == 0) return null;
+    const items = self.tabs.items;
+    if (self.tab_index.get(id)) |i| {
+        if (i < items.len and items[i].id == id) return items[i];
+    }
+    for (items) |t| if (t.id == id) {
+        self.reindexTabs();
+        return t;
+    };
+    return null;
+}
+
 pub fn indexOf(self: *Browser, tab: *const Tab) ?usize {
-    for (self.tabs.items, 0..) |t, i| if (t == tab) return i;
+    const items = self.tabs.items;
+    if (self.tab_index.get(tab.id)) |i| {
+        if (i < items.len and items[i] == tab) return i;
+    }
+    for (items, 0..) |t, i| if (t == tab) {
+        self.reindexTabs();
+        return i;
+    };
     return null;
 }
 
@@ -91,6 +116,7 @@ pub fn adopt(self: *Browser, t: *Tab) void {
     self.tabs.append(self.gpa, t) catch @panic("OOM");
     if (self.active_id == 0) self.active_id = t.id;
     self.arrangeGroupedTabs(null);
+    self.reindexTabs();
 }
 
 /// `activeID`'s `didSet`: the tab just left is the tab just looked at, and
@@ -144,6 +170,7 @@ pub fn open(self: *Browser, url: []const u8, o: OpenOptions) *Tab {
     };
     self.tabs.insert(self.gpa, if (o.at_end) self.tabs.items.len else self.placeForNew(), t) catch @panic("OOM");
     self.arrangeGroupedTabs(null);
+    self.reindexTabs();
     if (o.foreground) {
         self.setActive(t.id);
         self.setEditing(false);
@@ -338,6 +365,7 @@ pub fn moveDisplayedTab(self: *Browser, tab: *Tab, index: usize) void {
     const size: usize = if (self.splitFor(anchor) == null) 1 else 2;
     self.tabs.insertSlice(self.gpa, if (from < index) target + size else target, moving) catch @panic("OOM");
     self.arrangeGroupedTabs(null);
+    self.reindexTabs();
     self.rememberSession();
     self.redraw();
 }
@@ -381,6 +409,7 @@ pub fn dropTabIntoStrip(self: *Browser, tab: *Tab, before: ?*Tab) void {
         self.tabs.insert(self.gpa, place, tab) catch @panic("OOM");
     }
     self.arrangeGroupedTabs(null);
+    self.reindexTabs();
     self.rememberSession();
     self.redraw();
 }
@@ -404,6 +433,7 @@ pub fn insert(self: *Browser, tab: *Tab, index: usize) void {
     if (at < self.tabs.items.len and !self.standsInRow(self.tabs.items[at])) at += 1;
     self.tabs.insert(self.gpa, at, tab) catch @panic("OOM");
     self.arrangeGroupedTabs(null);
+    self.reindexTabs();
     self.rememberSession();
 }
 
@@ -437,6 +467,7 @@ pub fn finishMove(self: *Browser, tab: *Tab, id: Uuid) void {
     self.removeEmptyGroup(tab.group_id);
     if (self.tabs.items.len == 0) self.adopt(self.make("", false));
     if (self.active_id == 0) self.active_id = self.tabs.items[0].id;
+    self.reindexTabs();
     if (self.stage_host) |sh| if (tab.web) |wv| sh.forget(wv);
     tab.rehome(self.kea.dataStore(id));
     // Its group stays behind: the space it goes to has groups of its own.

@@ -20,7 +20,9 @@ const groups_view = @import("groups_view.zig");
 const tab_address = @import("tab_address.zig");
 const split_tab_item = @import("split_tab_item.zig");
 const split_drop = @import("split_drop.zig");
-
+const tab_leaving = @import("tab_leaving.zig");
+const presence = @import("presence.zig");
+const side_bar = @import("side_bar.zig");
 const px = struct {
     fn v(n: f32) ui.Length {
         return .{ .px = n };
@@ -53,17 +55,42 @@ pub fn section(b: *Browser, c: *ui.Context, p: *const Palette, tabs: []const *Ta
     if (which == .group) _ = c.open(.{ .direction = .column, .width = .fill, .gap = gap, .padding = .{ .left = group_indent } }, null);
     defer if (which == .group) c.end();
     var held: ?struct { t: *Tab, slot: u32, shift: f32 } = null;
+    const st = &b.column;
+    const fresh = !st.drawn or !st.space.eql(b.space_id);
+    const rows_box = c.rects.get(st.rows_node);
+    const snappy: ui.Spring = .{ .response = 0.26, .damping = 0.86 };
     for (tabs, 0..) |t, index| {
         ui.key(c, c.print("row-{d}", .{t.id}));
+        if (interactive) tab_leaving.keepIn(&st.snaps, b.gpa, b, t);
         const item = place(b, c, p, t, live, interactive);
         const row = item.row;
         if (!interactive) continue;
+        const rid = side_bar.rowId(t.id);
+        const known = for (st.last.items) |s| {
+            if (s.id == t.id) break true;
+        } else false;
+        const v = presence.presenceFrom(c, rid, if (!fresh and !known) 0 else 1, true, if (which == .group) snappy else motion.settle, null) orelse 1;
         const r = tab_drag.carried(b, c, row.it, t, index, tabs.len, step, true);
+        const node = c.node(row.index);
+        const landing = if (b.carry.landing) |l| l.tab == t.id else false;
+        node.style.settle_y = if (r.held or landing) null else motion.glide;
+        node.style.scale = 0.94 + 0.06 * v;
+        node.style.scale_anchor = .{ .x = 0, .y = 0.5 };
         if (r.held) {
             // Its place stays, empty; the row itself is drawn last, on top.
-            c.node(row.index).style.opacity = 0;
+            node.style.opacity = 0;
             held = .{ .t = t, .slot = row.index, .shift = r.shift };
-        } else c.node(row.index).style.offset.y = r.shift;
+        } else {
+            node.style.opacity = std.math.clamp(v, 0, 1);
+            node.style.offset.y = r.shift;
+        }
+        if (row.it.rect) |rr| {
+            const rx = if (rows_box) |rb| rr.x - rb.x else 0;
+            const ry = if (rows_box) |rb| rr.y - rb.y else rr.y;
+            st.seen.append(b.gpa, .{ .id = t.id, .x = rx, .y = ry, .w = rr.w }) catch {};
+        } else {
+            st.seen.append(b.gpa, .{ .id = t.id, .x = if (which == .group) group_indent else 0, .y = 0, .w = b.prefs.side_width - 20 - (if (which == .group) group_indent else 0) }) catch {};
+        }
         if (r.target) |to| move(b, t, which, to);
         if (r.dropped) |at| dropOnGroup(b, t, at);
         if (!r.swallowsClick()) act(b, c, item.asked, item.asked.id == live, item.asked_it, item.asked_close);
@@ -183,8 +210,8 @@ pub fn sideRow(b: *Browser, c: *ui.Context, p: *const Palette, t: *Tab, live: bo
         }
         // The title keeps its length under the pointer and fades out beneath
         // the cross, rather than being cut shorter.
-        const fades = hovering and !status;
-        ui.text(c, label, .{ .size = 12.5, .color = colour, .truncate = true, .fade = if (fades) .{ .clear = 26, .ramp = 16 } else null });
+        const f_t = motion.quickTo(c, it.id, 4, if (hovering and !status) 1 else 0);
+        ui.text(c, label, .{ .size = 12.5, .color = colour, .truncate = true, .fade = if (f_t > 0.001) .{ .clear = 26 * f_t, .ramp = 16 * f_t } else null });
     }
 
     var close: ui.Interaction = .{ .id = 0, .rect = null, .hovered = false, .pressed = false, .clicked = false, .focused = false };
@@ -197,7 +224,7 @@ pub fn sideRow(b: *Browser, c: *ui.Context, p: *const Palette, t: *Tab, live: bo
             .height = px(15),
             .align_items = .center,
             .justify = .center,
-            .opacity = if (hovering and !speaker) 0 else 1,
+            .opacity = motion.quickTo(c, it.id, 3, if (hovering and !speaker) 0 else 1),
             .offset = .{ .x = -23 * motion.quickTo(c, it.id, 2, if (hovering and speaker) 1 else 0) },
         }, null);
         if (t.loading) ring.ring(c, 10) else if (controls.speaker(c, p, t.muted).clicked and interactive) t.toggleMute();
@@ -248,7 +275,7 @@ pub fn loose(b: *Browser, c: *ui.Context, p: *const Palette, listed_count: usize
         const list = arena.dupe(TabGroup, b.tab_groups.items) catch @panic("OOM");
         for (list) |*g| {
             ui.key(c, c.print("group-{s}", .{&g.id.string()}));
-            _ = c.open(.{ .width = .fill, .gap = gap }, null);
+            _ = c.open(.{ .width = .fill, .gap = gap, .settle_y = motion.glide }, null);
             _ = groups_view.groupHeading(b, c, p, g, false);
             const members = b.visibleTabsIn(arena, g.*) catch @panic("OOM");
             section(b, c, p, members, .{ .group = g.id }, true, b.active_id);

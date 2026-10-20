@@ -112,7 +112,7 @@ pub fn folderItems(a: std.mem.Allocator, b: *Browser, id: Uuid) ![]const MenuIte
     const ids = try a.dupe(Uuid, &.{id});
     var out: std.ArrayList(MenuItem) = .empty;
     try out.append(a, try row_menu.item(a, b, "Top Level", .move, ids, null, .dropdown));
-    const folders = try Bookmarks.folders(a, b.bookmarks.roots);
+    const folders = b.bookmarks.cachedFolders();
     if (folders.len > 0) try out.append(a, .separator);
     for (folders) |f| try out.append(a, try row_menu.item(a, b, try row_menu.indented(a, f), .move, ids, f.node.id, .dropdown));
     try out.append(a, .separator);

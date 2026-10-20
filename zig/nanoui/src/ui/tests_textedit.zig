@@ -158,3 +158,111 @@ test "grows to max_lines then scrolls" {
     try testing.expect(t.ctx.focused_text.?.caret <= 1);
     try testing.expectApproxEqAbs(@as(f32, 20), t.ctx.focused_text.?.caret_rect.y, 0.5);
 }
+
+test "system undo and redo with Cmd+Z and Cmd+Shift+Z" {
+    var s: Field = .{};
+    defer s.deinit();
+    var t: ui.Tester = undefined;
+    try t.init(testing.allocator, .init(&s, Field.view), .{});
+    defer t.deinit();
+    try t.clickText("Address");
+    t.typeText("hello");
+    t.typeText(" world");
+    try testing.expectEqualStrings("hello world", s.buf.text());
+    // Consecutive typing is grouped into one undo step.
+    try testing.expect(t.shortcut(.{ .key = 'z', .cmd = true }));
+    try testing.expectEqualStrings("", s.buf.text());
+    try testing.expect(t.shortcut(.{ .key = 'z', .cmd = true, .shift = true }));
+    try testing.expectEqualStrings("hello world", s.buf.text());
+    // Backspace breaks the typing group and records its own step.
+    t.key(.backspace);
+    try testing.expectEqualStrings("hello worl", s.buf.text());
+    t.typeText("d!");
+    try testing.expectEqualStrings("hello world!", s.buf.text());
+    try testing.expect(t.shortcut(.{ .key = 'z', .cmd = true }));
+    try testing.expectEqualStrings("hello worl", s.buf.text());
+    try testing.expect(t.shortcut(.{ .key = 'z', .cmd = true }));
+    try testing.expectEqualStrings("hello world", s.buf.text());
+}
+
+test "triple-click selects line or field and Tab cycles between fields" {
+    var s: Field = .{};
+    defer s.deinit();
+    var t: ui.Tester = undefined;
+    try t.init(testing.allocator, .init(&s, Field.view), .{});
+    defer t.deinit();
+    s.other.set("first");
+    s.buf.set("second");
+    t.frame();
+    try t.clickText("first");
+    try testing.expectEqualStrings("first", t.ctx.focused_text.?.text);
+    // Tab moves focus to the second field and selects all.
+    t.key(.tab);
+    try testing.expectEqualStrings("second", t.ctx.focused_text.?.text);
+    try testing.expectEqualStrings("second", selected(&t));
+    // Shift+Tab cycles back to the first field.
+    t.ctx.input.shift = true;
+    t.key(.tab);
+    t.ctx.input.shift = false;
+    try testing.expectEqualStrings("first", t.ctx.focused_text.?.text);
+    // Triple-click in textArea selects the clicked line.
+    var comp: Composer = .{};
+    defer comp.buf.deinit();
+    var tc: ui.Tester = undefined;
+    try tc.init(testing.allocator, .init(&comp, Composer.view), .{});
+    defer tc.deinit();
+    comp.buf.set("alpha\nbeta\ngamma");
+    tc.frame();
+    const r = tc.findText("beta").?;
+    tc.moveTo(r.x + 4, r.y + r.h / 2);
+    tc.ctx.input.click_count = 3;
+    tc.ctx.pointerDown();
+    tc.frame();
+    tc.ctx.pointerUp();
+    tc.frame();
+    try testing.expectEqualStrings("beta", selected(&tc));
+}
+
+const ThreeFields = struct {
+    a: ui.TextBuffer = .{},
+    b: ui.TextBuffer = .{},
+    c: ui.TextBuffer = .{},
+    fn view(s: *ThreeFields, cx: *ui.Context) void {
+        ui.column(cx, .{ .padding = .all(12), .gap = 8 });
+        defer ui.end(cx);
+        _ = ui.textField(cx, &s.a, .{ .placeholder = "One" });
+        _ = ui.textField(cx, &s.b, .{ .placeholder = "Two" });
+        _ = ui.textField(cx, &s.c, .{ .placeholder = "Three" });
+    }
+    fn deinit(s: *ThreeFields) void {
+        s.a.deinit();
+        s.b.deinit();
+        s.c.deinit();
+    }
+};
+
+test "Tab and Shift+Tab cycle through three fields in order" {
+    var s: ThreeFields = .{};
+    defer s.deinit();
+    s.a.set("alpha");
+    s.b.set("beta");
+    s.c.set("gamma");
+    var t: ui.Tester = undefined;
+    try t.init(testing.allocator, .init(&s, ThreeFields.view), .{});
+    defer t.deinit();
+    try t.clickText("alpha");
+    try testing.expectEqualStrings("alpha", t.ctx.focused_text.?.text);
+    t.key(.tab);
+    try testing.expectEqualStrings("beta", t.ctx.focused_text.?.text);
+    t.key(.tab);
+    try testing.expectEqualStrings("gamma", t.ctx.focused_text.?.text);
+    t.ctx.input.shift = true;
+    t.key(.tab);
+    t.ctx.input.shift = false;
+    try testing.expectEqualStrings("beta", t.ctx.focused_text.?.text);
+}
+
+test {
+    _ = @import("textedit.zig");
+    _ = @import("scroll.zig");
+}

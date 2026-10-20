@@ -18,30 +18,45 @@ const actions = @import("actions.zig");
 const outline = @import("outline.zig");
 const manager = @import("manager.zig");
 
+const px = struct {
+    fn v(n: f32) ui.Length {
+        return .{ .px = n };
+    }
+}.v;
+
 pub fn view(b: *Browser, c: *ui.Context, p: *const Palette) void {
-    const hits = b.bookmarks.matches(c.alloc(), b.marks_ui.picks.query.text()) catch &.{};
+    const cached = b.marks_ui.cachedMatches(b.gpa, b.bookmarks, b.marks_ui.picks.query.text());
+    const hits = cached.hits;
     if (hits.len == 0) {
         plate.cardBox(c, p);
         plate.nothing(c, p, "Nothing matches. The kea checked under every rock.");
         ui.end(c);
         return;
     }
-    const order = c.alloc().alloc(Uuid, hits.len) catch return;
-    for (hits, order) |h, *o| o.* = h.node.id;
-    ui.scroll(c, .{ .width = .fill, .max_height = 440, .scroll_bar = false, .padding = .{ .bottom = 2 } });
+    const order = cached.order;
+    const si = c.open(.{ .width = .fill, .max_height = 440, .scroll = true, .direction = .column, .scroll_bar = false, .padding = .{ .bottom = 2 } }, "bm.found.scroll");
+    const sid = c.node(si).id;
+    const offset = @max(0, c.scroll.get(sid) orelse 0);
+    const pitch: f32 = 47;
+    const first_vis: usize = @intFromFloat(@floor(offset / pitch));
+    const vis_n: usize = @intFromFloat(@ceil(440.0 / pitch) + 1);
+    const first = if (hits.len <= 30) 0 else first_vis -| 4;
+    const last = if (hits.len <= 30) hits.len else @min(hits.len, first_vis + vis_n + 4);
     plate.cardBox(c, p);
-    for (hits, 0..) |h, i| {
-        if (i > 0) plate.rule(c, p, 40);
+    if (first > 0) _ = c.leaf(.{ .width = .fill, .height = px(@as(f32, @floatFromInt(first)) * pitch) }, .none, "bm.found.before");
+    for (hits[first..last], first..last) |h, i| {
+        if (i > first or first > 0) plate.rule(c, p, 40);
         row(b, c, p, h, order);
     }
+    if (last < hits.len) _ = c.leaf(.{ .width = .fill, .height = px(@as(f32, @floatFromInt(hits.len - last)) * pitch) }, .none, "bm.found.after");
     ui.end(c);
-    ui.end(c);
+    c.end();
 }
 
 fn row(b: *Browser, c: *ui.Context, p: *const Palette, hit: bm.Match, order: []const Uuid) void {
     const node = hit.node;
     const picks = &b.marks_ui.picks;
-    const i = c.open(.{ .direction = .row, .gap = 10, .padding = .xy(14, 9), .width = .fill, .align_items = .center, .control = true }, outline.rowKey(c, .manager, node.id));
+    const i = c.open(.{ .direction = .row, .gap = 10, .padding = .xy(14, 9), .width = .fill, .height = px(46), .align_items = .center, .control = true }, outline.rowKey(c, .manager, node.id));
     const it = c.interact(i, .{});
     const label = node.label(c.alloc()) catch node.title;
     c.addA11y(i, .row, label, "", picks.ids.has(node.id), true);

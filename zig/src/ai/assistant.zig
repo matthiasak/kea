@@ -57,7 +57,11 @@ pub const Assistant = struct {
     compactor: ?*runs.Compact = null,
     compact_run: u64 = 0,
     naming: std.ArrayList(Uuid) = .empty,
-
+    last_piece_redraw: f64 = 0,
+    pending_redraw: bool = false,
+    sugg_arena: ?std.heap.ArenaAllocator = null,
+    sugg_hash: u64 = std.math.maxInt(u64),
+    sugg_cached: []const ubi.Suggestion = &.{},
     pub const longest = 32_000;
 
     // In assistant_more.zig: the composer's suggestions and commands, compacting, cleaning up.
@@ -89,6 +93,7 @@ pub const Assistant = struct {
         if (self.waiting) |w| self.gpa.free(w);
         self.draft.deinit(self.gpa);
         self.naming.deinit(self.gpa);
+        if (self.sugg_arena) |*sa| sa.deinit();
         self.chat_arena.deinit();
         self.gpa.destroy(self);
     }
@@ -134,6 +139,15 @@ pub const Assistant = struct {
     /// The window drawn again, as a `@Published` change does: the
     /// browser's, and the chat's own when it is popped out.
     pub fn changed(self: *Assistant) void {
+        if (self.live != null) {
+            const now = @import("nanoui").ui.clock.now();
+            if (now - self.last_piece_redraw < 1.0 / 60.0) {
+                self.pending_redraw = true;
+                return;
+            }
+            self.last_piece_redraw = now;
+        }
+        self.pending_redraw = false;
         const b = self.browser orelse return;
         b.redraw();
         if (b.chat.window) |w| w.redraw();
@@ -159,6 +173,30 @@ pub const Assistant = struct {
     pub fn setDraft(self: *Assistant, text: []const u8) void {
         self.draft.clearRetainingCapacity();
         self.draft.appendSlice(self.gpa, text) catch {};
+        _ = self.cachedSuggestions();
+    }
+
+    pub fn cachedSuggestions(self: *Assistant) []const ubi.Suggestion {
+        var h = std.hash.Wyhash.init(1);
+        h.update(self.draft.items);
+        h.update(&.{0});
+        for (self.chat.pins) |p| h.update(p.url);
+        if (self.browser) |b| {
+            const tc = b.tabs.items.len;
+            h.update(std.mem.asBytes(&tc));
+            h.update(std.mem.asBytes(&b.kea.bookmarks.revision));
+            h.update(std.mem.asBytes(&b.kea.history.generation));
+        }
+        const digest = h.final();
+        if (self.sugg_hash == digest and self.sugg_arena != null) return self.sugg_cached;
+        if (self.sugg_arena == null) {
+            self.sugg_arena = std.heap.ArenaAllocator.init(self.gpa);
+        } else {
+            _ = self.sugg_arena.?.reset(.retain_capacity);
+        }
+        self.sugg_hash = digest;
+        self.sugg_cached = self.suggestions(self.sugg_arena.?.allocator()) catch &.{};
+        return self.sugg_cached;
     }
 
     // MARK: the chat, changed
@@ -172,6 +210,7 @@ pub const Assistant = struct {
         self.chat_arena.deinit();
         self.chat_arena = next;
         self.chat = c;
+        self.last_piece_redraw = 0;
         self.changed();
     }
 
@@ -181,6 +220,7 @@ pub const Assistant = struct {
         self.chat_arena.deinit();
         self.chat_arena = next;
         self.chat = copy;
+        self.last_piece_redraw = 0;
         self.changed();
     }
 
@@ -308,6 +348,8 @@ pub const Assistant = struct {
             }
         }.f);
         self.clearLive();
+        self.last_piece_redraw = 0;
+        self.changed();
         self.keep();
         if (failed != null or reads.len == 0) return;
         runs.checkStrays(self, id, self.chat.turns[self.chat.turns.len - 1].answer, reads);

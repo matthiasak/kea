@@ -63,6 +63,11 @@ pub const Strip = struct {
     doors: f32 = 0,
     /// The run's room this frame: what an edited tab may grow to.
     room: f32 = 0,
+    /// Width locked while closing tabs with the pointer inside the strip.
+    locked_width: f32 = 0,
+    inside: bool = false,
+    last_size: ui.Size = .{},
+    known_set: std.AutoHashMapUnmanaged(u64, void) = .empty,
     /// Boxes last drawn, for what reads their rects (tests, the reveal).
     run_node: u64 = 0,
     doors_node: u64 = 0,
@@ -73,6 +78,7 @@ pub const Strip = struct {
     pub fn deinit(s: *Strip, gpa: std.mem.Allocator) void {
         s.seen.deinit(gpa);
         s.last.deinit(gpa);
+        s.known_set.deinit(gpa);
         tab_leaving.deinit(s, gpa);
     }
 };
@@ -177,7 +183,9 @@ pub fn tabBar(b: *Browser, c: *ui.Context, p: *const Palette) void {
     st.room = room;
     const list = items(b, c.alloc()) catch return;
     const row = rowOf(b, c, list);
-    const each = row.each(room);
+    const natural = row.each(room);
+    if (!st.inside) st.locked_width = 0;
+    const each = if (st.inside and st.locked_width > 0) @min(st.locked_width, natural) else natural;
     const content = row.content(each) + tab_pill.growth(b, each);
     const run = @min(content, room);
     const overflowing = content > room + 0.5;
@@ -187,7 +195,8 @@ pub fn tabBar(b: *Browser, c: *ui.Context, p: *const Palette) void {
     const root = c.open(.{ .absolute = true, .width = .fill, .height = px(metrics.strip) }, "kea.strip");
     const rect = c.rects.get(c.node(root).id);
     const nearby = if (rect) |r| r.contains(c.input.mouse) else false;
-    // A link dragged onto the row opens there.
+    st.inside = nearby;
+    if (!nearby) st.locked_width = 0;
     c.acceptDrop(root);
     split_drop.mark(b, 0, rect);
     const over = if (c.input.drag_over) |at| (if (rect) |r| r.contains(at) else false) else false;
@@ -269,6 +278,10 @@ fn drawRun(b: *Browser, c: *ui.Context, p: *const Palette, list: []const Item, e
     std.mem.swap(std.ArrayList(Seen), &st.last, &st.seen);
     st.seen.clearRetainingCapacity();
     const last = &st.last;
+    st.known_set.clearRetainingCapacity();
+    for (last.items) |s| st.known_set.put(b.gpa, s.id, {}) catch {};
+    const resized = st.drawn and (st.last_size.w != c.size.w or st.last_size.h != c.size.h);
+    st.last_size = c.size;
     // An address typed into a tab, or done with: the row glides to it.
     if (st.editing != b.editing_tab) {
         st.editing = b.editing_tab;
@@ -279,7 +292,7 @@ fn drawRun(b: *Browser, c: *ui.Context, p: *const Palette, list: []const Item, e
     // arrives as it is, as SwiftUI's first render plays no transition.
     const fresh = !st.drawn or !st.space.eql(b.space_id);
     st.space = b.space_id;
-
+    if (fresh or resized) st.locked_width = 0;
     var target_x: f32 = 0;
     var flow_x: f32 = 0;
     var live_rect: ?ui.Rect = null;
@@ -301,11 +314,13 @@ fn drawRun(b: *Browser, c: *ui.Context, p: *const Palette, list: []const Item, e
                 tab_leaving.keep(b, t);
                 const pid = pillId(t.id);
                 const w = split_tab_item.stripSpan(b, t, each);
+                const known = st.known_set.contains(t.id);
+                if (resized) {
+                    ui.jump(c, pid, 1, w);
+                    ui.jump(c, pid, 0, target_x);
+                }
                 const shown_w = ui.spring(c, pid, 1, w, spring);
                 const x = ui.spring(c, pid, 0, target_x, spring);
-                const known = for (last.items) |s| {
-                    if (s.id == t.id) break true;
-                } else false;
                 const v = presence.presenceFrom(c, pid, if (!fresh and !known) 0 else 1, true, motion.settle, null) orelse 1;
                 // A pair wears its own grey, on the half with the keys.
                 const live = t.id == b.active_id and split_tab_item.partner(b, t) == null;
@@ -355,7 +370,7 @@ fn drawRun(b: *Browser, c: *ui.Context, p: *const Palette, list: []const Item, e
         }
     }
 
-    if (live_rect) |lr| liveGround(b, c, p, live_box, live_fill, lr, live_tab.?, each);
+    if (live_rect) |lr| liveGround(b, c, p, live_box, live_fill, lr, live_tab.?, each, resized);
     if (fresh) tab_leaving.clear(b) else tab_leaving.leave(b, c, p, last.items, each);
     if (held) |h| {
         // Over its neighbours, on the drop chip; the live one keeps its grey.
@@ -368,7 +383,11 @@ fn drawRun(b: *Browser, c: *ui.Context, p: *const Palette, list: []const Item, e
 }
 
 /// `matchedGeometryEffect`'s grey: gliding to the live pill's place and width.
-fn liveGround(b: *Browser, c: *ui.Context, p: *const Palette, box: u32, fill: u32, at: ui.Rect, tab: *Tab, each: f32) void {
+fn liveGround(b: *Browser, c: *ui.Context, p: *const Palette, box: u32, fill: u32, at: ui.Rect, tab: *Tab, each: f32, resized: bool) void {
+    if (resized) {
+        ui.jump(c, live_id, 0, at.x);
+        ui.jump(c, live_id, 1, at.w);
+    }
     // The glide follows the pill even while it is carried, so it is where
     // the pill is when it takes over again.
     const gx = motion.glideTo(c, live_id, 0, at.x);
@@ -404,6 +423,12 @@ fn onRelease(b: *Browser, t: *Tab, r: tab_drag.Result) void {
 fn click(b: *Browser, c: *ui.Context, t: *Tab, d: tab_pill.Drawn, r: tab_drag.Result, live: bool) void {
     const st = &b.strip;
     if (d.close or d.it.middle_clicked) {
+        if (st.inside and st.locked_width == 0 and st.seen.items.len > 0) {
+            for (st.seen.items) |s| if (!s.pin) {
+                st.locked_width = s.w;
+                break;
+            };
+        }
         st.act = .{ .close = t.id };
         return;
     }

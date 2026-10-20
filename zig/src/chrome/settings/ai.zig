@@ -20,8 +20,9 @@ const controls = @import("../controls.zig");
 const plate = @import("../controls_plate.zig");
 const tab_menu = @import("../tab_menu.zig");
 const sheet = @import("../sheet.zig");
+const disclose = @import("../disclose.zig");
+const motion = @import("../../design/motion.zig");
 const frame = @import("frame.zig");
-
 const Kind = enum { keychain, variable, command };
 
 pub const State = struct {
@@ -67,22 +68,27 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette) void {
         defer ui.end(c);
         _ = frame.prefLine(b, c, p, "ai", "Use AI on pages", "Summarize a page, or open Ubi Chat, from the View menu. Nothing is sent until you ask");
     }
-    if (!b.prefs.ai) return;
+    if (!disclose.begin(c, 0x6b65_612e_6169_626c, b.prefs.ai, motion.settle)) return;
+    defer disclose.end(c);
+    ui.column(c, .{ .width = .fill, .gap = 18 });
+    defer ui.end(c);
     const m = b.kea.ai;
-    if (!s.appeared) {
-        s.appeared = true;
-        m.catalog.refreshIfStale();
-        m.sign_in.ended = .{ .ctx = b.kea, .func = signedIn };
-    }
-    const id = b.prefs.ai_provider;
-    const same = if (s.shown) |old| (id != null and std.mem.eql(u8, old, id.?)) else id == null;
-    if (!same or s.gen == 0) {
-        // A key typed for one provider is never saved for another.
-        s.pasted.set("");
-        s.typed.set("");
-        if (s.shown) |old| b.gpa.free(old);
-        s.shown = if (id) |v| b.gpa.dupe(u8, v) catch null else null;
-        refresh(b);
+    if (b.prefs.ai) {
+        if (!s.appeared) {
+            s.appeared = true;
+            m.catalog.refreshIfStale();
+            m.sign_in.ended = .{ .ctx = b.kea, .func = signedIn };
+        }
+        const id = b.prefs.ai_provider;
+        const same = if (s.shown) |old| (id != null and std.mem.eql(u8, old, id.?)) else id == null;
+        if (!same or s.gen == 0) {
+            // A key typed for one provider is never saved for another.
+            s.pasted.set("");
+            s.typed.set("");
+            if (s.shown) |old| b.gpa.free(old);
+            s.shown = if (id) |v| b.gpa.dupe(u8, v) catch null else null;
+            refresh(b);
+        }
     }
     {
         plate.cardBox(c, p);
@@ -91,18 +97,21 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette) void {
         plate.line(c, p, "Where it runs", place(c, m, chosen));
         if (controls.popUpButton(c, p, "Where it runs", if (chosen) |v| v.label(c.alloc()) catch v.name else "Choose…")) |at| tab_menu.later(b, at, 0, providerItems);
         ui.end(c);
-        if (chosen) |provider| {
-            frame.rule(c, p);
-            if (provider.is("custom")) {
-                serverRow(b, c, p);
+        if (disclose.begin(c, 0x6b65_612e_6169_7072, chosen != null, motion.settle)) {
+            defer disclose.end(c);
+            if (chosen) |provider| {
                 frame.rule(c, p);
-                key(b, c, p, provider);
-                frame.rule(c, p);
-                localModel(b, c, p, provider);
-            } else if (provider.isLocal()) localModel(b, c, p, provider) else {
-                key(b, c, p, provider);
-                frame.rule(c, p);
-                cloudModel(b, c, p, provider);
+                if (provider.is("custom")) {
+                    serverRow(b, c, p);
+                    frame.rule(c, p);
+                    key(b, c, p, provider);
+                    frame.rule(c, p);
+                    localModel(b, c, p, provider);
+                } else if (provider.isLocal()) localModel(b, c, p, provider) else {
+                    key(b, c, p, provider);
+                    frame.rule(c, p);
+                    cloudModel(b, c, p, provider);
+                }
             }
         }
     }

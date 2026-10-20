@@ -27,6 +27,7 @@ fn crossLen(d: types.Direction, st: types.Style) types.Length {
 
 /// Sizes box `index` and its children, given `avail_w` points of width.
 pub fn measure(c: *Context, index: u32, avail_w: f32) types.Size {
+    if (index == 0) c.building = false;
     const n = c.node(index);
     const st = n.style;
     var box_w = switch (st.width) {
@@ -162,43 +163,7 @@ pub fn arrange(c: *Context, index: u32, rect_in: types.Rect) void {
         },
     };
 
-    var scroll_y: f32 = 0;
-    if (st.scroll) {
-        const content_h = used;
-        const max_scroll = @max(0, content_h - inner_main);
-        if (st.follow_end) {
-            // It follows its end while the reader left it there: the
-            // decision is made when the offset is moved (a wheel, a jump),
-            // never because shrinking content pulled the offset to the end.
-            const prev_max = c.scroll_max.get(n.id) orelse 0;
-            const gop = c.scroll.getOrPut(c.gpa, n.id) catch null;
-            if (gop) |g| {
-                var follow = c.scroll_follow.get(n.id) orelse true;
-                if (!g.found_existing) {
-                    follow = true;
-                } else if (c.scroll_seen.get(n.id)) |seen| {
-                    if (g.value_ptr.* != seen) {
-                        follow = g.value_ptr.* >= prev_max - 1;
-                        c.scroll_moved.put(c.gpa, n.id, {}) catch {};
-                    }
-                }
-                if (follow) {
-                    const want = if (c.scroll_cap.get(n.id)) |cap| @min(max_scroll, cap) else max_scroll;
-                    // Moved by following: what reads the last layout (a
-                    // pinned header, a pill) needs one more frame.
-                    if (g.value_ptr.* != want) c.animating = true;
-                    g.value_ptr.* = want;
-                }
-                c.scroll_follow.put(c.gpa, n.id, follow) catch {};
-            }
-            c.scroll_max.put(c.gpa, n.id, max_scroll) catch {};
-        }
-        if (c.scroll.getPtr(n.id)) |s| {
-            s.* = @min(s.*, max_scroll);
-            scroll_y = s.*;
-            if (st.follow_end) c.scroll_seen.put(c.gpa, n.id, s.*) catch {};
-        }
-    }
+    const scroll_y: f32 = if (st.scroll) @import("scroll.zig").arrangeScrollY(c, n, inner_main, used) else 0;
 
     var scroll_x: f32 = 0;
     if (st.scroll_x) {

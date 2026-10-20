@@ -1,16 +1,49 @@
 //! What a view asks of the window beyond drawing, on `Context`: the
 //! focus given by the app, tooltips, drops from other apps, boxes
 //! that move the window, and what VoiceOver sees of them.
+const std = @import("std");
 const types = @import("types.zig");
 const input = @import("input.zig");
 const ctx_mod = @import("context.zig");
 const Context = ctx_mod.Context;
 
-/// Focuses the next box (a `textField` or `textArea` called right after),
-/// as a click on it would; `select_all` selects its text.
+pub const DragRequest = struct {
+    text: []const u8,
+    rect: types.Rect = .{},
+};
+
+/// Focuses the next box (a `textField` or `textArea` called right after) when
+/// building a view, or cycles focus through `focusable_ids` (reverse when
+/// `select_all` is true) when called between frames (Tab / Shift+Tab).
 pub fn focusNext(c: *Context, select_all: bool) void {
-    c.focus = c.peekId(null);
-    c.focus_select_all = select_all;
+    if (c.building) {
+        c.focus = c.peekId(null);
+        c.focus_select_all = select_all;
+    } else {
+        focusCycle(c, select_all);
+    }
+}
+
+pub fn focusCycle(c: *Context, reverse: bool) void {
+    const ids = if (c.last_focusable_ids.items.len > 0) c.last_focusable_ids.items else c.focusable_ids.items;
+    if (ids.len == 0) return;
+    if (std.mem.indexOfScalar(u64, ids, c.focus)) |idx| {
+        const next_idx = if (reverse) (if (idx == 0) ids.len - 1 else idx - 1) else (idx + 1) % ids.len;
+        c.focus = ids[next_idx];
+    } else {
+        c.focus = if (reverse) ids[ids.len - 1] else ids[0];
+    }
+    c.input.key = null;
+    c.input.ops = &.{};
+    c.focus_select_all = true;
+    c.caret_moved_at = c.time;
+    c.changed = true;
+}
+
+pub fn startDrag(c: *Context, index: u32, text: []const u8) void {
+    const id = c.node(index).id;
+    const rect = c.rects.get(id) orelse types.Rect{ .x = c.input.mouse.x - 80, .y = c.input.mouse.y - 14, .w = 160, .h = 28 };
+    c.drag_request = .{ .text = c.alloc().dupe(u8, text) catch text, .rect = rect };
 }
 
 /// The tooltip of box `index`, shown while the pointer rests on it or on a
@@ -95,4 +128,74 @@ pub fn adjustable(c: *Context, index: u32, opts: struct { role: ctx_mod.A11yRole
 /// next frame's `interact` of it reports the step.
 pub fn a11yStep(c: *Context, id: u64, dir: i8) void {
     c.input.a11y_step = .{ .id = id, .dir = dir };
+}
+
+pub fn addStageHole(c: *Context, r: types.Rect) void {
+    if (c.stage_count < c.stage_rects.len) {
+        c.stage_rects[c.stage_count] = r;
+        c.stage_nodes[c.stage_count] = ctx_mod.none;
+        c.stage_count += 1;
+    }
+}
+
+pub fn addStageHoleNode(c: *Context, node_index: u32) void {
+    if (c.stage_count < c.stage_rects.len) {
+        c.stage_nodes[c.stage_count] = node_index;
+        c.stage_rects[c.stage_count] = .{};
+        c.stage_count += 1;
+    }
+}
+
+pub fn hitAt(c: *const Context, p: types.Point) bool {
+    var i = c.hits.items.len;
+    while (i > 0) {
+        i -= 1;
+        const h = c.hits.items[i];
+        if (!h.scroll and h.rect.contains(p)) return true;
+    }
+    return false;
+}
+
+pub fn inStageHoleAt(c: *const Context, p: types.Point) bool {
+    if (c.active != 0 or c.hitAt(p)) return false;
+    for (c.stage_rects[0..c.stage_count]) |r| {
+        if (r.contains(p)) return true;
+    }
+    return false;
+}
+
+pub fn addHit(c: *Context, id: u64, index: u32, rect: types.Rect, scroll: bool) void {
+    c.next_hits.append(c.gpa, .{ .id = id, .index = index, .rect = rect, .scroll = scroll }) catch {};
+}
+
+pub fn commitHits(c: *Context) void {
+    std.mem.swap(std.ArrayList(ctx_mod.Hit), &c.hits, &c.next_hits);
+    updateHot(c);
+}
+
+pub fn updateHot(c: *Context) void {
+    c.hot = 0;
+    c.hot_index = ctx_mod.none;
+    c.hot_path.clearRetainingCapacity();
+    var i = c.hits.items.len;
+    while (i > 0) {
+        i -= 1;
+        const h = c.hits.items[i];
+        if (!h.scroll and h.rect.contains(c.input.mouse)) {
+            c.hot = h.id;
+            c.hot_index = h.index;
+            hotPath(c, h);
+            return;
+        }
+    }
+}
+
+fn hotPath(c: *Context, h: ctx_mod.Hit) void {
+    if (h.index >= c.nodes.items.len or c.nodes.items[h.index].id != h.id) return;
+    var at = h.index;
+    while (at != ctx_mod.none) {
+        const n = c.nodes.items[at];
+        if (n.interactive) c.hot_path.append(c.gpa, n.id) catch return;
+        at = n.parent;
+    }
 }

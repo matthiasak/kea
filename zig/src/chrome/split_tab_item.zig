@@ -84,13 +84,14 @@ pub fn strip(b: *Browser, c: *ui.Context, p: *const Palette, left: *Tab, right: 
         take(&d, t, h);
     }
     // One cross, at the end, for whichever half the pointer is over.
-    const over = hovered orelse return d;
     if (!interactive or b.editing_tab != null) return d;
     _ = c.open(.{ .absolute = true, .width = .fill, .height = .fill, .direction = .row, .justify = .end, .align_items = .center, .padding = .{ .right = 7 } }, null);
     defer c.end();
     // ponytail: no "Close the left/right page" tooltip; closeDisc keeps its zone's box to itself.
-    const close = controls.closeDisc(c, p, true, controls.close_zone);
-    if (close.clicked) d.hit = .{ .tab = over, .it = close, .close = true };
+    const close = controls.closeDisc(c, p, hovered != null, controls.close_zone);
+    if (close.clicked) if (hovered) |over| {
+        d.hit = .{ .tab = over, .it = close, .close = true };
+    };
     return d;
 }
 
@@ -163,7 +164,7 @@ fn half(b: *Browser, c: *ui.Context, p: *const Palette, t: *Tab, o: HalfOptions)
     if (t.shy) ui.icon(c, "eye.slash", .{ .size = 9, .color = p.muted });
     // The page is asking something, over its half of the stage.
     if (t.question() != null) _ = c.leaf(.{ .width = px(5), .height = px(5), .radius = 2.5, .background = p.muted }, .none, null);
-    if (!o.narrow) ui.text(c, title, .{ .size = if (o.stacked) 12.5 else 12, .color = if (focused) p.ink else if (hovering) p.ink.alpha(0.7) else p.muted, .truncate = true });
+    if (!o.narrow) ui.text(c, title, .{ .size = if (o.stacked) 12.5 else 12, .color = if (focused) p.ink else p.muted.mix(p.ink, h), .truncate = true });
     _ = c.leaf(.{ .grow = 1, .min_width = 0 }, .none, null);
     const playing = !t.loading and (t.noisy or t.muted);
     if (playing) {

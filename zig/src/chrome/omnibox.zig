@@ -50,6 +50,7 @@ pub const State = struct {
     shakes: u32 = 0,
     typed_seen: u64 = 0,
     active_seen: u64 = 0,
+    last_completed_hash: u64 = 0,
 
     pub fn deinit(st: *State, gpa: std.mem.Allocator) void {
         st.field.deinit();
@@ -233,6 +234,19 @@ fn setSynced(b: *Browser, st: *State, s: []const u8) void {
     st.synced.appendSlice(b.gpa, s) catch @panic("OOM");
 }
 
+fn completedHash(b: *Browser) u64 {
+    var h = std.hash.Wyhash.init(1);
+    h.update(b.omni.typed.items);
+    h.update(&.{0});
+    if (b.omni.ending) |e| h.update(e);
+    h.update(&.{0});
+    if (b.omni.picked) |p| {
+        h.update(std.mem.asBytes(&p));
+        if (p < b.omni.offers.len) h.update(b.omni.offers[p].key);
+    } else h.update(&.{0xff});
+    return h.final();
+}
+
 fn hasCommand(c: *ui.Context, cmd: ui.Command) bool {
     for (c.input.ops) |op| if (op == .command and op.command == cmd) return true;
     return false;
@@ -267,11 +281,15 @@ fn field(b: *Browser, c: *ui.Context, p: *const Palette, st: *State, x: f32, y: 
     // Only what something other than typing changed is pushed in: ⌘L's
     // address, a walk through the list, a submit clearing it.
     const typed = b.omni.typed.items;
-    const want = b.omni.completed(c.alloc());
-    if (!std.mem.eql(u8, want, st.synced.items)) {
-        setSynced(b, st, want);
-        buf.set(want);
-        buf.want_selection = .{ typed.len, want.len };
+    const chash = completedHash(b);
+    if (chash != st.last_completed_hash) {
+        st.last_completed_hash = chash;
+        const want = b.omni.completed(c.alloc());
+        if (!std.mem.eql(u8, want, st.synced.items)) {
+            setSynced(b, st, want);
+            buf.set(want);
+            buf.want_selection = .{ typed.len, want.len };
+        }
     }
     if (buf.text().len == 0) _ = c.leaf(.{ .absolute = true }, .{ .text = .{ .str = "Enter a web address", .style = .{ .size = 15.5 }, .color = p.ink.alpha(0.3) } }, null);
     // The same field whatever came before it (the placeholder, the chip).
@@ -282,7 +300,7 @@ fn field(b: *Browser, c: *ui.Context, p: *const Palette, st: *State, x: f32, y: 
         st.answered = b.focus_request;
         const draft = !st.over and typed.len > 0;
         ui.focusNext(c, !draft);
-        if (draft) buf.want_selection = .{ typed.len, want.len };
+        if (draft) buf.want_selection = .{ typed.len, st.synced.items.len };
     }
     const text_id = c.peekId(null);
     // A press on the field's air leaves the keys in it.
@@ -320,9 +338,11 @@ fn typedChanged(b: *Browser, c: *ui.Context, st: *State, deleting: bool) void {
         const whole = std.mem.concat(a, u8, &.{ text, ending }) catch return;
         st.field.set(whole);
         setSynced(b, st, whole);
+        st.last_completed_hash = completedHash(b);
         st.field.want_selection = .{ text.len, whole.len };
         return;
     };
     if (deleting) b.stopCompleting();
     setSynced(b, st, b.omni.completed(a));
+    st.last_completed_hash = completedHash(b);
 }

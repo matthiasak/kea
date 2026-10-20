@@ -81,7 +81,7 @@ pub fn take(b: *Browser, event: nanoui.objc.Object) bool {
     const a = arena.allocator();
     const nodes = actions.nodesOf(a, b.bookmarks, s.picks.ids.items.items);
     if (flags == command and std.mem.eql(u8, key, "a")) {
-        s.picks.ids.set(b.gpa, state.visible(a, b.bookmarks.roots, &s.picks.expanded) catch return true);
+        s.picks.ids.set(b.gpa, s.flat(b.gpa, .manager, b.bookmarks).ids.items);
     } else if (flags == command and std.mem.eql(u8, key, "z")) {
         _ = b.bookmarks.undo();
     } else if (flags == command | (1 << 17) and std.mem.eql(u8, key, "z")) {
@@ -198,8 +198,8 @@ fn tree(b: *Browser, c: *ui.Context, p: *const Palette) void {
 }
 
 /// Return in the search: the first site found.
-fn openFirst(b: *Browser, c: *ui.Context) void {
-    const hits = b.bookmarks.matches(c.alloc(), b.marks_ui.picks.query.text()) catch return;
+fn openFirst(b: *Browser, _: *ui.Context) void {
+    const hits = b.marks_ui.cachedMatches(b.gpa, b.bookmarks, b.marks_ui.picks.query.text()).hits;
     for (hits) |h| if (h.node.url) |u| return actions.pickBookmark(b, u, false, .{});
 }
 
@@ -248,7 +248,7 @@ fn foot(b: *Browser, c: *ui.Context, p: *const Palette) void {
     ui.spacer(c);
     if (controls.pill(c, p, "New Folder\u{2026}", .{}).clicked) ask.newFolder(b, null, null);
     pillMenu(b, c, p, "Organize", organizeMenu);
-    const n = Bookmarks.count(b.bookmarks.roots);
+    const n = b.bookmarks.total_count;
     ui.text(c, if (n == 1) "1 bookmark" else c.print("{d} bookmarks", .{n}), .{ .size = 12, .color = p.muted });
 }
 

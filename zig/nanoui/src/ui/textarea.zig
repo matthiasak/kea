@@ -6,10 +6,10 @@
 const std = @import("std");
 const types = @import("types.zig");
 const tf = @import("textfield.zig");
+const textedit = @import("textedit.zig");
 const ctx_mod = @import("context.zig");
 const Context = ctx_mod.Context;
 const EditState = ctx_mod.EditState;
-
 pub const AreaOptions = struct {
     placeholder: []const u8 = "",
     width: types.Length = .fill,
@@ -120,22 +120,26 @@ pub fn textArea(c: *Context, buffer: *tf.TextBuffer, opts: AreaOptions) tf.Resul
     if (it.rect == null) c.animationFrame();
     const field: tf.Options = .{};
 
+    if (it.right_clicked) c.text_menu = true;
     if (it.focused) {
+        const prev_caret = e.caret;
+        const was_focused = e.had_focus;
         if (it.rect) |r| {
             const lines = linesOf(c, buffer.text(), style, w);
             const x = c.input.mouse.x - r.x - pad.left;
             const row: usize = @intFromFloat(@max(0, (c.input.mouse.y - r.y - pad.top + e.scroll_y) / lh));
-            if (c.input.pressed and c.input.button == .left and it.hovered) {
+            if (c.input.pressed and c.input.button == .left and !c.input.ctrl and it.hovered) {
                 const at = indexOn(c, buffer.text(), style, lines, row, x);
-                e.caret = at;
-                if (!c.input.shift) e.anchor = at;
-                e.marked = null;
-                c.selection.blocked = true;
-                e.selecting = true;
-            } else if (e.selecting and c.input.down) e.caret = indexOn(c, buffer.text(), style, lines, row, x);
+                textedit.pointerSelect(c, e, buffer.text(), at, true);
+            } else if (e.selecting and c.input.down) {
+                const at = indexOn(c, buffer.text(), style, lines, row, x);
+                textedit.pointerDrag(c, e, buffer.text(), at, true);
+            }
             if (!c.input.down) e.selecting = false;
         }
         tf.focusSelect(c, e, false, buffer.text().len);
+        e.undo.begin(buffer.text(), e.caret);
+        const took_undo = textedit.handleUndoShortcuts(c, buffer, e, &result);
         const newline = !opts.submit_on_return or c.input.shift or c.input.alt;
         for (c.input.ops) |op| {
             if (op == .command) switch (op.command) {
@@ -157,7 +161,7 @@ pub fn textArea(c: *Context, buffer: *tf.TextBuffer, opts: AreaOptions) tf.Resul
         }
         // Without an input method (tests, synthetic input): keys and chars.
         if (c.input.chars.len > 0) tf.apply(buffer, e, .{ .insert = c.input.chars }, field, c.clipboard, &result);
-        if (c.input.key) |k| switch (k) {
+        if (!took_undo) if (c.input.key) |k| switch (k) {
             .backspace => tf.apply(buffer, e, .{ .command = .delete_backward }, field, c.clipboard, &result),
             .delete => tf.apply(buffer, e, .{ .command = .delete_forward }, field, c.clipboard, &result),
             .left => tf.apply(buffer, e, .{ .command = if (c.input.shift) .select_left else .move_left }, field, c.clipboard, &result),
@@ -171,6 +175,8 @@ pub fn textArea(c: *Context, buffer: *tf.TextBuffer, opts: AreaOptions) tf.Resul
             .escape => c.focus = 0,
             else => {},
         };
+        textedit.commitUndo(c, buffer, e, &result, false, took_undo);
+        textedit.updateCaretBlink(c, was_focused, result.changed, e.caret != prev_caret);
         if (result.changed or result.submitted) c.changed = true;
         if (c.focus != it.id) {
             c.changed = true;
@@ -203,7 +209,7 @@ pub fn textArea(c: *Context, buffer: *tf.TextBuffer, opts: AreaOptions) tf.Resul
 
     const lo = @min(e.caret, e.anchor);
     const hi = @max(e.caret, e.anchor);
-    if (focused and hi > lo) spanRects(c, s, style, lines, lo, hi, lh, e.scroll_y, opts.selection_color orelse th.accent.alpha(0.3), false);
+    if (focused and hi > lo) spanRects(c, s, style, lines, lo, hi, lh, e.scroll_y, opts.selection_color orelse th.accent.alpha(0.28), false);
     if (s.len == 0) {
         _ = c.leaf(.{ .absolute = true }, .{ .text = .{ .str = opts.placeholder, .style = style, .color = th.muted } }, null);
     } else for (lines, 0..) |l, n| {
@@ -212,9 +218,11 @@ pub fn textArea(c: *Context, buffer: *tf.TextBuffer, opts: AreaOptions) tf.Resul
         _ = c.leaf(.{ .absolute = true, .offset = .{ .y = y } }, .{ .text = .{ .str = s[l.start..l.end], .style = style, .color = opts.color orelse th.text } }, null);
     }
     if (focused) if (e.marked) |m| spanRects(c, s, style, lines, m[0], m[1], lh, e.scroll_y, opts.color orelse th.text, true);
-    if (focused and hi == lo)
+    if (focused and hi == lo and textedit.caretVisible(c))
         _ = c.leaf(.{ .absolute = true, .width = .{ .px = 1.5 }, .height = .{ .px = lh }, .background = opts.caret_color orelse th.accent, .offset = .{ .x = caret_x, .y = caret_y - e.scroll_y } }, .none, null);
     if (focused) {
+        c.focused_multiline = true;
+        c.focused_password = false;
         const r = it.rect orelse types.Rect{};
         c.focused_text = .{
             .id = it.id,

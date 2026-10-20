@@ -26,4 +26,5 @@ test {
     _ = @import("passwords.zig");
     _ = @import("extensions.zig");
     _ = @import("chrome_parity.zig");
+    _ = @import("chrome.zig");
 }

@@ -21,6 +21,8 @@ const links = @import("../../app/links.zig");
 const controls = @import("../controls.zig");
 const plate = @import("../controls_plate.zig");
 const tab_menu = @import("../tab_menu.zig");
+const disclose = @import("../disclose.zig");
+const motion = @import("../../design/motion.zig");
 const frame = @import("frame.zig");
 const tab_scripts = @import("../../web/tab_scripts.zig");
 const tab_state = @import("../../web/tab_state.zig");
@@ -38,9 +40,12 @@ pub const State = struct {
     custom: ui.TextBuffer = .{},
     custom_shown: bool = false,
     draft: ?Draft = null,
+    draft_buf: Draft = .{},
 
     pub fn deinit(s: *State, _: std.mem.Allocator) void {
         s.custom.deinit();
+        s.draft_buf.word.deinit();
+        s.draft_buf.template.deinit();
         s.dropDraft();
     }
 
@@ -190,17 +195,18 @@ fn searchWith(b: *Browser, c: *ui.Context, p: *const Palette) void {
     // The `.menu` picker, drawn as AppKit's pop-up button.
     if (controls.popUpButton(c, p, "Search with", b.prefs.engine.title())) |at| tab_menu.later(b, at, 0, engines);
     ui.end(c);
-    if (b.prefs.engine != .custom) {
+    const is_custom = b.prefs.engine == .custom;
+    if (!is_custom) {
         s.custom_shown = false;
-        return;
-    }
-    if (!s.custom_shown) {
+    } else if (!s.custom_shown) {
         s.custom.set(b.prefs.custom_engine);
         s.custom_shown = true;
     }
+    if (!disclose.begin(c, 0x6b65_612e_6375_7374, is_custom, motion.settle)) return;
+    defer disclose.end(c);
     ui.column(c, .{ .width = .fill, .padding = .{ .left = 14, .right = 14, .bottom = 11 } });
     ui.column(c, .{ .width = .fill, .padding = .xy(10, 7), .radius = 9, .background = p.wash });
-    if (ui.textField(c, &s.custom, .{ .bare = true, .size = 12.5, .width = .fill, .caret_color = p.ink, .selection_color = p.ink.alpha(0.12) }).changed)
+    if (ui.textField(c, &s.custom, .{ .bare = true, .size = 12.5, .width = .fill, .caret_color = p.ink, .selection_color = p.ink.alpha(0.12) }).changed and is_custom)
         b.prefs.set("custom_engine", s.custom.text());
     if (s.custom.text().len == 0)
         _ = c.leaf(.{ .absolute = true, .offset = .{ .x = 10, .y = 7 } }, .{ .text = .{ .str = "https://example.com/search?q=%s", .style = .{ .size = 12.5 }, .color = p.muted.alpha(0.8) } }, null);
@@ -277,14 +283,16 @@ fn siteShortcuts(b: *Browser, c: *ui.Context, p: *const Palette) void {
     }
     ui.end(c);
 
-    if (s.draft) |*d| {
+    if (disclose.begin(c, 0x6b65_612e_6472_6166, s.draft != null, motion.settle)) {
+        const d = if (s.draft) |*dr| dr else &s.draft_buf;
         ui.column(c, .{ .width = .fill, .padding = .{ .left = 14, .right = 14, .bottom = 6 } });
         ui.row(c, .{ .gap = 8, .width = .fill, .padding = .xy(10, 7), .radius = 9, .background = p.wash, .align_items = .center });
         _ = field(c, p, &d.word, "yt", .{ .px = 50 });
         ui.text(c, "→", .{ .size = 12.5, .color = p.muted });
-        if (field(c, p, &d.template, "https://www.youtube.com/results?search_query=%s", .fill).submitted) saveDraft(c, b);
+        if (field(c, p, &d.template, "https://www.youtube.com/results?search_query=%s", .fill).submitted and s.draft != null) saveDraft(c, b);
         ui.end(c);
         ui.end(c);
+        disclose.end(c);
     }
 
     var gone: ?Uuid = null;

@@ -13,7 +13,8 @@ const mark = @import("mark.zig");
 const ring = @import("ring.zig");
 const tab_menu = @import("tab_menu.zig");
 const side_bar = @import("side_bar.zig");
-
+const tab_leaving = @import("tab_leaving.zig");
+const presence = @import("presence.zig");
 const px = struct {
     fn v(n: f32) ui.Length {
         return .{ .px = n };
@@ -99,48 +100,109 @@ pub const Held = struct { id: u64, from: usize, origin: ui.Point, moved: bool = 
 
 /// The grid of `pins` (`PinGrid`): fixed cells, left-aligned. `live` is
 /// the tab in front; `interactive` false for another space's preview.
+pub fn pinId(id: u64) u64 {
+    return std.hash.Wyhash.hash(0x7069_6e73, std.mem.asBytes(&id));
+}
+
 pub fn grid(b: *Browser, c: *ui.Context, p: *const Palette, pins: []const *Tab, live: u64, interactive: bool) void {
     const cells = pinCells(c.alloc(), pins.len, b.prefs.side_width) catch return;
     const size = extent(cells);
     _ = c.open(.{ .width = px(size.w), .height = px(size.h) }, "pins");
     defer c.end();
     const st = &b.column;
+    const fresh = !st.drawn or !st.space.eql(b.space_id);
+    if (interactive) {
+        std.mem.swap(std.ArrayList(side_bar.State.SeenPin), &st.pin_last, &st.pin_seen);
+        st.pin_seen.clearRetainingCapacity();
+    }
     var held_at: ?usize = null;
     for (pins, cells, 0..) |t, cell, index| {
+        if (interactive) tab_leaving.keepIn(&st.pin_snaps, b.gpa, b, t);
         if (st.pin_held) |h| if (h.id == t.id and h.moved) {
             held_at = index;
             continue;
         };
         ui.key(c, c.print("pin-{d}", .{t.id}));
-        _ = pinSquare(b, c, p, t, t.id == live, cell, index, cells, interactive, false);
+        _ = pinSquare(b, c, p, t, t.id == live, cell, index, cells, interactive, false, fresh);
+    }
+    if (interactive) {
+        if (fresh) {
+            tab_leaving.clearIn(&st.pin_leaving, &st.pin_snaps, st.pin_seen.items, b.gpa);
+        } else {
+            leavePins(b, c, p);
+        }
     }
     // Carried: drawn last, so on top, under the hand.
     if (held_at) |index| {
         const t = pins[index];
         ui.key(c, c.print("pin-{d}", .{t.id}));
-        _ = pinSquare(b, c, p, t, t.id == live, cells[index], index, cells, interactive, true);
+        _ = pinSquare(b, c, p, t, t.id == live, cells[index], index, cells, interactive, true, fresh);
     }
 }
 
-fn pinSquare(b: *Browser, c: *ui.Context, p: *const Palette, t: *Tab, live: bool, cell: ui.Rect, index: usize, cells: []const ui.Rect, interactive: bool, held: bool) ui.Interaction {
+fn leavePins(b: *Browser, c: *ui.Context, p: *const Palette) void {
+    const st = &b.column;
+    for (st.pin_last.items) |s| {
+        const kept = for (st.pin_seen.items) |cur| {
+            if (cur.id == s.id) break true;
+        } else false;
+        if (kept) continue;
+        const kv = st.pin_snaps.fetchRemove(s.id) orelse continue;
+        st.pin_leaving.append(b.gpa, .{ .id = s.id, .x = s.x, .y = s.y, .w = s.w, .h = s.h, .snap = kv.value }) catch {
+            var gone = kv.value;
+            gone.deinit(b.gpa);
+        };
+    }
+    tab_leaving.pruneIn(&st.pin_snaps, st.pin_seen.items, b.gpa);
+    var k: usize = 0;
+    for (st.pin_leaving.items) |*l| {
+        const v = motion.quickTo(c, pinId(l.id), 0x6c65_6176, 0);
+        if (v <= 0.001) {
+            l.snap.deinit(b.gpa);
+            continue;
+        }
+        st.pin_leaving.items[k] = l.*;
+        k += 1;
+        const item = &st.pin_leaving.items[k - 1];
+        tab_leaving.drawPin(b, c, p, &item.snap, item.x, item.y, item.w, item.h, v);
+    }
+    st.pin_leaving.shrinkRetainingCapacity(k);
+}
+
+fn pinSquare(b: *Browser, c: *ui.Context, p: *const Palette, t: *Tab, live: bool, cell: ui.Rect, index: usize, cells: []const ui.Rect, interactive: bool, held: bool, fresh: bool) ui.Interaction {
     const st = &b.column;
     const scale = @min(cell.w, cell.h);
     const radius = scale * 9 / 34;
-    // Every other square settles into its cell when one moves.
+    // Every other square glides into its cell when one moves.
     const id = c.peekId(null);
-    var x = motion.settleTo(c, id, 0, cell.x);
-    var y = motion.settleTo(c, id, 1, cell.y);
+    if (b.edge_drag != null) {
+        ui.jump(c, id, 0, cell.x);
+        ui.jump(c, id, 1, cell.y);
+    }
+    var x = motion.glideTo(c, id, 0, cell.x);
+    var y = motion.glideTo(c, id, 1, cell.y);
     var shadow: ?ui.Shadow = null;
     var ground: ?ui.Color = null;
     if (held) if (st.pin_held) |h| {
         const start = cells[h.from];
         const travel: ui.Point = .{ .x = c.input.mouse.x - h.origin.x, .y = c.input.mouse.y - h.origin.y };
         // Under the hand exactly: the springs are told where it is.
-        x = ui.tween(c, id, 0, start.x + travel.x, 0, .linear);
-        y = ui.tween(c, id, 1, start.y + travel.y, 0, .linear);
+        x = start.x + travel.x;
+        y = start.y + travel.y;
+        ui.jump(c, id, 0, x);
+        ui.jump(c, id, 1, y);
         ground = p.ground;
         shadow = card.swiftShadow(0.16, 10, 3);
     };
+    var v: f32 = 1;
+    if (interactive) {
+        _ = ui.tween(c, pinId(t.id), 0x6c65_6176, 1, 0, .linear);
+        const known = for (st.pin_last.items) |s| {
+            if (s.id == t.id) break true;
+        } else false;
+        v = presence.presenceFrom(c, pinId(t.id), if (!fresh and !known) 0 else 1, true, motion.settle, null) orelse 1;
+        st.pin_seen.append(b.gpa, .{ .id = t.id, .x = x, .y = y, .w = cell.w, .h = cell.h }) catch {};
+    }
     const i = c.open(.{
         .absolute = true,
         .offset = .{ .x = x, .y = y },
@@ -150,6 +212,8 @@ fn pinSquare(b: *Browser, c: *ui.Context, p: *const Palette, t: *Tab, live: bool
         .align_items = .center,
         .justify = .center,
         .shadow = shadow,
+        .opacity = std.math.clamp(v, 0, 1),
+        .scale = 0.8 + 0.2 * v,
         .control = true,
     }, null);
     defer c.end();

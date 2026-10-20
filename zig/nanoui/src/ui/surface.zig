@@ -52,6 +52,7 @@ pub const Surface = struct {
     pending: bool = false,
     dead: bool = false,
     cursor: ctx_mod.Cursor = .arrow,
+    cursor_dirty: bool = false,
     theme_override: ?Theme = null,
     cached_theme: Theme = Theme.light,
     reduce_motion: bool = false,
@@ -267,6 +268,7 @@ pub const Surface = struct {
         self.frame_kind = kind;
         self.ctx.transparent_root = self.transparent;
         c.reduce_motion = self.reduce_motion;
+        c.window_focused = if (vis) self.window.isFocused() else true;
         const r = frame_mod.run(c, self.view, &self.text, &self.instances, self.size, self.scale, self.theme(), dt, now - self.start_time);
         const t_af0 = if (self.frame_log != null) cf.CACurrentMediaTime() else 0;
         const native_changed = if (self.after_frame) |af| af(self.after_frame_ctx, self) else false;
@@ -406,11 +408,19 @@ pub const Surface = struct {
     }
 
     pub fn updateCursor(self: *Surface) void {
-        if (self.transparent and self.ctx.inStageHoleAt(self.ctx.input.mouse)) return;
+        if (self.transparent and self.ctx.inStageHoleAt(self.ctx.input.mouse)) {
+            self.cursor_dirty = true;
+            return;
+        }
         const want: ctx_mod.Cursor = self.ctx.cursor orelse if (self.ctx.cursor_text) .text else if (self.ctx.cursor_hand) .hand else .arrow;
-        if (want == self.cursor) return;
+        if (want == self.cursor and !self.cursor_dirty) return;
         self.cursor = want;
-        const name: [:0]const u8 = switch (want) {
+        self.cursor_dirty = false;
+        self.applyCursor();
+    }
+
+    pub fn applyCursor(self: *Surface) void {
+        const name: [:0]const u8 = switch (self.cursor) {
             .arrow => "arrowCursor",
             .hand => "pointingHandCursor",
             .text => "IBeamCursor",

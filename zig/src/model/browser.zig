@@ -75,6 +75,7 @@ pub const Browser = struct {
 
     /// The row, in the order it is shown (`arrangeGroupedTabs`).
     tabs: std.ArrayList(*Tab) = .empty,
+    tab_index: std.AutoHashMapUnmanaged(u64, usize) = .empty,
     /// 0: none.
     active_id: u64 = 0,
     /// Restoring the session: nothing is written, nothing visited.
@@ -256,6 +257,8 @@ pub const Browser = struct {
     pub const adopt = tabs_ops.adopt;
     pub const setActive = tabs_ops.setActive;
     pub const indexOf = tabs_ops.indexOf;
+    pub const reindexTabs = tabs_ops.reindexTabs;
+    pub const tabById = tabs_ops.tabById;
 
     // MARK: Split View (split.zig)
     pub const splitFor = split_ops.splitFor;
@@ -473,6 +476,7 @@ pub const Browser = struct {
         if (self.lights) |l| l.drop();
         for (self.tabs.items) |t| t.destroy();
         self.tabs.deinit(self.gpa);
+        self.tab_index.deinit(self.gpa);
         self.splits.deinit(self.gpa);
         self.displayed.deinit(self.gpa);
         self.stage.deinit(self.gpa);
@@ -575,11 +579,6 @@ pub const Browser = struct {
     /// The page with the keys (`active`).
     pub fn activeTab(self: *Browser) ?*Tab {
         return self.tabById(self.active_id);
-    }
-
-    pub fn tabById(self: *Browser, id: u64) ?*Tab {
-        for (self.tabs.items) |t| if (t.id == id) return t;
-        return null;
     }
 
     // MARK: announcements (chrome/bars.zig)

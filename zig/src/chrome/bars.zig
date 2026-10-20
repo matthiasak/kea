@@ -138,6 +138,7 @@ fn question(c: *ui.Context, p: *const Palette, q: Question, t: f32, live: bool) 
     const r = arriving(t);
     s.offset = r.offset;
     s.opacity = r.opacity;
+    s.scale = r.scale;
     const i = c.open(s, q.key);
     defer c.end();
     if (live) _ = c.interact(i, .{});
@@ -156,7 +157,8 @@ fn question(c: *ui.Context, p: *const Palette, q: Question, t: f32, live: bool) 
 }
 
 fn arriving(t: f32) ui.Style {
-    return .{ .offset = .{ .y = (1 - t) * rise }, .opacity = std.math.clamp(t, 0, 1) };
+    const a = std.math.clamp(t, 0, 1);
+    return .{ .offset = .{ .y = (1 - t) * rise }, .opacity = a, .scale = 0.96 + 0.04 * a };
 }
 
 fn capsule(p: *const Palette, shadow_alpha: f32, radius: f32, y: f32) ui.Style {
@@ -175,6 +177,7 @@ fn announcement(b: *Browser, c: *ui.Context, p: *const Palette, text: []const u8
     const a = arriving(t);
     s.offset = a.offset;
     s.opacity = a.opacity;
+    s.scale = a.scale;
     s.control = b.announced_file != null;
     const i = c.open(s, "kea.announcement");
     defer c.end();
@@ -270,6 +273,7 @@ fn hint(c: *ui.Context, p: *const Palette, text: []const u8, t: f32) void {
         .shadow = knockout(card.swiftShadow(0.18, 18, 6)),
         .offset = a.offset,
         .opacity = a.opacity,
+        .scale = a.scale,
     }, "kea.hint");
     defer c.end();
     ui.text(c, text, .{ .size = 11.5, .color = p.ground.alpha(0.92) });

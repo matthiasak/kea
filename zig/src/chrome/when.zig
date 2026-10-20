@@ -5,6 +5,7 @@ const std = @import("std");
 const objc = @import("nanoui").objc;
 const json = @import("../data/json.zig");
 
+var cal: ?objc.Object = null;
 var hour: ?objc.Object = null;
 var plain: ?objc.Object = null;
 var ago: ?objc.Object = null;
@@ -15,27 +16,27 @@ fn date(at: json.SwiftDate) objc.Object {
 }
 
 fn calendar() objc.Object {
-    return objc.msg(objc.Object, objc.class("NSCalendar"), "currentCalendar", .{});
+    if (cal) |c| return c;
+    const c = objc.retain(objc.msg(objc.Object, objc.class("NSCalendar"), "autoupdatingCurrentCalendar", .{}));
+    cal = c;
+    return c;
 }
 
 fn copy(alloc: std.mem.Allocator, s: ?objc.Object) []const u8 {
     return alloc.dupe(u8, objc.fromNSString(s)) catch "";
 }
 
-fn made(slot: *?objc.Object, comptime name: [:0]const u8) objc.Object {
-    if (slot.*) |f| return f;
-    const f = objc.msg(objc.Object, objc.alloc(name), "init", .{});
-    slot.* = f;
-    return f;
-}
-
 /// `When.said`: "2 hr. ago", relative to now (abbreviated units).
 pub fn said(alloc: std.mem.Allocator, at: json.SwiftDate) []const u8 {
     const pool = objc.Pool.push();
     defer pool.pop();
-    const f = made(&ago, "NSRelativeDateTimeFormatter");
-    // NSRelativeDateTimeFormatterUnitsStyleAbbreviated = 3.
-    objc.msg(void, f, "setUnitsStyle:", .{@as(objc.NSInteger, 3)});
+    const f = ago orelse blk: {
+        const m = objc.msg(objc.Object, objc.alloc("NSRelativeDateTimeFormatter"), "init", .{});
+        // NSRelativeDateTimeFormatterUnitsStyleAbbreviated = 3.
+        objc.msg(void, m, "setUnitsStyle:", .{@as(objc.NSInteger, 3)});
+        ago = m;
+        break :blk m;
+    };
     const now = objc.msg(objc.Object, objc.class("NSDate"), "date", .{});
     return copy(alloc, objc.msg(?objc.Object, f, "localizedStringForDate:relativeToDate:", .{ date(at), now }));
 }
@@ -44,10 +45,14 @@ pub fn said(alloc: std.mem.Allocator, at: json.SwiftDate) []const u8 {
 pub fn clock(alloc: std.mem.Allocator, at: json.SwiftDate) []const u8 {
     const pool = objc.Pool.push();
     defer pool.pop();
-    const f = made(&hour, "NSDateFormatter");
-    // NSDateFormatterShortStyle = 1, NoStyle = 0.
-    objc.msg(void, f, "setTimeStyle:", .{@as(objc.NSUInteger, 1)});
-    objc.msg(void, f, "setDateStyle:", .{@as(objc.NSUInteger, 0)});
+    const f = hour orelse blk: {
+        const m = objc.msg(objc.Object, objc.alloc("NSDateFormatter"), "init", .{});
+        // NSDateFormatterShortStyle = 1, NoStyle = 0.
+        objc.msg(void, m, "setTimeStyle:", .{@as(objc.NSUInteger, 1)});
+        objc.msg(void, m, "setDateStyle:", .{@as(objc.NSUInteger, 0)});
+        hour = m;
+        break :blk m;
+    };
     return copy(alloc, objc.msg(?objc.Object, f, "stringFromDate:", .{date(at)}));
 }
 
@@ -56,10 +61,15 @@ pub fn day(alloc: std.mem.Allocator, at: json.SwiftDate) []const u8 {
     const pool = objc.Pool.push();
     defer pool.pop();
     const d = date(at);
-    if (objc.msg(objc.BOOL, calendar(), "isDateInToday:", .{d})) return "Today";
-    if (objc.msg(objc.BOOL, calendar(), "isDateInYesterday:", .{d})) return "Yesterday";
-    const f = made(&plain, "NSDateFormatter");
-    objc.msg(void, f, "setDateFormat:", .{objc.nsString("d MMMM")});
+    const c = calendar();
+    if (objc.msg(objc.BOOL, c, "isDateInToday:", .{d})) return "Today";
+    if (objc.msg(objc.BOOL, c, "isDateInYesterday:", .{d})) return "Yesterday";
+    const f = plain orelse blk: {
+        const m = objc.msg(objc.Object, objc.alloc("NSDateFormatter"), "init", .{});
+        objc.msg(void, m, "setDateFormat:", .{objc.nsString("d MMMM")});
+        plain = m;
+        break :blk m;
+    };
     return copy(alloc, objc.msg(?objc.Object, f, "stringFromDate:", .{d}));
 }
 
@@ -67,10 +77,14 @@ pub fn day(alloc: std.mem.Allocator, at: json.SwiftDate) []const u8 {
 pub fn dayMonth(alloc: std.mem.Allocator, at: json.SwiftDate) []const u8 {
     const pool = objc.Pool.push();
     defer pool.pop();
-    const f = made(&brief, "NSDateFormatter");
-    const locale = objc.msg(objc.Object, objc.class("NSLocale"), "currentLocale", .{});
-    const format = objc.msg(?objc.Object, objc.class("NSDateFormatter"), "dateFormatFromTemplate:options:locale:", .{ objc.nsString("dMMM"), @as(objc.NSUInteger, 0), locale });
-    objc.msg(void, f, "setDateFormat:", .{format orelse objc.nsString("d MMM")});
+    const f = brief orelse blk: {
+        const m = objc.msg(objc.Object, objc.alloc("NSDateFormatter"), "init", .{});
+        const locale = objc.msg(objc.Object, objc.class("NSLocale"), "currentLocale", .{});
+        const format = objc.msg(?objc.Object, objc.class("NSDateFormatter"), "dateFormatFromTemplate:options:locale:", .{ objc.nsString("dMMM"), @as(objc.NSUInteger, 0), locale });
+        objc.msg(void, m, "setDateFormat:", .{format orelse objc.nsString("d MMM")});
+        brief = m;
+        break :blk m;
+    };
     return copy(alloc, objc.msg(?objc.Object, f, "stringFromDate:", .{date(at)}));
 }
 

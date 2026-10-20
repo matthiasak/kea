@@ -83,7 +83,7 @@ pub fn draw(b: *Browser, c: *ui.Context, p: *const Palette, s: *const Snap, x: f
         .radius = 9,
         .align_items = .center,
         .opacity = o,
-        .scale = 0.9 + 0.1 * v,
+        .scale = 0.92 + 0.08 * v,
         .scale_anchor = .{ .x = 0, .y = 0.5 },
     };
     const compact = !s.pinned and !tab_width.titled(each);
@@ -113,8 +113,8 @@ pub fn draw(b: *Browser, c: *ui.Context, p: *const Palette, s: *const Snap, x: f
     ui.text(c, s.label(), .{ .size = 12.5, .color = p.muted, .truncate = true });
 }
 
-/// A pill gone from the row, where it stood, with what it showed.
-pub const Leaving = struct { id: u64, x: f32, w: f32, snap: Snap };
+/// A pill or row gone, where it stood, with what it showed.
+pub const Leaving = struct { id: u64, x: f32, y: f32 = 0, w: f32, h: f32 = 28, snap: Snap };
 
 fn has(seen: anytype, id: u64) bool {
     for (seen) |s| if (s.id == id) return true;
@@ -123,9 +123,13 @@ fn has(seen: anytype, id: u64) bool {
 
 /// Tab `t` drawn in the row this frame: what its pill shows, kept.
 pub fn keep(b: *Browser, t: *const Tab) void {
-    const g = b.strip.snaps.getOrPut(b.gpa, t.id) catch return;
+    keepIn(&b.strip.snaps, b.gpa, b, t);
+}
+
+pub fn keepIn(snaps: *std.AutoHashMapUnmanaged(u64, Snap), gpa: std.mem.Allocator, b: *const Browser, t: *const Tab) void {
+    const g = snaps.getOrPut(gpa, t.id) catch return;
     if (!g.found_existing) g.value_ptr.* = .{};
-    g.value_ptr.take(b.gpa, b, t);
+    g.value_ptr.take(gpa, b, t);
 }
 
 /// Pills drawn last frame and not this one start leaving; those leaving
@@ -140,7 +144,7 @@ pub fn leave(b: *Browser, c: *ui.Context, p: *const Palette, last: anytype, each
             gone.deinit(b.gpa);
         };
     }
-    prune(b);
+    pruneIn(&st.snaps, st.seen.items, b.gpa);
     var k: usize = 0;
     for (st.leaving.items) |*l| {
         const v = presence(c, @import("tab_bar.zig").pillId(l.id), false, motion.settle, null) orelse {
@@ -155,24 +159,79 @@ pub fn leave(b: *Browser, c: *ui.Context, p: *const Palette, last: anytype, each
     st.leaving.shrinkRetainingCapacity(k);
 }
 
+pub fn drawSideRow(b: *Browser, c: *ui.Context, p: *const Palette, s: *const Snap, x: f32, y: f32, w: f32, v: f32) void {
+    const o = std.math.clamp(v, 0, 1);
+    _ = c.open(.{
+        .absolute = true,
+        .direction = .row,
+        .gap = 8,
+        .padding = .{ .left = 10, .right = 10 },
+        .offset = .{ .x = x, .y = y },
+        .width = px(w),
+        .height = px(28),
+        .radius = 9,
+        .align_items = .center,
+        .clip = true,
+        .opacity = o,
+        .scale = 0.94 + 0.06 * v,
+        .scale_anchor = .{ .x = 0, .y = 0.5 },
+    }, null);
+    defer c.end();
+    const icon: ?mark.Icon = if (b.prefs.glyph == .icons) b.kea.favicons.icon(s.url()) else null;
+    if (b.prefs.glyph == .icons and !s.blank) mark.mark(c, p, icon, s.mono[0..s.mono_len], 15, false);
+    if (s.shy) ui.icon(c, "eye.slash", .{ .size = 9, .color = p.muted.alpha(0.7) });
+    if (s.recording) ui.icon(c, "record.circle", .{ .size = 10, .color = p.muted.alpha(0.8) });
+    const label = if (s.label().len == 0) "New Tab" else s.label();
+    ui.text(c, label, .{ .size = 12.5, .color = p.muted, .truncate = true });
+}
+
+pub fn drawPin(b: *Browser, c: *ui.Context, p: *const Palette, s: *const Snap, x: f32, y: f32, w: f32, h: f32, v: f32) void {
+    const o = std.math.clamp(v, 0, 1);
+    const scale = @min(w, h);
+    const radius = scale * 9 / 34;
+    _ = c.open(.{
+        .absolute = true,
+        .offset = .{ .x = x, .y = y },
+        .width = px(w),
+        .height = px(h),
+        .radius = radius,
+        .background = p.side_tile,
+        .align_items = .center,
+        .justify = .center,
+        .opacity = o,
+        .scale = 0.85 + 0.15 * v,
+    }, null);
+    defer c.end();
+    const glyph = scale * 16 / 34;
+    _ = c.open(.{ .width = px(glyph), .height = px(glyph), .align_items = .center, .justify = .center }, null);
+    defer c.end();
+    const icon: ?mark.Icon = if (b.prefs.glyph == .icons and !s.blank) b.kea.favicons.icon(s.url()) else null;
+    if (icon) |ic| {
+        mark.mark(c, p, ic, s.letter(), glyph, s.asleep);
+    } else {
+        ui.text(c, s.letter(), .{ .size = scale * 12 / 34, .weight = .medium, .color = p.muted.alpha(if (s.asleep) 0.45 else 1) });
+    }
+}
+
 /// A row put in wholesale: nothing leaves; what is not in it is forgotten.
 pub fn clear(b: *Browser) void {
-    for (b.strip.leaving.items) |*l| l.snap.deinit(b.gpa);
-    b.strip.leaving.clearRetainingCapacity();
-    prune(b);
+    clearIn(&b.strip.leaving, &b.strip.snaps, b.strip.seen.items, b.gpa);
 }
 
-/// Forgets what tabs no longer drawn showed.
-fn prune(b: *Browser) void {
-    const st = &b.strip;
-    if (st.snaps.count() <= st.seen.items.len) return;
-    var it = st.snaps.iterator();
-    while (it.next()) |e| if (!has(st.seen.items, e.key_ptr.*)) {
-        e.value_ptr.deinit(b.gpa);
-        st.snaps.removeByPtr(e.key_ptr);
+pub fn clearIn(leaving: *std.ArrayList(Leaving), snaps: *std.AutoHashMapUnmanaged(u64, Snap), seen: anytype, gpa: std.mem.Allocator) void {
+    for (leaving.items) |*l| l.snap.deinit(gpa);
+    leaving.clearRetainingCapacity();
+    pruneIn(snaps, seen, gpa);
+}
+
+pub fn pruneIn(snaps: *std.AutoHashMapUnmanaged(u64, Snap), seen: anytype, gpa: std.mem.Allocator) void {
+    if (snaps.count() <= seen.len) return;
+    var it = snaps.iterator();
+    while (it.next()) |e| if (!has(seen, e.key_ptr.*)) {
+        e.value_ptr.deinit(gpa);
+        snaps.removeByPtr(e.key_ptr);
     };
 }
-
 pub fn deinit(b_strip: anytype, gpa: std.mem.Allocator) void {
     for (b_strip.leaving.items) |*l| l.snap.deinit(gpa);
     b_strip.leaving.deinit(gpa);

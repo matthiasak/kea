@@ -21,7 +21,8 @@ const side_rows = @import("side_rows.zig");
 const groups_view = @import("groups_view.zig");
 const spaces_view = @import("spaces_view.zig");
 const window_view = @import("window_view.zig");
-
+const tab_leaving = @import("tab_leaving.zig");
+const presence = @import("presence.zig");
 const px = struct {
     fn v(n: f32) ui.Length {
         return .{ .px = n };
@@ -55,7 +56,23 @@ pub const State = struct {
     pin_held: ?pin_grid.Held = null,
     /// What the column's layout was drawn from last frame (`signature`).
     shape: u64 = 0,
-
+    /// Rows and pins drawn last frame and this frame, and leaving ghosts.
+    seen: std.ArrayList(SeenRow) = .empty,
+    last: std.ArrayList(SeenRow) = .empty,
+    leaving: std.ArrayList(tab_leaving.Leaving) = .empty,
+    snaps: std.AutoHashMapUnmanaged(u64, tab_leaving.Snap) = .empty,
+    pin_seen: std.ArrayList(SeenPin) = .empty,
+    pin_last: std.ArrayList(SeenPin) = .empty,
+    pin_leaving: std.ArrayList(tab_leaving.Leaving) = .empty,
+    pin_snaps: std.AutoHashMapUnmanaged(u64, tab_leaving.Snap) = .empty,
+    drawn: bool = false,
+    space: Uuid = Uuid.first,
+    last_size: ui.Size = .{},
+    last_width: f32 = 0,
+    rows_node: u64 = 0,
+    panel_win_w: f32 = 0,
+    pub const SeenRow = struct { id: u64, x: f32, y: f32, w: f32 };
+    pub const SeenPin = struct { id: u64, x: f32, y: f32, w: f32, h: f32 };
     pub const Pill = struct { item: u64, colour: ui.Color, radius: f32 };
 
     /// The live item (a row or a square) says where it is this frame.
@@ -68,6 +85,20 @@ pub const State = struct {
         st.pin_draft.deinit();
         st.heading_rects.deinit(gpa);
         st.heading_next.deinit(gpa);
+        st.seen.deinit(gpa);
+        st.last.deinit(gpa);
+        for (st.leaving.items) |*l| l.snap.deinit(gpa);
+        st.leaving.deinit(gpa);
+        var it = st.snaps.valueIterator();
+        while (it.next()) |s| s.deinit(gpa);
+        st.snaps.deinit(gpa);
+        st.pin_seen.deinit(gpa);
+        st.pin_last.deinit(gpa);
+        for (st.pin_leaving.items) |*l| l.snap.deinit(gpa);
+        st.pin_leaving.deinit(gpa);
+        var pit = st.pin_snaps.valueIterator();
+        while (pit.next()) |s| s.deinit(gpa);
+        st.pin_snaps.deinit(gpa);
     }
 };
 
@@ -233,20 +264,26 @@ fn page(b: *Browser, c: *ui.Context, p: *const Palette, index: usize, shift: f32
 /// The rows on screen: the squares, then the rows, which scroll between
 /// the squares and the foot only when they don't fit (`FitsOrScrolls`).
 fn current(b: *Browser, c: *ui.Context, p: *const Palette, page_index: u32) void {
+    const st = &b.column;
+    const fresh = !st.drawn or !st.space.eql(b.space_id);
+    st.space = b.space_id;
+    std.mem.swap(std.ArrayList(State.SeenRow), &st.last, &st.seen);
+    st.seen.clearRetainingCapacity();
     const arena = c.alloc();
     livePill(b, c, page_index);
     const squares = b.squarePins(arena) catch @panic("OOM");
     var pin_block: f32 = 0;
-    if (b.pinnedCount() > 0) {
+    if (b.pinnedCount() > 0 or st.pin_leaving.items.len > 0) {
         _ = c.open(.{ .padding = .{ .bottom = 10 } }, null);
         pin_grid.grid(b, c, p, squares, b.active_id, true);
         c.end();
         const cells = pin_grid.pinCells(arena, squares.len, b.prefs.side_width) catch @panic("OOM");
-        pin_block = pin_grid.extent(cells).h + 10;
+        pin_block = if (squares.len > 0) pin_grid.extent(cells).h + 10 else 0;
     }
     const room = @max(0, c.size.h - metrics.strip - foot_height - pin_block);
     const scroller = c.open(.{ .scroll = true, .direction = .column, .width = .fill, .max_height = room, .scroll_bar = false }, "rows-scroll");
-    _ = c.open(.{ .direction = .column, .width = .fill }, "rows");
+    const rows_box = c.open(.{ .direction = .column, .width = .fill }, "rows");
+    st.rows_node = c.node(rows_box).id;
     const listed = b.listedPins(arena) catch @panic("OOM");
     if (listed.len > 0) {
         _ = c.open(.{ .direction = .column, .width = .fill, .gap = side_rows.gap, .padding = .{ .bottom = side_rows.gap } }, "listed");
@@ -256,24 +293,73 @@ fn current(b: *Browser, c: *ui.Context, p: *const Palette, page_index: u32) void
     _ = c.open(.{ .direction = .column, .width = .fill, .gap = side_rows.gap }, "loose");
     side_rows.loose(b, c, p, listed.len);
     c.end();
+    if (fresh) {
+        tab_leaving.clearIn(&st.leaving, &st.snaps, st.seen.items, b.gpa);
+    } else {
+        leaveRows(b, c, p);
+    }
     newTabRow(b, c, p, true);
     c.end();
     c.end();
+    st.drawn = true;
     reveal(b, c, c.node(scroller).id);
+}
+
+pub fn rowId(id: u64) u64 {
+    return std.hash.Wyhash.hash(0x7372_6f77, std.mem.asBytes(&id));
+}
+
+fn leaveRows(b: *Browser, c: *ui.Context, p: *const Palette) void {
+    const st = &b.column;
+    for (st.last.items) |s| {
+        const kept = for (st.seen.items) |cur| {
+            if (cur.id == s.id) break true;
+        } else false;
+        if (kept) continue;
+        const kv = st.snaps.fetchRemove(s.id) orelse continue;
+        st.leaving.append(b.gpa, .{ .id = s.id, .x = s.x, .y = s.y, .w = s.w, .snap = kv.value }) catch {
+            var gone = kv.value;
+            gone.deinit(b.gpa);
+        };
+    }
+    tab_leaving.pruneIn(&st.snaps, st.seen.items, b.gpa);
+    var k: usize = 0;
+    for (st.leaving.items) |*l| {
+        const v = presence.presence(c, rowId(l.id), false, motion.settle, null) orelse {
+            l.snap.deinit(b.gpa);
+            continue;
+        };
+        st.leaving.items[k] = l.*;
+        k += 1;
+        const item = &st.leaving.items[k - 1];
+        tab_leaving.drawSideRow(b, c, p, &item.snap, item.x, item.y, item.w, v);
+    }
+    st.leaving.shrinkRetainingCapacity(k);
 }
 
 /// The grey under the live tab, where last frame put the live item, sliding
 /// there on `Motion.glide`.
 fn livePill(b: *Browser, c: *ui.Context, page_index: u32) void {
     const st = &b.column;
+    const resized = st.drawn and (st.last_size.w != c.size.w or st.last_size.h != c.size.h or st.last_width != b.prefs.side_width or b.edge_drag != null);
+    st.last_size = c.size;
+    st.last_width = b.prefs.side_width;
     const pill = st.pill orelse return;
     const page_id = c.node(page_index).id;
     const at = c.rects.get(pill.item) orelse return;
     const box = c.rects.get(page_id) orelse return;
     // Absolute boxes are placed from the page's padded corner.
     const pad = c.node(page_index).style.padding;
-    const x = motion.glideTo(c, page_id, 10, at.x - box.x - pad.left);
-    const y = motion.glideTo(c, page_id, 11, at.y - box.y - pad.top);
+    const tx = at.x - box.x - pad.left;
+    const ty = at.y - box.y - pad.top;
+    if (resized) {
+        ui.jump(c, page_id, 10, tx);
+        ui.jump(c, page_id, 11, ty);
+        ui.jump(c, page_id, 12, at.w);
+        ui.jump(c, page_id, 13, at.h);
+    }
+    const x = motion.glideTo(c, page_id, 10, tx);
+    const y = motion.glideTo(c, page_id, 11, ty);
     const w = motion.glideTo(c, page_id, 12, at.w);
     const h = motion.glideTo(c, page_id, 13, at.h);
     _ = c.leaf(.{ .absolute = true, .offset = .{ .x = x, .y = y }, .width = px(w), .height = px(h), .radius = pill.radius, .background = pill.colour }, .none, "live-pill");

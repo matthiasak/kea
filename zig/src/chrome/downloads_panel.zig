@@ -25,8 +25,19 @@ const px = struct {
     }
 }.v;
 
+const KeptCache = struct {
+    hash: u64 = 0,
+    there: bool = false,
+    ago_buf: [64]u8 = undefined,
+    ago_len: u8 = 0,
+};
+var kept_cache: [64]KeptCache = undefined;
+var kept_cache_len: usize = 0;
+var kept_cache_at: f64 = -1e9;
+
 /// ⇧⌘J: Downloads… (`hoarding.toggle()`).
 pub fn toggle(b: *Browser) void {
+    kept_cache_at = -1e9;
     sheet.toggle(b, .hoarding);
 }
 
@@ -73,10 +84,11 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette) void {
             ui.column(c, .{ .width = .fill, .gap = 6 });
             plate.caption(c, p, "Completed");
             plate.cardBox(c, p);
+            refreshKeptCache(c, kept);
             for (kept, 0..) |k, n| {
                 if (n > 0) plate.rule(c, p, 14);
                 ui.key(c, k.path);
-                const a = keptRow(c, p, k);
+                const a = keptRow(c, p, k, n);
                 if (a != .none) act = a;
             }
             ui.end(c);
@@ -122,12 +134,21 @@ fn open(path: []const u8) void {
     _ = objc.msg(objc.BOOL, objc.msg(objc.Object, objc.class("NSWorkspace"), "sharedWorkspace", .{}), "openURL:", .{url});
 }
 
-/// `ByteCountFormatter.string(fromByteCount:countStyle: .file)`.
+/// `ByteCountFormatter.string(fromByteCount:countStyle: .file)` in pure Zig.
 fn byteCount(c: *ui.Context, n: i64) []const u8 {
-    const pool = objc.Pool.push();
-    defer pool.pop();
-    const s = objc.msg(?objc.Object, objc.class("NSByteCountFormatter"), "stringFromByteCount:countStyle:", .{ n, @as(objc.NSInteger, 0) });
-    return c.alloc().dupe(u8, objc.fromNSString(s)) catch "";
+    if (n <= 0) return "Zero KB";
+    const v: f64 = @floatFromInt(n);
+    if (n < 1_000) return c.print("{d} bytes", .{n});
+    if (n < 1_000_000) return c.print("{d} KB", .{@as(i64, @intFromFloat(@round(v / 1_000.0)))});
+    if (n < 1_000_000_000) {
+        const tenths = @as(i64, @intFromFloat(@round(v / 100_000.0)));
+        if (@rem(tenths, 10) == 0) return c.print("{d} MB", .{@divTrunc(tenths, 10)});
+        return c.print("{d}.{d} MB", .{ @divTrunc(tenths, 10), @rem(tenths, 10) });
+    }
+    const hundredths = @as(i64, @intFromFloat(@round(v / 10_000_000.0)));
+    if (@rem(hundredths, 100) == 0) return c.print("{d} GB", .{@divTrunc(hundredths, 100)});
+    if (@rem(hundredths, 10) == 0) return c.print("{d}.{d} GB", .{ @divTrunc(hundredths, 100), @divTrunc(@rem(hundredths, 100), 10) });
+    return c.print("{d}.{d:0>2} GB", .{ @divTrunc(hundredths, 100), @as(u64, @intCast(@rem(hundredths, 100))) });
 }
 
 fn bytes(c: *ui.Context, e: *const Entry) []const u8 {
@@ -222,9 +243,37 @@ fn retry(c: *ui.Context, p: *const Palette) bool {
     return plate.quick(c, p, "Retry", null).clicked;
 }
 
+fn keptHash(k: Keep) u64 {
+    var h = std.hash.Wyhash.init(@bitCast(k.date));
+    h.update(k.path);
+    return h.final();
+}
+
+fn refreshKeptCache(c: *ui.Context, kept: []const Keep) void {
+    const n = @min(kept.len, kept_cache.len);
+    var stale = kept_cache_len != n or (c.time - kept_cache_at) >= 1.0 or c.time < kept_cache_at;
+    if (!stale) {
+        for (kept[0..n], 0..) |k, idx| if (kept_cache[idx].hash != keptHash(k)) {
+            stale = true;
+            break;
+        };
+    }
+    if (!stale) return;
+    kept_cache_at = c.time;
+    kept_cache_len = n;
+    for (kept[0..n], 0..) |k, idx| {
+        const ago = when.said(c.alloc(), k.date);
+        const alen: u8 = if (ago.len <= 64) @intCast(ago.len) else 0;
+        var entry: KeptCache = .{ .hash = keptHash(k), .there = downloads.exists(k.path), .ago_len = alen };
+        if (alen > 0) @memcpy(entry.ago_buf[0..alen], ago[0..alen]);
+        kept_cache[idx] = entry;
+    }
+}
+
 /// `KeptRow`: a file kept, faint once it has gone from where it landed.
-fn keptRow(c: *ui.Context, p: *const Palette, k: Keep) Act {
-    const there = downloads.exists(k.path);
+fn keptRow(c: *ui.Context, p: *const Palette, k: Keep, idx: usize) Act {
+    const cached = idx < kept_cache_len and kept_cache[idx].hash == keptHash(k);
+    const there = if (cached) kept_cache[idx].there else downloads.exists(k.path);
     const i = c.open(.{ .direction = .row, .gap = 12, .width = .fill, .padding = .xy(14, 9), .align_items = .center }, null);
     defer c.end();
     const it = c.interact(i, .{});
@@ -235,7 +284,7 @@ fn keptRow(c: *ui.Context, p: *const Palette, k: Keep) Act {
     ui.end(c);
     ui.column(c, .{ .gap = 2, .grow = 1, .min_width = 0 });
     ui.text(c, k.name, .{ .size = 13, .color = if (there) p.ink else p.faint, .truncate_middle = true });
-    const ago = when.said(c.alloc(), k.date);
+    const ago = if (cached and kept_cache[idx].ago_len > 0) kept_cache[idx].ago_buf[0..kept_cache[idx].ago_len] else when.said(c.alloc(), k.date);
     ui.text(c, if (k.from.len == 0) ago else c.print("{s} · {s}", .{ k.from, ago }), .{ .size = 11.5, .color = p.muted, .truncate = true });
     ui.end(c);
     _ = c.leaf(.{ .min_width = 8, .width = px(8) }, .none, null);

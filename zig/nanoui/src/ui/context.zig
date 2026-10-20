@@ -87,8 +87,8 @@ pub const Interaction = struct {
     /// The second click of a double click (it is a click too): opens what
     /// a click selects, as a row's inspector.
     double_clicked: bool = false,
-    /// Released over it after a right / middle press on it: a context
-    /// menu, a tab closed with the wheel.
+    /// Pressed over it with the right button or Control+left: a context menu.
+    right_pressed: bool = false,
     right_clicked: bool = false,
     middle_clicked: bool = false,
     focused: bool,
@@ -96,9 +96,7 @@ pub const Interaction = struct {
     /// (`Context.adjustable`): a splitter, a slider.
     a11y_step: i8 = 0,
 };
-
-const Hit = struct { id: u64, index: u32, rect: types.Rect, scroll: bool };
-
+pub const Hit = struct { id: u64, index: u32, rect: types.Rect, scroll: bool };
 pub const Cursor = enum { arrow, hand, text, resize_left_right, resize_up_down, open_hand, closed_hand, not_allowed, crosshair };
 pub const A11yRole = enum { button, tab, text_field, splitter, slider, checkbox, switch_toggle, radio_button, group, static_text, list, row, image, menu_button, popover };
 pub const A11yItem = struct {
@@ -153,20 +151,21 @@ pub const Context = struct {
     next_hits: std.ArrayList(Hit) = .empty,
     anims: std.AutoHashMapUnmanaged(u64, Anim) = .empty,
     scroll: std.AutoHashMapUnmanaged(u64, f32) = .empty,
+    /// Rubber-band overscroll offset by box id (`scroll.zig`).
+    overscroll: std.AutoHashMapUnmanaged(u64, f32) = .empty,
+    scrollbars: std.AutoHashMapUnmanaged(u64, @import("scroll.zig").ScrollbarGeom) = .empty,
+    scrollbar_drag: ?@import("scroll.zig").ScrollbarDrag = null,
+    scroll_holding: bool = false,
     edits: std.AutoHashMapUnmanaged(u64, EditState) = .empty,
-    /// The largest scroll offset of each scrolling box in the last layout,
-    /// for boxes that follow their end.
+    /// The largest scroll offset of each scrolling box in the last layout.
     scroll_max: std.AutoHashMapUnmanaged(u64, f32) = .empty,
-    /// Whether each of those follows its end, and the offset layout last
-    /// left it at (a different one was moved by the reader or the app).
+    /// Whether each of those follows its end, and the offset layout last left it at.
     scroll_follow: std.AutoHashMapUnmanaged(u64, bool) = .empty,
     scroll_seen: std.AutoHashMapUnmanaged(u64, f32) = .empty,
-    /// How far such a box may follow this frame (`capScroll`), and the
-    /// boxes whose offset the reader or the app moved in the last layout.
+    /// How far such a box may follow this frame (`capScroll`), and moved boxes.
     scroll_cap: std.AutoHashMapUnmanaged(u64, f32) = .empty,
     scroll_moved: std.AutoHashMapUnmanaged(u64, void) = .empty,
-    /// Text selected in `selectable` boxes, and this frame's Copy: asked
-    /// for, and done by a text field of its own selection.
+    /// Text selected in `selectable` boxes, and this frame's Copy.
     selection: @import("selection.zig").Selection = .{},
     copy_requested: bool = false,
     /// The soonest a view asked for another frame (`frameIn`), seconds.
@@ -174,15 +173,28 @@ pub const Context = struct {
     copy_done: bool = false,
     /// Set when the view took the offered shortcut: it goes no further.
     shortcut_taken: bool = false,
-    /// Set by the focused text field each frame.
+    /// Set by the focused text field each frame, along with caret blink and selection state.
     focused_text: ?FocusedText = null,
+    focused_multiline: bool = false,
+    focused_password: bool = false,
+    text_menu: bool = false,
+    caret_moved_at: f64 = 0,
+    window_focused: bool = true,
+    select_granularity: @import("textedit.zig").Granularity = .char,
+    select_origin: [2]usize = .{ 0, 0 },
+    undo_op: @import("textedit.zig").UndoOp = .none,
+    paste_op: bool = false,
+    building: bool = false,
+    right_press: bool = false,
+    drag_request: ?@import("context_hooks.zig").DragRequest = null,
+    focusable_ids: std.ArrayList(u64) = .empty,
+    last_focusable_ids: std.ArrayList(u64) = .empty,
     clipboard: Clipboard = .{},
     /// The key of the next box, for ids that survive reordering.
     next_key: ?[]const u8 = null,
     next_key_int: ?u64 = null,
-    /// The topmost interactive box under the pointer: it takes presses.
+    /// The topmost interactive box under the pointer, and its interactive ancestors.
     hot: u64 = 0,
-    /// The hot box and the boxes it is in, innermost first: all hovered.
     hot_path: std.ArrayList(u64) = .empty,
     active: u64 = 0,
     focus: u64 = 0,
@@ -193,7 +205,6 @@ pub const Context = struct {
     /// This frame's help (tooltips) by box id, and the boxes taking drops.
     helps: std.AutoHashMapUnmanaged(u64, []const u8) = .empty,
     drop_targets: std.ArrayList(u64) = .empty,
-
     /// How far down from the top of a window with a hidden title bar
     /// its empty space moves the window, as a title bar does: a view with
     /// a toolbar there makes it the toolbar's height.
@@ -241,6 +252,10 @@ pub const Context = struct {
         c.hot_path.deinit(c.gpa);
         c.anims.deinit(c.gpa);
         c.scroll.deinit(c.gpa);
+        c.overscroll.deinit(c.gpa);
+        c.scrollbars.deinit(c.gpa);
+        c.focusable_ids.deinit(c.gpa);
+        c.last_focusable_ids.deinit(c.gpa);
         c.edits.deinit(c.gpa);
         c.scroll_max.deinit(c.gpa);
         c.scroll_follow.deinit(c.gpa);
@@ -270,21 +285,30 @@ pub const Context = struct {
 
     /// Starts building a frame: the root fills the window.
     pub fn begin(c: *Context) void {
+        if (c.input.key == .tab and c.focus == 0 and c.last_focusable_ids.items.len > 0) {
+            hooks.focusCycle(c, c.input.shift);
+            c.input.key = null;
+        }
+        scroll_mod.updateScrollbarDrag(c);
         _ = c.arena.reset(.retain_capacity);
         c.nodes.clearRetainingCapacity();
         c.stack.clearRetainingCapacity();
         c.next_hits.clearRetainingCapacity();
         c.a11y_items.clearRetainingCapacity();
+        c.focusable_ids.clearRetainingCapacity();
         c.stage_count = 0;
         c.cursor_hand = false;
         c.cursor_text = false;
         c.cursor = null;
         c.focused_text = null;
+        c.focused_multiline = false;
+        c.focused_password = false;
         c.wants_wheel = false;
         c.wants_moves = false;
         c.scroll_cap.clearRetainingCapacity();
         c.helps.clearRetainingCapacity();
         c.drop_targets.clearRetainingCapacity();
+        c.building = true;
         c.nodes.append(c.gpa, .{
             .id = 0x9e3779b97f4a7c15,
             .style = .{ .width = .{ .px = c.size.w }, .height = .{ .px = c.size.h }, .background = if (c.transparent_root) null else c.theme.background },
@@ -296,12 +320,22 @@ pub const Context = struct {
     /// of the input (the press, the key) are consumed by the first build.
     pub fn rebuild(c: *Context) void {
         c.input.clearEdges();
+        c.undo_op = .none;
+        c.paste_op = false;
         c.changed = false;
         c.begin();
     }
 
     pub fn finish(c: *Context) void {
+        c.building = false;
+        std.mem.swap(std.ArrayList(u64), &c.last_focusable_ids, &c.focusable_ids);
+        if (c.right_press) {
+            c.input.down = false;
+            c.right_press = false;
+        }
         c.input.clearEdges();
+        c.undo_op = .none;
+        c.paste_op = false;
         c.changed = false;
         if (!c.input.down) c.active = 0;
         c.focus_select_all = false;
@@ -388,35 +422,41 @@ pub const Context = struct {
         const n = c.node(index);
         n.interactive = true;
         const id = n.id;
+        if (opts.focusable) c.focusable_ids.append(c.gpa, id) catch {};
         const rect = c.rects.get(id);
         // Presses go to the topmost box alone; hover to the boxes it is in too.
         const top = c.hot == id;
         const hovered = top or std.mem.indexOfScalar(u64, c.hot_path.items, id) != null;
+        const right_press = top and c.input.pressed and (c.input.button == .right or (c.input.button == .left and c.input.ctrl));
+        const left_press = top and c.input.pressed and c.input.button == .left and !c.input.ctrl;
         if (top and c.input.pressed) {
             c.active = id;
-            if (c.input.button == .left) c.focus = if (opts.focusable) id else 0;
+            if (opts.focusable) c.focus = id else if (left_press) c.focus = 0;
         }
         // A drag that selected text is not a click.
         const released = c.input.released and c.active == id and top and !c.selection.moved;
-        const clicked = released and c.input.button == .left;
+        const clicked = released and c.input.button == .left and !c.input.ctrl;
         if (top and c.hand_cursor) c.cursor_hand = true;
         return .{
             .id = id,
             .rect = rect,
             .hovered = hovered,
-            .pressed = c.active == id and c.input.down and c.input.button == .left,
+            .pressed = c.active == id and c.input.down and c.input.button == .left and !c.input.ctrl,
             .clicked = clicked,
             .double_clicked = clicked and c.input.click_count >= 2,
-            .right_clicked = released and c.input.button == .right,
+            .right_pressed = right_press,
+            .right_clicked = right_press,
             .middle_clicked = released and c.input.button == .middle,
             .focused = c.focus == id,
             .a11y_step = if (c.input.a11y_step) |s| (if (s.id == id) s.dir else 0) else 0,
         };
     }
 
-    // Focus, tooltips, drops, window drags: context_hooks.zig.
     const hooks = @import("context_hooks.zig");
+    const scroll_mod = @import("scroll.zig");
     pub const focusNext = hooks.focusNext;
+    pub const focusCycle = hooks.focusCycle;
+    pub const startDrag = hooks.startDrag;
     pub const help = hooks.help;
     pub const hotHelp = hooks.hotHelp;
     pub const acceptDrop = hooks.acceptDrop;
@@ -426,7 +466,6 @@ pub const Context = struct {
     pub const addA11y = hooks.addA11y;
     pub const adjustable = hooks.adjustable;
     pub const a11yStep = hooks.a11yStep;
-
     /// Whether this event is the key combination `want`, which the view then
     /// takes: `if (c.shortcut(.{ .key = 'k', .cmd = true })) clear();`
     pub fn shortcut(c: *Context, want_in: Shortcut) bool {
@@ -453,19 +492,8 @@ pub const Context = struct {
         return c.selection.dragging;
     }
 
-    /// Lets the box `id`, which follows its end, follow no further than
-    /// `offset` this frame: what was just started stays at the top while
-    /// what it prints grows below, to be read from its start.
-    pub fn capScroll(c: *Context, id: u64, offset: f32) void {
-        c.scroll_cap.put(c.gpa, id, @max(0, offset)) catch {};
-    }
-
-    /// Whether box `id`'s offset was moved (by the wheel, a drag, the app)
-    /// in the last layout, rather than by following its end.
-    pub fn scrollMoved(c: *Context, id: u64) bool {
-        return c.scroll_moved.contains(id);
-    }
-
+    pub const capScroll = scroll_mod.capScroll;
+    pub const scrollMoved = scroll_mod.scrollMoved;
     /// Asks for another frame within `seconds`: for what changes now and
     /// then (a spinner's step, a clock's second), without drawing every
     /// refresh in between.
@@ -491,64 +519,11 @@ pub const Context = struct {
         return a.value;
     }
 
-    // Called by the surface between frames.
-
-    /// Records an interactive box's visible rectangle, in paint order.
-    pub fn addHit(c: *Context, id: u64, index: u32, rect: types.Rect, scroll: bool) void {
-        c.next_hits.append(c.gpa, .{ .id = id, .index = index, .rect = rect, .scroll = scroll }) catch {};
-    }
-
-    /// Swaps in the boxes of the frame just painted.
-    pub fn commitHits(c: *Context) void {
-        std.mem.swap(std.ArrayList(Hit), &c.hits, &c.next_hits);
-        c.updateHot();
-    }
-
-    /// The topmost interactive box under the pointer becomes hot.
-    pub fn updateHot(c: *Context) void {
-        c.hot = 0;
-        c.hot_index = none;
-        c.hot_path.clearRetainingCapacity();
-        var i = c.hits.items.len;
-        while (i > 0) {
-            i -= 1;
-            const h = c.hits.items[i];
-            if (!h.scroll and h.rect.contains(c.input.mouse)) {
-                c.hot = h.id;
-                c.hot_index = h.index;
-                c.hotPath(h);
-                return;
-            }
-        }
-    }
-
-    /// The hot box's interactive ancestors, from the tree it was painted
-    /// in (between frames, still the last one).
-    fn hotPath(c: *Context, h: Hit) void {
-        if (h.index >= c.nodes.items.len or c.nodes.items[h.index].id != h.id) return;
-        var at = h.index;
-        while (at != none) {
-            const n = c.nodes.items[at];
-            if (n.interactive) c.hot_path.append(c.gpa, n.id) catch return;
-            at = n.parent;
-        }
-    }
-
-    /// Scrolls the innermost scrolling box under the pointer.
-    pub fn applyScroll(c: *Context, dy: f32) bool {
-        var i = c.hits.items.len;
-        while (i > 0) {
-            i -= 1;
-            const h = c.hits.items[i];
-            if (h.scroll and h.rect.contains(c.input.mouse)) {
-                const gop = c.scroll.getOrPut(c.gpa, h.id) catch return false;
-                if (!gop.found_existing) gop.value_ptr.* = 0;
-                gop.value_ptr.* = @max(0, gop.value_ptr.* - dy);
-                return true;
-            }
-        }
-        return false;
-    }
+    pub const addHit = hooks.addHit;
+    pub const commitHits = hooks.commitHits;
+    pub const updateHot = hooks.updateHot;
+    pub const applyScroll = scroll_mod.applyScroll;
+    pub const hasOverscroll = scroll_mod.hasOverscroll;
 
     pub fn pointerUp(c: *Context) void {
         c.input.down = false;
@@ -558,43 +533,14 @@ pub const Context = struct {
     pub fn pointerDown(c: *Context) void {
         c.input.down = true;
         c.input.pressed = true;
-        // A press outside every focusable box drops the focus.
+        c.right_press = c.input.button == .right or (c.input.button == .left and c.input.ctrl);
+        if (scroll_mod.tryPressScrollbar(c)) return;
         if (c.hot == 0) c.focus = 0;
     }
 
-    pub fn addStageHole(c: *Context, r: types.Rect) void {
-        if (c.stage_count < c.stage_rects.len) {
-            c.stage_rects[c.stage_count] = r;
-            c.stage_nodes[c.stage_count] = none;
-            c.stage_count += 1;
-        }
-    }
-
-    pub fn addStageHoleNode(c: *Context, node_index: u32) void {
-        if (c.stage_count < c.stage_rects.len) {
-            c.stage_nodes[c.stage_count] = node_index;
-            c.stage_rects[c.stage_count] = .{};
-            c.stage_count += 1;
-        }
-    }
-
-    pub fn hitAt(c: *const Context, p: types.Point) bool {
-        var i = c.hits.items.len;
-        while (i > 0) {
-            i -= 1;
-            const h = c.hits.items[i];
-            if (!h.scroll and h.rect.contains(p)) return true;
-        }
-        return false;
-    }
-
-    pub fn inStageHoleAt(c: *const Context, p: types.Point) bool {
-        if (c.active != 0 or c.hitAt(p)) return false;
-        for (c.stage_rects[0..c.stage_count]) |r| {
-            if (r.contains(p)) return true;
-        }
-        return false;
-    }
-
+    pub const addStageHole = hooks.addStageHole;
+    pub const addStageHoleNode = hooks.addStageHoleNode;
+    pub const hitAt = hooks.hitAt;
+    pub const inStageHoleAt = hooks.inStageHoleAt;
     pub const setScroll = @import("scroll_x.zig").setScroll;
 };

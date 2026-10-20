@@ -22,7 +22,7 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette, a: *Assistant, st: *
     // The composer's text follows the draft wherever it changed (a pick, a
     // command, Cancel on the notice); what is typed goes back below.
     if (!std.mem.eql(u8, st.draft.text(), a.draft.items)) st.draft.set(a.draft.items);
-    const suggestions = a.suggestions(c.alloc()) catch &.{};
+    const suggestions = a.cachedSuggestions();
     const pins = a.chat.pins;
     const has_text = std.mem.trim(u8, a.draft.items, " \t\r\n").len > 0;
 
@@ -151,10 +151,25 @@ fn pinList(c: *ui.Context, p: *const Palette, st: *State, todo: *Do, pins: []con
 }
 
 /// `pageLine`: what goes with the question from the page in front.
+var last_tab_serial: u64 = 0;
+var last_tab_web: ?*anyopaque = null;
+var last_tab_private: bool = false;
+
+fn isPrivateCached(t: *@import("../web/tab.zig").Tab) bool {
+    if (t.shy) return true;
+    const wv: ?*anyopaque = if (t.web) |w| @ptrCast(w) else null;
+    if (t.serial == last_tab_serial and wv == last_tab_web) return last_tab_private;
+    last_tab_serial = t.serial;
+    last_tab_web = wv;
+    last_tab_private = ubi.isPrivatePage(t);
+    return last_tab_private;
+}
+
+/// `pageLine`: what goes with the question from the page in front.
 fn pageLine(c: *ui.Context, b: *Browser, a: *Assistant) []const u8 {
     const t = b.activeTab() orelse return "No page in front";
     if (t.isBlank()) return "No page in front";
-    if (ubi.isPrivatePage(t) and !a.shy) return "Private tab — not shared";
+    if (isPrivateCached(t) and !a.shy) return "Private tab — not shared";
     if (!a.shareable(t)) return "Not a web page — not shared";
     if (a.chat.pageHidden) return c.print("Not shared: {s}", .{t.label()});
     return t.label();

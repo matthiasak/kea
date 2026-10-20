@@ -8,8 +8,8 @@ const cg = @import("../sys/cg.zig");
 const palette = @import("../design/palette.zig");
 const motion = @import("../design/motion.zig");
 
-const turn_seconds: f32 = 0.85;
-const turns: u32 = 24;
+const turn_seconds: f32 = 0.75;
+const turns: u32 = 64;
 
 const Picture = struct {
     size: f32,
@@ -23,6 +23,23 @@ const Picture = struct {
 /// Pictures by `Picture`'s hash, for the life of the app (main thread).
 // ponytail: never evicted; a handful of sizes × 124 tiny PNGs.
 var pictures: std.AutoHashMapUnmanaged(u64, []u8) = .empty;
+var warmed_scale: f32 = 0;
+var warmed_mask: u8 = 0;
+
+fn warm(scale: f32, dark: bool) void {
+    const bit: u8 = if (dark) 2 else 1;
+    if (warmed_scale != scale) {
+        warmed_scale = scale;
+        warmed_mask = 0;
+    }
+    if (warmed_mask & bit != 0) return;
+    warmed_mask |= bit;
+    for ([_]f32{ 10, 11 }) |sz| {
+        for (0..turns) |step| {
+            _ = png(.{ .size = sz, .scale = scale, .dark = dark, .kind = .turn, .step = @intCast(step) });
+        }
+    }
+}
 
 fn png(p: Picture) ?[]const u8 {
     var h = std.hash.Wyhash.init(0x7269_6e67);
@@ -90,24 +107,26 @@ fn paint(b: cg.Bitmap, p: Picture) void {
 }
 
 fn show(c: *ui.Context, p: Picture) void {
+    if (p.kind == .turn and (p.size == 10 or p.size == 11)) warm(p.scale, p.dark);
     const bytes = png(p) orelse {
         _ = c.leaf(.{ .width = .{ .px = p.size }, .height = .{ .px = p.size } }, .none, null);
         return;
     };
-    const key = c.print("kea.ring.{d}.{d}.{d}.{d}.{d}", .{ p.size, p.scale, @intFromBool(p.dark), @backingInt(p.kind), p.step });
+    var key_buf: [64]u8 = undefined;
+    const key = std.fmt.bufPrint(&key_buf, "kea.ring.{d}.{d}.{d}.{d}.{d}", .{ p.size, p.scale, @intFromBool(p.dark), @backingInt(p.kind), p.step }) catch "kea.ring";
     _ = ui.image(c, .{ .key = key, .bytes = bytes, .max_width = p.size, .max_height = p.size, .radius = 0, .scale = p.scale });
 }
 
-/// Which of the 24 turns shows at `time` seconds.
+/// Which of the 64 turns shows at `time` seconds.
 pub fn turnAt(time: f64) u32 {
     const f = time / turn_seconds;
     return @as(u32, @intFromFloat(@floor((f - @floor(f)) * turns))) % turns;
 }
 
-/// `Ring(size:)`: turning once every 0.85 s, a frame asked for each turn.
+/// `Ring(size:)`: turning once every 0.75 s, a frame asked for each turn.
 pub fn ring(c: *ui.Context, size: f32) void {
     show(c, .{ .size = size, .scale = c.scale, .dark = c.theme.dark, .kind = .turn, .step = turnAt(c.time) });
-    c.frameIn(turn_seconds / turns);
+    c.frameIn(@max(1.0 / 60.0, turn_seconds / @as(f32, @floatFromInt(turns))));
 }
 
 /// The download door's progress: `fraction` done, easing over 0.2 s.

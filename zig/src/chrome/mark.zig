@@ -1,8 +1,10 @@
 //! `Mark` (Icons.swift): what stands for a page when there is no room for
 //! its title: the site's icon, or its letter in a faint square until then.
+const std = @import("std");
 const ui = @import("nanoui").ui;
 const objc = @import("nanoui").objc;
 const Palette = @import("../design/palette.zig").Palette;
+const motion = @import("../design/motion.zig");
 
 /// A site's icon (`Favicons.icon`): `key` names this picture of it (its
 /// site and a serial), so it is decoded once and again when it changes.
@@ -11,10 +13,31 @@ pub const Icon = struct { key: []const u8, png: []const u8 };
 pub fn mark(c: *ui.Context, p: *const Palette, icon: ?Icon, letter: []const u8, size: f32, dim: bool) void {
     const opacity: f32 = if (dim) 0.45 else 1;
     const radius = size * 0.22;
+    const id = c.peekId(null);
+    const t = motion.quickTo(c, id, 0x6d61_726b, if (icon != null) 1 else 0);
     if (icon) |ic| {
-        // Scale ½: any icon of at least half the size's pixels fills it.
-        if (ui.image(c, .{ .key = ic.key, .bytes = ic.png, .max_width = size, .max_height = size, .radius = radius, .opacity = opacity, .scale = 0.5 })) return;
+        var key_buf: [64]u8 = undefined;
+        const key = if (ic.key.len <= key_buf.len) blk: {
+            @memcpy(key_buf[0..ic.key.len], ic.key);
+            break :blk key_buf[0..ic.key.len];
+        } else ic.key;
+        if (t >= 0.999) {
+            // Scale ½: any icon of at least half the size's pixels fills it.
+            if (ui.image(c, .{ .key = key, .bytes = ic.png, .max_width = size, .max_height = size, .radius = radius, .opacity = opacity, .scale = 0.5 })) return;
+        } else {
+            _ = c.open(.{ .width = .{ .px = size }, .height = .{ .px = size } }, null);
+            defer c.end();
+            drawMonogram(c, p, letter, size, radius, opacity * (1 - t));
+            _ = c.open(.{ .absolute = true, .width = .{ .px = size }, .height = .{ .px = size } }, null);
+            _ = ui.image(c, .{ .key = key, .bytes = ic.png, .max_width = size, .max_height = size, .radius = radius, .opacity = opacity * t, .scale = 0.5 });
+            c.end();
+            return;
+        }
     }
+    drawMonogram(c, p, letter, size, radius, opacity);
+}
+
+fn drawMonogram(c: *ui.Context, p: *const Palette, letter: []const u8, size: f32, radius: f32, opacity: f32) void {
     _ = c.open(.{
         .width = .{ .px = size },
         .height = .{ .px = size },
@@ -33,6 +56,12 @@ pub fn mark(c: *ui.Context, p: *const Palette, icon: ?Icon, letter: []const u8, 
 /// `uppercased()` does it, on the frame's arena.
 pub fn initial(c: *ui.Context, text: []const u8) []const u8 {
     if (text.len == 0) return "•";
+    if (text[0] < 0x80) {
+        const ch = std.ascii.toUpper(text[0]);
+        const out = c.alloc().alloc(u8, 1) catch return "•";
+        out[0] = ch;
+        return out;
+    }
     const pool = objc.Pool.push();
     defer pool.pop();
     const Range = extern struct { location: usize, length: usize };

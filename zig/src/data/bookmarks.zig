@@ -65,9 +65,12 @@ pub const Bookmarks = struct {
     kept: std.StringHashMapUnmanaged(void) = .empty,
     /// Bumped on every change.
     revision: u64 = 0,
+    /// Cached site count across `roots` and per-folder counts, rebuilt in `rekeep`.
+    total_count: usize = 0,
+    folder_counts: std.AutoHashMapUnmanaged(Uuid, usize) = .empty,
+    folders_cache: std.ArrayList(Folder) = .empty,
     /// Changes undoable while the manager is open (bookmarks_undo.zig).
     history: undo_ops.History = .{},
-
     pub const file = "bookmarks.json";
     /// Which browser filled the empty top level, the first time.
     pub const top_key = "bookmarks.top";
@@ -84,6 +87,8 @@ pub const Bookmarks = struct {
 
     pub fn deinit(self: *Bookmarks) void {
         self.kept.deinit(self.gpa);
+        self.folder_counts.deinit(self.gpa);
+        self.folders_cache.deinit(self.gpa);
         self.arena.deinit();
         self.history.deinit(self.gpa);
     }
@@ -99,6 +104,14 @@ pub const Bookmarks = struct {
         var n: usize = 0;
         for (nodes) |b| n += if (b.isFolder()) count(b.kids()) else 1;
         return n;
+    }
+
+    pub fn folderCount(self: *const Bookmarks, id: Uuid, kids: []const Bookmark) usize {
+        return self.folder_counts.get(id) orelse count(kids);
+    }
+
+    pub fn cachedFolders(self: *const Bookmarks) []const Folder {
+        return self.folders_cache.items;
     }
 
     /// Every site's address, in order, folders opened. On `a`.
@@ -154,13 +167,22 @@ pub const Bookmarks = struct {
         try walkMatches(a, self.roots, words.items, &path, &found);
         return found.items;
     }
-
+    fn containsWord(a: std.mem.Allocator, hay: []const u8, lowered_hay: *?[]const u8, w: []const u8) !bool {
+        if (for (hay) |c| (if (c >= 0x80) break false) else true) {
+            if (hay.len < w.len) return w.len == 0;
+            for (0..hay.len - w.len + 1) |i| if (std.ascii.eqlIgnoreCase(hay[i .. i + w.len], w)) return true;
+            return false;
+        }
+        if (lowered_hay.* == null) lowered_hay.* = try url.lower(a, hay);
+        return std.mem.indexOf(u8, lowered_hay.*.?, w) != null;
+    }
     fn walkMatches(a: std.mem.Allocator, nodes: []const Bookmark, words: []const []const u8, path: *std.ArrayList([]const u8), found: *std.ArrayList(Match)) !void {
         for (nodes) |*b| {
-            const title = try url.lower(a, b.title);
-            const addr = try url.lower(a, b.url orelse "");
+            var low_title: ?[]const u8 = null;
+            var low_addr: ?[]const u8 = null;
+            const addr = b.url orelse "";
             const all = for (words) |w| {
-                if (std.mem.indexOf(u8, title, w) == null and std.mem.indexOf(u8, addr, w) == null) break false;
+                if (!(try containsWord(a, b.title, &low_title, w)) and !(try containsWord(a, addr, &low_addr, w))) break false;
             } else true;
             if (all) try found.append(a, .{ .node = b, .path = try a.dupe([]const u8, path.items) });
             if (b.kids().len > 0) {
@@ -415,14 +437,25 @@ pub const Bookmarks = struct {
 
     fn rekeep(self: *Bookmarks) void {
         self.kept.clearRetainingCapacity();
-        keepUrls(self, self.roots);
+        self.folder_counts.clearRetainingCapacity();
+        self.folders_cache.clearRetainingCapacity();
+        self.total_count = keepUrls(self, self.roots, 0);
     }
 
-    fn keepUrls(self: *Bookmarks, nodes: []const Bookmark) void {
-        for (nodes) |b| {
-            if (b.url) |u| self.kept.put(self.gpa, u, {}) catch {};
-            keepUrls(self, b.kids());
+    fn keepUrls(self: *Bookmarks, nodes: []const Bookmark, depth: usize) usize {
+        var n: usize = 0;
+        for (nodes) |*b| {
+            if (b.isFolder()) {
+                self.folders_cache.append(self.gpa, .{ .node = b, .depth = depth }) catch {};
+                const sub = keepUrls(self, b.kids(), depth + 1);
+                self.folder_counts.put(self.gpa, b.id, sub) catch {};
+                n += sub;
+            } else {
+                if (b.url) |u| self.kept.put(self.gpa, u, {}) catch {};
+                n += 1;
+            }
         }
+        return n;
     }
 
     pub const merge = @import("bookmarks_merge.zig");

@@ -114,12 +114,26 @@ pub fn redrawAll(kea: *Kea) void {
 
 /// The panels on one side of the stage: Ubi Chat outermost, then the
 /// bookmarks, then the page.
+const col_id_base: u64 = std.hash.Wyhash.hash(0, "kea.panel.column");
+
+fn columnWidth(b: *Browser, c: *ui.Context, panel: SidePanel, left: bool, width: f32, win_resized: bool) f32 {
+    const pid = col_id_base ^ @as(u64, @intFromEnum(panel)) ^ (if (left) @as(u64, 0x100) else @as(u64, 0x200));
+    if (b.edge_drag != null or win_resized) {
+        ui.jump(c, pid, 1, width);
+        return width;
+    }
+    return motion.glideTo(c, pid, 1, width);
+}
+
 pub fn beside(b: *Browser, c: *ui.Context, p: *const Palette, r: Room, left: bool) void {
+    const st = &b.column;
+    const win_resized = st.panel_win_w != 0 and st.panel_win_w != r.window_width;
+    if (!left) st.panel_win_w = r.window_width;
     const chat = r.chatShown() and panelOnLeft(b, .chat) == left;
     const marks = r.marksShown() and panelOnLeft(b, .bookmarks) == left;
-    if (left and chat) panelView(b, c, p, .chat, true, r.chatWidth(), false, false);
-    if (marks) panelView(b, c, p, .bookmarks, left, r.marksWidth(), false, false);
-    if (!left and chat) panelView(b, c, p, .chat, false, r.chatWidth(), false, false);
+    if (left and chat) panelView(b, c, p, .chat, true, columnWidth(b, c, .chat, true, r.chatWidth(), win_resized), false, false);
+    if (marks) panelView(b, c, p, .bookmarks, left, columnWidth(b, c, .bookmarks, left, r.marksWidth(), win_resized), false, false);
+    if (!left and chat) panelView(b, c, p, .chat, false, columnWidth(b, c, .chat, false, r.chatWidth(), win_resized), false, false);
 }
 
 const let_out_id: u64 = std.hash.Wyhash.hash(0, "kea.panel.let-out");

@@ -75,23 +75,9 @@ fn nextBoundary(s: []const u8, i: usize) usize {
     return @min(s.len, i + utf8.seqLen(s[i]));
 }
 
-fn isWordByte(b: u8) bool {
-    return std.ascii.isAlphanumeric(b) or b == '_' or b >= 0x80;
-}
-
-fn prevWord(s: []const u8, i: usize) usize {
-    var j = i;
-    while (j > 0 and !isWordByte(s[j - 1])) j -= 1;
-    while (j > 0 and isWordByte(s[j - 1])) j -= 1;
-    return j;
-}
-
-fn nextWord(s: []const u8, i: usize) usize {
-    var j = i;
-    while (j < s.len and !isWordByte(s[j])) j += 1;
-    while (j < s.len and isWordByte(s[j])) j += 1;
-    return j;
-}
+const textedit = @import("textedit.zig");
+const prevWord = textedit.prevWord;
+const nextWord = textedit.nextWord;
 
 pub const Options = struct {
     placeholder: []const u8 = "",
@@ -107,7 +93,7 @@ pub const Options = struct {
     bare: bool = false,
     /// The editing keys: the system's, Emacs's or Vim's (keymap.zig).
     keys: keymap.Keymap = .system,
-    /// The selection's fill (the accent at .3 when null) and the caret's
+    /// The selection's fill (the accent at .28 when null) and the caret's
     /// color (the accent).
     selection_color: ?types.Color = null,
     caret_color: ?types.Color = null,
@@ -291,35 +277,34 @@ pub fn textField(c: *Context, buffer: *TextBuffer, opts: Options) Result {
         }
     }.f;
 
+    if (it.right_clicked) c.text_menu = true;
     if (it.focused) {
+        const prev_caret = e.caret;
+        const was_focused = e.had_focus;
         if (it.rect) |r| {
             const local_x = c.input.mouse.x - r.x - pad_x + e.scroll_x;
-            if (c.input.pressed and c.input.button == .left and it.hovered) {
+            if (c.input.pressed and c.input.button == .left and !c.input.ctrl and it.hovered) {
                 const idx = c.text.indexAt(shownOf(buffer.text(), opts.password, bullets), style, local_x);
                 const at = if (opts.password) byteOfCodepoint(buffer.text(), idx / 3) else idx;
-                e.caret = at;
-                if (!c.input.shift) e.anchor = at;
-                if (c.input.click_count >= 2) {
-                    e.anchor = prevWord(buffer.text(), at);
-                    e.caret = nextWord(buffer.text(), at);
-                }
-                e.marked = null;
-                c.selection.blocked = true;
-                e.selecting = true;
+                textedit.pointerSelect(c, e, buffer.text(), at, false);
             } else if (e.selecting and c.input.down) {
                 const idx = c.text.indexAt(shownOf(buffer.text(), opts.password, bullets), style, local_x);
-                e.caret = if (opts.password) byteOfCodepoint(buffer.text(), idx / 3) else idx;
+                const at = if (opts.password) byteOfCodepoint(buffer.text(), idx / 3) else idx;
+                textedit.pointerDrag(c, e, buffer.text(), at, false);
             }
             if (!c.input.down) e.selecting = false;
         }
         focusSelect(c, e, opts.select_all_on_focus, buffer.text().len);
-        // Emacs's and Vim's keys first; what they take isn't typed. Their
-        // undo history: the text before this event, and after it.
-        if (opts.keys != .system) e.undo.begin(buffer.text(), e.caret);
-        const took: keymap.Took = if (opts.keys != .system) keymap.handle(c, buffer, e, opts, &result) else .{};
+        e.undo.begin(buffer.text(), e.caret);
+        var took: keymap.Took = if (opts.keys != .system) keymap.handle(c, buffer, e, opts, &result) else .{};
+        if (!took.key and textedit.handleUndoShortcuts(c, buffer, e, &result)) took.key = true;
         for (c.input.ops) |op| {
             if (took.text and op == .insert) continue;
             if (op == .command and op.command == .cancel) c.focus = 0;
+            if (op == .command and op.command == .insert_tab) {
+                c.focusCycle(c.input.shift);
+                continue;
+            }
             // Copy with a selection here is the field's; else the page's.
             if (op == .command and (op.command == .copy or op.command == .cut) and e.caret != e.anchor) c.copy_done = true;
             apply(buffer, e, op, opts, c.clipboard, &result);
@@ -333,15 +318,13 @@ pub fn textField(c: *Context, buffer: *TextBuffer, opts: Options) Result {
             .right => apply(buffer, e, .{ .command = if (c.input.shift) .select_right else .move_right }, opts, c.clipboard, &result),
             .home, .up => apply(buffer, e, .{ .command = .move_line_start }, opts, c.clipboard, &result),
             .end, .down => apply(buffer, e, .{ .command = .move_line_end }, opts, c.clipboard, &result),
+            .tab => c.focusCycle(c.input.shift),
             .enter => result.submitted = true,
             .escape => c.focus = 0,
             else => {},
         };
-        if (opts.keys != .system) {
-            var typing = !took.text and !took.key and c.input.key == null and (c.input.chars.len > 0 or c.input.ops.len > 0);
-            for (c.input.ops) |op| typing = typing and op == .insert;
-            e.undo.commit(buffer.text(), e.caret, result.changed, typing);
-        }
+        textedit.commitUndo(c, buffer, e, &result, took.text, took.key);
+        textedit.updateCaretBlink(c, was_focused, result.changed, e.caret != prev_caret);
         if (result.changed or result.submitted) c.changed = true;
         // Escape gave the focus up during this build.
         if (c.focus != it.id) {
@@ -378,7 +361,7 @@ pub fn textField(c: *Context, buffer: *TextBuffer, opts: Options) Result {
     if (focused and hi > lo) {
         const x0 = c.text.caretX(shown, style, shownIndex(s, opts.password, lo));
         const x1 = c.text.caretX(shown, style, shownIndex(s, opts.password, hi));
-        _ = c.leaf(.{ .absolute = true, .width = .{ .px = x1 - x0 }, .height = .{ .px = lh }, .radius = 2, .background = opts.selection_color orelse th.accent.alpha(0.3), .offset = .{ .x = x0 - e.scroll_x } }, .none, null);
+        _ = c.leaf(.{ .absolute = true, .width = .{ .px = x1 - x0 }, .height = .{ .px = lh }, .radius = 2, .background = opts.selection_color orelse th.accent.alpha(0.28), .offset = .{ .x = x0 - e.scroll_x } }, .none, null);
     }
     if (s.len == 0) {
         _ = c.leaf(.{ .offset = .{ .x = -e.scroll_x } }, .{ .text = .{ .str = opts.placeholder, .style = style, .color = th.muted } }, null);
@@ -392,13 +375,15 @@ pub fn textField(c: *Context, buffer: *TextBuffer, opts: Options) Result {
         const x1 = c.text.caretX(shown, style, shownIndex(s, opts.password, m[1]));
         _ = c.leaf(.{ .absolute = true, .width = .{ .px = x1 - x0 }, .height = .{ .px = 1.5 }, .background = opts.color orelse th.text, .offset = .{ .x = x0 - e.scroll_x, .y = lh - 1 } }, .none, null);
     };
-    if (focused and hi == lo) {
+    if (focused and hi == lo and (result.vim_normal or textedit.caretVisible(c))) {
         // Vim's normal mode: a block over the character under the caret.
         const block = result.vim_normal;
         const w: f32 = if (!block) 1.5 else if (e.caret < s.len) @max(4, c.text.caretX(shown, style, shownIndex(s, opts.password, @min(s.len, e.caret + 1))) - caret_x) else c.text.width("m", style);
         _ = c.leaf(.{ .absolute = true, .width = .{ .px = w }, .height = .{ .px = lh }, .background = if (block) th.accent.alpha(0.45) else opts.caret_color orelse th.accent, .offset = .{ .x = caret_x - e.scroll_x } }, .none, null);
     }
     if (focused) {
+        c.focused_password = opts.password;
+        c.focused_multiline = false;
         const r = it.rect orelse types.Rect{};
         c.focused_text = .{
             .id = it.id,

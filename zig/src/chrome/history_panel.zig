@@ -23,9 +23,9 @@ const px = struct {
     }
 }.v;
 
-const Row = struct { key: []const u8, url: []const u8, title: []const u8, address: []const u8, clock: []const u8 };
+const max_rows = 300;
+const Row = struct { key: []const u8, url: []const u8, title: []const u8, address: []const u8, last: json.SwiftDate, clock: []const u8 = "" };
 const Day = struct { name: []const u8, rows: []Row };
-
 /// `Browser.recall`: the hunt (`recallHunt`), the mode, and the list as
 /// drawn — worked out when the history or the search changes, not each
 /// time the panel is drawn.
@@ -40,9 +40,9 @@ pub const State = struct {
     arena: ?std.heap.ArenaAllocator = null,
     days: []Day = &.{},
     count: usize = 0,
+    truncated: bool = false,
     built_generation: u64 = 0,
     built_hunt: []const u8 = "",
-
     pub fn deinit(st: *State) void {
         st.hunt.deinit();
         if (st.arena) |*a| a.deinit();
@@ -76,19 +76,25 @@ pub fn opened(b: *Browser) void {
 /// newest first — `everything` is already newest first, so a day is a run.
 fn refresh(b: *Browser) void {
     const st = &b.recall;
-    if (st.arena) |*a| a.deinit();
-    st.arena = std.heap.ArenaAllocator.init(b.gpa);
+    if (st.arena == null) {
+        st.arena = std.heap.ArenaAllocator.init(b.gpa);
+    } else {
+        _ = st.arena.?.reset(.retain_capacity);
+    }
     const arena = st.arena.?.allocator();
     st.days = &.{};
     st.count = 0;
+    st.truncated = false;
     st.built_generation = b.kea.history.generation;
     st.built_hunt = arena.dupe(u8, st.hunt.text()) catch "";
     const traces = b.kea.history.everything(arena, st.hunt.text(), std.math.maxInt(usize)) catch return;
     st.count = traces.len;
+    st.truncated = traces.len > max_rows;
+    const shown = traces[0..@min(traces.len, max_rows)];
     var days: std.ArrayList(Day) = .empty;
     var rows: std.ArrayList(Row) = .empty;
     var start: json.SwiftDate = std.math.inf(f64);
-    for (traces) |t| {
+    for (shown) |t| {
         if (t.last < start) {
             if (rows.items.len > 0) days.items[days.items.len - 1].rows = rows.toOwnedSlice(arena) catch &.{};
             start = when.startOfDay(t.last);
@@ -99,7 +105,7 @@ fn refresh(b: *Browser) void {
             .url = arena.dupe(u8, t.url) catch return,
             .title = arena.dupe(u8, if (t.title.len == 0) address.withoutWWW(t.address) else t.title) catch return,
             .address = arena.dupe(u8, address.withoutWWW(t.address)) catch return,
-            .clock = when.clock(arena, t.last),
+            .last = t.last,
         }) catch return;
     }
     if (rows.items.len > 0) days.items[days.items.len - 1].rows = rows.toOwnedSlice(arena) catch &.{};
@@ -149,28 +155,34 @@ fn list(b: *Browser, c: *ui.Context, p: *const Palette) Act {
     const i = c.open(.{ .scroll = true, .direction = .column, .width = .fill, .max_height = max_h, .scroll_bar = false, .padding = .{ .bottom = 2 } }, "history-list");
     defer c.end();
     const off = c.scroll.get(c.node(i).id) orelse 0;
-    const lo = off - max_h;
-    const hi = off + 2 * max_h;
+    const lo = off - 200;
+    const hi = off + max_h + 200;
     const cap_h = c.text.lineHeight(.{ .size = 11.5, .weight = .medium });
     const row_h = 18 + c.text.lineHeight(.{ .size = 13 }) + 2 + c.text.lineHeight(.{ .size = 11.5 });
     var act: Act = .none;
     var y: f32 = 0;
-    for (st.days, 0..) |day, d| {
+    var skipped_days: f32 = 0;
+    for (st.days, 0..) |*day, d| {
+        const head_h = (if (d == 0) @as(f32, 0) else 14) + cap_h + 6;
+        const card_h = @as(f32, @floatFromInt(day.rows.len)) * (row_h + 1) - 1;
+        const total_h = head_h + card_h;
+        if (y + total_h < lo or y > hi) {
+            skipped_days += total_h;
+            y += total_h;
+            continue;
+        }
+        if (skipped_days > 0) {
+            _ = c.leaf(.{ .width = .fill, .height = px(skipped_days) }, .none, null);
+            skipped_days = 0;
+        }
         ui.key(c, c.print("day-{d}", .{d}));
         ui.column(c, .{ .width = .fill, .padding = .{ .top = if (d == 0) 0 else 14, .bottom = 6 } });
         plate.caption(c, p, day.name);
         ui.end(c);
-        y += (if (d == 0) @as(f32, 0) else 14) + cap_h + 6;
-        // Each line but the first has its rule above it.
-        const card_h = @as(f32, @floatFromInt(day.rows.len)) * (row_h + 1) - 1;
-        if (y + card_h < lo or y > hi) {
-            _ = c.leaf(.{ .width = .fill, .height = px(card_h) }, .none, null);
-            y += card_h;
-            continue;
-        }
+        y += head_h;
         plate.cardBox(c, p);
         var skipped: f32 = 0;
-        for (day.rows, 0..) |row, n| {
+        for (day.rows, 0..) |*row, n| {
             const top = y + @as(f32, @floatFromInt(n)) * (row_h + 1);
             const h = if (n == 0) row_h else row_h + 1;
             if (top + row_h < lo or top > hi) {
@@ -188,12 +200,19 @@ fn list(b: *Browser, c: *ui.Context, p: *const Palette) Act {
         ui.end(c);
         y += card_h;
     }
+    if (skipped_days > 0) _ = c.leaf(.{ .width = .fill, .height = px(skipped_days) }, .none, null);
+    if (st.truncated) {
+        ui.column(c, .{ .width = .fill, .padding = .{ .top = 10, .bottom = 4 }, .align_items = .center });
+        ui.text(c, "Showing first 300 matches", .{ .size = 11.5, .color = p.muted });
+        ui.end(c);
+    }
     return act;
 }
 
 /// `Row`: a title, where it came from, and when — the three things you
 /// scan for, in the order you scan them. Under the pointer, Remove.
-fn line(b: *Browser, c: *ui.Context, p: *const Palette, row: Row, h: f32) Act {
+fn line(b: *Browser, c: *ui.Context, p: *const Palette, row: *Row, h: f32) Act {
+    if (row.clock.len == 0) row.clock = when.clock(b.recall.arena.?.allocator(), row.last);
     const i = c.open(.{ .direction = .row, .gap = 12, .width = .fill, .height = px(h), .padding = .xy(14, 9), .align_items = .center }, null);
     defer c.end();
     const it = c.interact(i, .{});

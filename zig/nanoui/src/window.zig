@@ -64,7 +64,9 @@ pub const Window = struct {
                 .{ .name = "windowDidChangeOcclusionState:", .imp = &occlusionChanged, .types = "v@:@" },
                 .{ .name = "windowDidChangeScreen:", .imp = &screenChanged, .types = "v@:@" },
                 .{ .name = "windowDidResize:", .imp = &didResize, .types = "v@:@" },
+                .{ .name = "windowWillEnterFullScreen:", .imp = &willFullScreen, .types = "v@:@" },
                 .{ .name = "windowDidEnterFullScreen:", .imp = &fullScreenChanged, .types = "v@:@" },
+                .{ .name = "windowWillExitFullScreen:", .imp = &willFullScreen, .types = "v@:@" },
                 .{ .name = "windowDidExitFullScreen:", .imp = &fullScreenChanged, .types = "v@:@" },
                 .{ .name = "windowDidBecomeKey:", .imp = &keyChanged, .types = "v@:@" },
                 .{ .name = "windowDidResignKey:", .imp = &keyChanged, .types = "v@:@" },
@@ -296,14 +298,27 @@ fn didResize(self_obj: objc.Object, _: objc.SEL, _: objc.Object) callconv(.c) vo
     if (w.on_resize) |cb| cb.func(cb.ctx, w);
 }
 
+fn willFullScreen(self_obj: objc.Object, _: objc.SEL, _: objc.Object) callconv(.c) void {
+    const w = objc.getZig(Window, self_obj) orelse return;
+    if (w.surface) |s| {
+        s.updateGeometry();
+        s.frame();
+    }
+}
+
 fn fullScreenChanged(self_obj: objc.Object, _: objc.SEL, _: objc.Object) callconv(.c) void {
     const w = objc.getZig(Window, self_obj) orelse return;
     if (w.on_fullscreen) |cb| cb.func(cb.ctx, w);
+    if (w.surface) |s| {
+        s.updateGeometry();
+        s.frame();
+    }
 }
 
 fn keyChanged(self_obj: objc.Object, _: objc.SEL, _: objc.Object) callconv(.c) void {
     const w = objc.getZig(Window, self_obj) orelse return;
     if (w.on_key) |cb| cb.func(cb.ctx, w);
+    if (w.surface) |s| if (s.visible()) s.requestFrame() else s.frame();
 }
 
 fn shouldClose(self_obj: objc.Object, _: objc.SEL, _: objc.Object) callconv(.c) objc.BOOL {

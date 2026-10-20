@@ -34,6 +34,13 @@ pub const State = struct {
     /// A key another command has, pressed once: pressed again, it moves here.
     taking: ?KeyCombo = null,
     taking_key: [16]u8 = undefined,
+    cached_hash: u64 = 0,
+    any_shown: bool = false,
+    shown_mask: [commands.all.len]bool = @splat(false),
+    has_key: [commands.all.len]bool = @splat(false),
+    changed_mask: [commands.all.len]bool = @splat(false),
+    key_bufs: [commands.all.len][24]u8 = undefined,
+    key_lens: [commands.all.len]u8 = @splat(0),
 
     pub fn deinit(s: *State) void {
         stop(s);
@@ -46,15 +53,61 @@ fn browserOf(s: *State) *Browser {
     return @fieldParentPtr("settings", fs);
 }
 
-/// By name, or by key as the menus write it: "tab" and "⌘T" both find New Tab.
-fn shown(b: *Browser, c: *ui.Context, cmd: *const Command, words: []const u8) bool {
-    if (commands.isIn(&commands.split, cmd.id) and !b.prefs.split_view) return false;
-    if (commands.isIn(&commands.ai, cmd.id) and !b.prefs.ai) return false;
-    if (words.len == 0) return true;
-    if (std.ascii.findIgnoreCase(cmd.title, words) != null) return true;
-    const key = if (b.kea.shortcuts.effective(cmd.id)) |k| c.print("{f}", .{k}) else "";
-    const bare = std.mem.replaceOwned(u8, c.alloc(), words, " ", "") catch return false;
-    return std.ascii.findIgnoreCase(key, bare) != null;
+fn stateHash(b: *Browser, words: []const u8) u64 {
+    var h = std.hash.Wyhash.init(1);
+    h.update(words);
+    h.update(&.{ @intFromBool(b.prefs.split_view), @intFromBool(b.prefs.ai) });
+    const store = &b.kea.shortcuts;
+    for (store.changed.keys(), store.changed.values()) |k, v| {
+        h.update(k);
+        if (v.key) |kc| {
+            h.update(kc.key);
+            h.update(&.{ @intFromBool(kc.command), @intFromBool(kc.shift), @intFromBool(kc.option), @intFromBool(kc.control) });
+        } else h.update(&.{0xff});
+    }
+    return h.final();
+}
+
+fn rebuildCache(b: *Browser, s: *State, words: []const u8) void {
+    const hash = stateHash(b, words);
+    if (s.cached_hash == hash) return;
+    s.cached_hash = hash;
+    s.any_shown = false;
+    const store = &b.kea.shortcuts;
+    var bare_buf: [128]u8 = undefined;
+    var bare_len: usize = 0;
+    for (words) |ch| if (ch != ' ' and bare_len < bare_buf.len) {
+        bare_buf[bare_len] = ch;
+        bare_len += 1;
+    };
+    const bare = bare_buf[0..bare_len];
+    for (&commands.all, 0..) |*cmd, n| {
+        const eff = store.effective(cmd.id);
+        s.has_key[n] = eff != null;
+        s.changed_mask[n] = store.isChanged(cmd.id);
+        var kslice: []const u8 = "None";
+        if (eff) |kc| {
+            var w: std.Io.Writer = .fixed(&s.key_bufs[n]);
+            w.print("{f}", .{kc}) catch {};
+            s.key_lens[n] = @intCast(w.end);
+            kslice = s.key_bufs[n][0..w.end];
+        } else {
+            @memcpy(s.key_bufs[n][0..4], "None");
+            s.key_lens[n] = 4;
+        }
+        var is_shown = true;
+        if (commands.isIn(&commands.split, cmd.id) and !b.prefs.split_view) {
+            is_shown = false;
+        } else if (commands.isIn(&commands.ai, cmd.id) and !b.prefs.ai) {
+            is_shown = false;
+        } else if (words.len > 0) {
+            const match_title = std.ascii.findIgnoreCase(cmd.title, words) != null;
+            const match_key = eff != null and bare.len > 0 and std.ascii.findIgnoreCase(kslice, bare) != null;
+            is_shown = match_title or match_key;
+        }
+        s.shown_mask[n] = is_shown;
+        if (is_shown) s.any_shown = true;
+    }
 }
 
 pub fn view(b: *Browser, c: *ui.Context, p: *const Palette) void {
@@ -66,16 +119,13 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette) void {
     }
     _ = plate.hunt(c, p, &s.hunt, "Search commands or keys");
     const words = std.mem.trim(u8, s.hunt.text(), " ");
-    var any = false;
-    for (&commands.all) |*cmd| if (shown(b, c, cmd, words)) {
-        any = true;
-    };
-    if (!any) plate.nothing(c, p, "No command called that, or on that key");
+    rebuildCache(b, s, words);
+    if (!s.any_shown) plate.nothing(c, p, "No command called that, or on that key");
     inline for (@typeInfo(commands.Section).@"enum".field_names) |name| {
         const section = @field(commands.Section, name);
         var first = true;
         for (&commands.all, 0..) |*cmd, n| {
-            if (cmd.section != section or !shown(b, c, cmd, words)) continue;
+            if (cmd.section != section or !s.shown_mask[n]) continue;
             if (first) {
                 ui.key(c, name);
                 ui.column(c, .{ .gap = 6, .width = .fill });
@@ -87,7 +137,7 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette) void {
             const row = c.open(.{ .width = .fill }, null);
             if (c.interact(row, .{}).right_clicked) tab_menu.later(b, c.input.mouse, n, menu);
             plate.line(c, p, cmd.title, null);
-            keyBox(b, c, p, cmd.id);
+            keyBox(b, c, p, cmd.id, n);
             ui.end(c);
             c.end();
         }
@@ -156,7 +206,7 @@ fn extensionCommands(b: *Browser, c: *ui.Context, p: *const Palette, e: *@import
         const row = c.open(.{ .width = .fill }, null);
         if (c.interact(row, .{}).right_clicked) tab_menu.later(b, c.input.mouse, commands.all.len + n, menu);
         plate.line(c, p, item.title, item.extension_name);
-        keyBox(b, c, p, item.id);
+        keyBox(b, c, p, item.id, null);
         ui.end(c);
         c.end();
     }
@@ -193,20 +243,21 @@ fn label(b: *Browser, c: *ui.Context, id: []const u8) []const u8 {
     return if (store.effective(id)) |k| c.print("{f}", .{k}) else "None";
 }
 
-fn keyBox(b: *Browser, c: *ui.Context, p: *const Palette, id: []const u8) void {
+fn keyBox(b: *Browser, c: *ui.Context, p: *const Palette, id: []const u8, cached_idx: ?usize) void {
     const s = &b.settings.shortcuts;
     const store = &b.kea.shortcuts;
     const listening = s.listening != null and std.mem.eql(u8, s.listening.?, id);
     const i = c.open(.{ .padding = .{ .left = 10, .right = 10 }, .min_width = 64, .min_height = 24, .radius = 7, .align_items = .center, .justify = .center, .control = true }, null);
     defer c.end();
     const it = c.interact(i, .{});
-    const said = label(b, c, id);
+    const said = if (!listening and cached_idx != null) s.key_bufs[cached_idx.?][0..s.key_lens[cached_idx.?]] else label(b, c, id);
     c.addA11y(i, .button, said, "", listening, true);
     const st = &c.node(i).style;
     st.background = if (listening or it.hovered) p.hover else p.ground;
     st.border = if (listening) p.ink.alpha(0.4) else p.hairline;
-    const lit = listening or store.effective(id) != null;
-    ui.text(c, said, .{ .size = 12, .weight = if (store.isChanged(id)) .semibold else .regular, .color = if (lit) p.ink else p.muted, .truncate = true });
+    const lit = listening or (if (cached_idx) |idx| s.has_key[idx] else store.effective(id) != null);
+    const is_changed = if (cached_idx) |idx| s.changed_mask[idx] else store.isChanged(id);
+    ui.text(c, said, .{ .size = 12, .weight = if (is_changed) .semibold else .regular, .color = if (lit) p.ink else p.muted, .truncate = true });
     if (it.clicked) {
         if (listening) stop(s) else listen(s, id);
         c.changed = true;

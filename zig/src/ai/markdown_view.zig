@@ -10,6 +10,12 @@ const Palette = @import("../design/palette.zig").Palette;
 const markdown = @import("markdown.zig");
 const inline_ = @import("markdown_inline.zig");
 const code = @import("markdown_view_code.zig");
+const mermaid = @import("mermaid/mermaid.zig");
+const draw = @import("mermaid/draw.zig");
+const controls = @import("../chrome/controls.zig");
+const plate = @import("../chrome/controls_plate.zig");
+
+const pictures_kept = 24;
 
 /// What the answers of one window keep between frames (`@State` of each
 /// `CodeBlock`), by the code block's box id.
@@ -21,6 +27,11 @@ pub const State = struct {
     /// Drawn diagrams' PNGs, by source, look and zoom, with the frame
     /// (`c.time`) that last showed each; owned.
     pictures: std.AutoHashMapUnmanaged(u64, Picture) = .empty,
+    /// Cached Markdown block ASTs, inline runs, and Mermaid layouts.
+    cache_arena: ?std.heap.ArenaAllocator = null,
+    blocks_cache: std.AutoHashMapUnmanaged(u64, []const markdown.Block) = .empty,
+    inlines_cache: std.AutoHashMapUnmanaged(u64, inline_.Shown) = .empty,
+    diagrams_cache: std.AutoHashMapUnmanaged(u64, ?mermaid.Diagram) = .empty,
 
     pub const Picture = struct { bytes: []u8, used: f64 };
 
@@ -30,9 +41,24 @@ pub const State = struct {
         s.pictures.deinit(gpa);
         s.sources.deinit(gpa);
         s.copied.deinit(gpa);
+        s.blocks_cache.deinit(gpa);
+        s.inlines_cache.deinit(gpa);
+        s.diagrams_cache.deinit(gpa);
+        if (s.cache_arena) |*ca| ca.deinit();
         s.* = .{};
     }
 
+    pub fn clearCache(s: *State) void {
+        if (s.cache_arena) |*ca| _ = ca.reset(.retain_capacity);
+        s.blocks_cache.clearRetainingCapacity();
+        s.inlines_cache.clearRetainingCapacity();
+        s.diagrams_cache.clearRetainingCapacity();
+    }
+
+    pub fn arenaAlloc(s: *State, gpa: std.mem.Allocator) std.mem.Allocator {
+        if (s.cache_arena == null) s.cache_arena = std.heap.ArenaAllocator.init(gpa);
+        return s.cache_arena.?.allocator();
+    }
     /// Lets go of the picture shown longest ago, unless every one was
     /// shown this frame (`now`): the renderer may still read those bytes.
     pub fn forgetOldest(s: *State, gpa: std.mem.Allocator, now: f64) void {
@@ -48,7 +74,7 @@ pub const State = struct {
     }
 };
 
-pub const Options = struct { zoom: f32 = 1, drawn: bool = false };
+pub const Options = struct { zoom: f32 = 1, drawn: bool = false, cache: bool = true };
 
 /// What every block of one answer is drawn with.
 pub const Ctx = struct {
@@ -59,10 +85,25 @@ pub const Ctx = struct {
     o: Options,
 };
 
+fn textKey(s: []const u8) u64 {
+    return std.hash.Wyhash.hash(s.len, s);
+}
+
+pub fn cachedBlocks(st: *State, gpa: std.mem.Allocator, text: []const u8, cache: bool, scratch: std.mem.Allocator) ?[]const markdown.Block {
+    const k = textKey(text);
+    if (st.blocks_cache.get(k)) |b| return b;
+    if (!cache) return markdown.blocks(scratch, text) catch null;
+    if (st.blocks_cache.count() >= 512) st.clearCache();
+    const a = st.arenaAlloc(gpa);
+    const parsed = markdown.blocks(a, text) catch return null;
+    st.blocks_cache.put(gpa, k, parsed) catch {};
+    return parsed;
+}
+
 /// `AnswerView(text:zoom:drawn:)`.
 pub fn answer(b: *Browser, c: *ui.Context, p: *const Palette, st: *State, text: []const u8, o: Options) void {
     const x: Ctx = .{ .b = b, .c = c, .p = p, .st = st, .o = o };
-    const parsed = markdown.blocks(c.alloc(), text) catch return;
+    const parsed = cachedBlocks(st, b.gpa, text, o.cache, c.alloc()) orelse return;
     ui.column(c, .{ .gap = 10 * o.zoom, .width = .fill });
     defer ui.end(c);
     for (parsed) |blk| block(&x, blk, 0);
@@ -122,8 +163,86 @@ fn block(x: *const Ctx, blk: markdown.Block, depth: usize) void {
         .rule => {
             _ = c.leaf(.{ .width = .fill, .height = .{ .px = 1 }, .background = p.hairline }, .none, null);
         },
-        .code => |cb| code.block(x, cb.language, cb.text, cb.closed),
+        .code => |cb| if (std.mem.eql(u8, cb.language, "mermaid") and cb.closed)
+            mermaidCodeBlock(x, cb.language, cb.text)
+        else
+            code.block(x, cb.language, cb.text, cb.closed),
     }
+}
+
+fn pictureKey(text: []const u8, dark: bool, zoom: f32) u64 {
+    var h = std.hash.Wyhash.init(0);
+    h.update(text);
+    h.update(&.{@intFromBool(dark)});
+    h.update(std.mem.asBytes(&zoom));
+    return h.final();
+}
+
+fn cachedDiagram(st: *State, gpa: std.mem.Allocator, text: []const u8) ?mermaid.Diagram {
+    const k = textKey(text);
+    if (st.diagrams_cache.get(k)) |d| return d;
+    if (st.diagrams_cache.count() >= 64) st.diagrams_cache.clearRetainingCapacity();
+    const d = mermaid.diagram(st.arenaAlloc(gpa), text);
+    st.diagrams_cache.put(gpa, k, d) catch {};
+    return d;
+}
+
+fn mermaidCodeBlock(x: *const Ctx, language: []const u8, text: []const u8) void {
+    const c = x.c;
+    const p = x.p;
+    const z = x.o.zoom;
+    const peek_id = c.peekId(null);
+    if (x.st.sources.contains(peek_id)) return code.block(x, language, text, true);
+    const pkey = pictureKey(text, c.theme.dark, z);
+    var png_bytes: ?[]const u8 = null;
+    if (x.st.pictures.getPtr(pkey)) |pic| {
+        pic.used = c.time;
+        png_bytes = pic.bytes;
+    } else if (cachedDiagram(x.st, x.b.gpa, text)) |d| {
+        if (x.st.pictures.count() >= pictures_kept) x.st.forgetOldest(x.b.gpa, c.time);
+        if (draw.png(x.b.gpa, d, p, z)) |bytes| {
+            x.st.pictures.put(x.b.gpa, pkey, .{ .bytes = bytes, .used = c.time }) catch {
+                x.b.gpa.free(bytes);
+                return code.block(x, language, text, true);
+            };
+            png_bytes = bytes;
+        } else |_| {}
+    }
+    const bytes = png_bytes orelse return code.block(x, language, text, true);
+
+    const i = c.open(.{ .gap = 8, .width = .fill, .padding = .all(10), .background = p.wash, .radius = 10, .border = p.hairline }, null);
+    defer c.end();
+    const id = c.node(i).id;
+    ui.row(c, .{ .gap = 6, .width = .fill, .align_items = .center });
+    ui.text(c, language, .{ .size = 11 * z, .color = p.muted });
+    ui.spacer(c);
+    if (controls.door(c, p, "chevron.left.forwardslash.chevron.right", .{ .help = "Show Code" }).clicked) {
+        x.st.sources.put(x.b.gpa, id, {}) catch {};
+        c.changed = true;
+    }
+    const until = x.st.copied.get(id);
+    const copied = if (until) |u| c.time < u else false;
+    if (until != null and !copied) _ = x.st.copied.remove(id);
+    if (copied) c.frameIn(@floatCast(until.? - c.time));
+    if (plate.quick(c, p, if (copied) "Copied" else "Copy", null).clicked) {
+        nanoui.clipboard.writeText(text);
+        x.st.copied.put(x.b.gpa, id, c.time + 1.5) catch {};
+        c.frameIn(1.5);
+        c.changed = true;
+    }
+    ui.end(c);
+    if (!x.o.drawn) ui.row(c, .{ .width = .fill, .scroll_x = true, .scroll_bar = false });
+    defer if (!x.o.drawn) ui.end(c);
+    ui.row(c, .{ .width = if (x.o.drawn) .fill else .auto, .justify = .center });
+    defer ui.end(c);
+    _ = ui.image(c, .{
+        .key = c.print("mermaid-{x}", .{pkey}),
+        .bytes = bytes,
+        .max_width = std.math.inf(f32),
+        .max_height = std.math.inf(f32),
+        .radius = 0,
+        .scale = 2,
+    });
 }
 
 /// `Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 6)`:
@@ -170,8 +289,20 @@ fn gridRow(x: *const Ctx, cells: []const []const u8, widths: []const f32, style:
 }
 
 /// The width of `src` shown on one line in `style`.
+fn cachedShown(x: *const Ctx, src: []const u8) inline_.Shown {
+    const k = textKey(src);
+    if (x.st.inlines_cache.get(k)) |sh| return sh;
+    if (!x.o.cache or x.st.inlines_cache.count() >= 4096) {
+        return inline_.shown(x.c.alloc(), src) catch inline_.Shown{ .text = src, .runs = &.{}, .links = &.{} };
+    }
+    const sh = inline_.shown(x.st.arenaAlloc(x.b.gpa), src) catch return inline_.Shown{ .text = src, .runs = &.{}, .links = &.{} };
+    x.st.inlines_cache.put(x.b.gpa, k, sh) catch {};
+    return sh;
+}
+
+/// The width of `src` shown on one line in `style`.
 fn measure(x: *const Ctx, src: []const u8, style: ui.TextStyle) f32 {
-    const shown = inline_.shown(x.c.alloc(), src) catch return x.c.text.width(src, style);
+    const shown = cachedShown(x, src);
     const spans = toSpans(x, shown) catch return x.c.text.width(shown.text, style);
     var w: f32 = 0;
     var it: Segments = .{ .spans = spans, .end = shown.text.len };
@@ -183,7 +314,7 @@ fn measure(x: *const Ctx, src: []const u8, style: ui.TextStyle) f32 {
 /// `.textSelection(.enabled)`); its web links open in a new tab when clicked.
 pub fn rich(x: *const Ctx, src: []const u8, style: ui.TextStyle, selectable: bool) void {
     const c = x.c;
-    const shown = inline_.shown(c.alloc(), src) catch inline_.Shown{ .text = src, .runs = &.{}, .links = &.{} };
+    const shown = cachedShown(x, src);
     const spans = toSpans(x, shown) catch &.{};
     const i = c.leaf(.{ .width = if (style.wrap) .fill else .auto, .selectable = selectable }, .{ .text = .{ .str = shown.text, .style = style, .color = style.color orelse x.p.ink, .spans = spans } }, null);
     for (shown.links) |l| {

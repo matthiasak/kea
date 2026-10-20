@@ -152,3 +152,74 @@ test "a sideways scroll reaches the view" {
     t.hscroll(50, 50, -30);
     try testing.expectEqual(@as(f32, -30), s.sideways);
 }
+
+test "right_clicked fires on right press and Ctrl+left press and clears down" {
+    var s: Clicks = .{};
+    var t: ui.Tester = undefined;
+    try start(&t, &s);
+    defer t.deinit();
+    // Right press alone (before release) triggers right_clicked and clears down.
+    t.moveTo(70, 40);
+    t.ctx.input.button = .right;
+    t.ctx.pointerDown();
+    t.frame();
+    try testing.expectEqual(@as(u32, 1), s.right);
+    try testing.expect(!t.ctx.input.down);
+    try testing.expectEqual(@as(u64, 0), t.ctx.active);
+    // Ctrl+left press triggers right_clicked, not left click or pressed.
+    t.ctx.input.button = .left;
+    t.ctx.input.ctrl = true;
+    t.ctx.pointerDown();
+    t.frame();
+    t.ctx.input.ctrl = false;
+    try testing.expectEqual(@as(u32, 2), s.right);
+    try testing.expectEqual(@as(u32, 0), s.left);
+    try testing.expect(!s.pressed);
+    try testing.expect(!t.ctx.input.down);
+}
+
+const ScrollBox = struct {
+    id: u64 = 0,
+    edge_clicks: u32 = 0,
+    fn view(s: *ScrollBox, c: *ui.Context) void {
+        const b = c.open(.{ .scroll = true, .direction = .column, .width = .{ .px = 100 }, .height = .{ .px = 100 } }, "sbox");
+        defer c.end();
+        s.id = c.node(b).id;
+        ui.row(c, .{ .width = .fill, .height = .{ .px = 30 }, .justify = .end });
+        const btn = c.open(.{ .width = .{ .px = 16 }, .height = .{ .px = 16 } }, "edge_btn");
+        if (c.interact(btn, .{}).clicked) s.edge_clicks += 1;
+        c.end();
+        ui.end(c);
+        for (0..9) |_| _ = c.leaf(.{ .width = .fill, .height = .{ .px = 30 } }, .none, null);
+    }
+};
+
+test "rubber-band overscroll on precise trackpad and spring back" {
+    var s: ScrollBox = .{};
+    var t: ui.Tester = undefined;
+    try t.init(testing.allocator, .init(&s, ScrollBox.view), .{});
+    defer t.deinit();
+    t.ctx.input.mouse = .{ .x = 50, .y = 50 };
+    t.ctx.input.precise = true;
+    t.ctx.input.scroll_phase = .began;
+    t.ctx.scroll_holding = true;
+    _ = t.ctx.applyScroll(40); // pull down past top (0)
+    t.frame();
+    try testing.expectApproxEqAbs(@as(f32, -14), t.ctx.overscroll.get(s.id).?, 0.1);
+    try testing.expectApproxEqAbs(@as(f32, 14), t.ctx.nodes.items[2].rect.y, 0.5);
+    // Release fingers: springs back to 0.
+    t.ctx.scroll_holding = false;
+    t.ctx.input.scroll_phase = .ended;
+    t.settle(1.5);
+    try testing.expectApproxEqAbs(@as(f32, 0), t.ctx.overscroll.get(s.id).?, 0.1);
+    try testing.expectApproxEqAbs(@as(f32, 0), t.ctx.nodes.items[2].rect.y, 0.5);
+}
+
+test "button flush against the right edge of a scroll box gets its click" {
+    var s: ScrollBox = .{};
+    var t: ui.Tester = undefined;
+    try t.init(testing.allocator, .init(&s, ScrollBox.view), .{});
+    defer t.deinit();
+    t.click(95, 8);
+    try testing.expectEqual(@as(u32, 1), s.edge_clicks);
+}

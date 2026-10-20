@@ -12,6 +12,7 @@ const none = ctx_mod.none;
 
 pub fn paint(c: *Context, out: *std.ArrayList(metal.Instance)) void {
     out.clearRetainingCapacity();
+    c.scrollbars.clearRetainingCapacity();
     c.text.images.beginPaint();
     paintNode(c, out, 0, types.Rect.infinite, 1, false);
 }
@@ -108,11 +109,7 @@ fn paintNode(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, clip:
     while (child != none) : (child = c.node(child).next) paintNode(c, out, child, child_clip, opacity, selectable);
     if ((st.clip or st.scroll or st.scroll_x) and st.radius > 0) roundClip(out.items[first..], r, visible, st.radius);
 
-    // An overlay scroller: once it scrolls, and a second after.
-    const moved = (c.scroll.get(n.id) orelse 0) + (c.scroll_x.get(n.id) orelse 0);
-    const bar = if (st.scroll_bar_fades) @import("motion.zig").flash(c, n.id, 0x6261_72, moved, 1, 0.3) else 1;
-    if (st.scroll and st.scroll_bar and bar > 0) paintScrollbar(c, out, n, visible, opacity * bar);
-    if (st.scroll_x and st.scroll_bar and bar > 0) paintScrollbarX(c, out, n, visible, opacity * bar);
+    if (st.scroll or st.scroll_x) @import("scroll.zig").paintScrollbars(c, out, n, visible, opacity);
     if (st.scale != 1) scaleItems(out.items[start..], r, st.scale, st.scale_anchor, clip4);
 }
 
@@ -291,49 +288,3 @@ fn roundClip(items: []metal.Instance, box: types.Rect, visible: types.Rect, radi
     }
 }
 
-fn paintScrollbar(c: *Context, out: *std.ArrayList(metal.Instance), n: ctx_mod.Node, visible: types.Rect, opacity: f32) void {
-    const offset = c.scroll.get(n.id) orelse 0;
-    // The content's height: from the first child's top to the last child's bottom.
-    if (n.first_child == none) return;
-    const first = c.node(n.first_child).rect;
-    const last = c.node(n.last_child).rect;
-    const content_h = last.y + last.h - first.y + n.style.padding.vertical();
-    const view_h = n.rect.h;
-    if (content_h <= view_h + 0.5) return;
-    const bar_h = @max(24, view_h * view_h / content_h);
-    const t = offset / (content_h - view_h);
-    const y = n.rect.y + (view_h - bar_h) * std.math.clamp(t, 0, 1);
-    push(c, out, .{
-        .rect = .{ n.rect.x + n.rect.w - 7, y + 2, 4, bar_h - 4 },
-        .color = metal.color4(c.theme.muted.alpha(0.5 * opacity)),
-        .radius = 2,
-        .clip = metal.clip4(visible),
-    });
-}
-
-/// The indicator of a box that scrolls sideways, along its bottom.
-fn paintScrollbarX(c: *Context, out: *std.ArrayList(metal.Instance), n: ctx_mod.Node, visible: types.Rect, opacity: f32) void {
-    const offset = c.scroll_x.get(n.id) orelse 0;
-    var x0: f32 = std.math.inf(f32);
-    var x1: f32 = -std.math.inf(f32);
-    var child = n.first_child;
-    while (child != none) : (child = c.node(child).next) {
-        const ch = c.node(child);
-        if (ch.style.absolute) continue;
-        x0 = @min(x0, ch.rect.x);
-        x1 = @max(x1, ch.rect.x + ch.rect.w);
-    }
-    if (x1 <= x0) return;
-    const content_w = x1 - x0 + n.style.padding.horizontal();
-    const view_w = n.rect.w;
-    if (content_w <= view_w + 0.5) return;
-    const bar_w = @max(24, view_w * view_w / content_w);
-    const t = offset / (content_w - view_w);
-    const x = n.rect.x + (view_w - bar_w) * std.math.clamp(t, 0, 1);
-    push(c, out, .{
-        .rect = .{ x + 2, n.rect.y + n.rect.h - 7, bar_w - 4, 4 },
-        .color = metal.color4(c.theme.muted.alpha(0.5 * opacity)),
-        .radius = 2,
-        .clip = metal.clip4(visible),
-    });
-}

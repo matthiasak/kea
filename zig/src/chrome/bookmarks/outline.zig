@@ -51,9 +51,38 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette, use: Use) void {
     if (carrying) d.aimed = null;
 
     ui.column(c, .{ .width = .fill, .gap = 1 });
-    var arrows = false;
-    for (b.bookmarks.roots) |n| arrows = arrows or n.isFolder();
-    rows(b, c, p, use, b.bookmarks.roots, 0, null, arrows, carrying);
+    const fc = b.marks_ui.flat(b.gpa, use.list, b.bookmarks);
+    const all = fc.rows.items;
+    const sid = enclosingScroll(c);
+    if (use.shown) |want| if (b.marks_ui.picks.reveal) if (sid) |id| {
+        for (all, 0..) |r, idx| if (!r.empty_placeholder and r.node.id.eql(want)) {
+            const sr_h = if (c.rects.get(id)) |sr| sr.h else 440;
+            c.setScroll(id, .y, @max(0, @as(f32, @floatFromInt(idx)) * 28.0 + 13.5 - sr_h / 2));
+            break;
+        };
+    };
+    const pitch: f32 = 28;
+    const offset = if (sid) |id| @max(0, (c.scroll.get(id) orelse 0) - 6) else 0;
+    const view_h = if (sid) |id| (if (c.rects.get(id)) |r| r.h else c.size.h) else c.size.h;
+    const first_vis: usize = @intFromFloat(@floor(offset / pitch));
+    const vis_n: usize = @intFromFloat(@ceil(view_h / pitch) + 1);
+    const first = if (all.len <= 40) 0 else first_vis -| 6;
+    const last = if (all.len <= 40) all.len else @min(all.len, first_vis + vis_n + 6);
+    if (first > 0) _ = c.leaf(.{ .width = .fill, .height = px(@as(f32, @floatFromInt(first)) * pitch - 1) }, .none, "bm.before");
+    for (all[first..last]) |item| {
+        if (item.empty_placeholder) {
+            const i = c.open(.{ .width = .fill, .height = px(27), .padding = .{ .left = indent(item.depth) + 26, .top = 5, .bottom = 5 } }, null);
+            const it = c.interact(i, .{});
+            ui.text(c, "Empty", .{ .size = 12, .color = p.muted });
+            c.end();
+            if (carrying and allows(b, c, item.node.id)) if (it.rect) |r| if (r.contains(c.input.mouse)) {
+                b.marks_ui.drag.aimed = .{ .id = item.node.id, .zone = .after, .depth = item.depth, .into = item.node.id, .at = null };
+            };
+        } else {
+            row(b, c, p, use, item.node, item.depth, item.parent, item.index, fc.arrows, item.is_open, carrying);
+        }
+    }
+    if (last < all.len) _ = c.leaf(.{ .width = .fill, .height = px(@as(f32, @floatFromInt(all.len - last)) * pitch - 1) }, .none, "bm.after");
     // Past the last row: the end of the top level, only while carrying.
     if (carrying) {
         const i = c.open(.{ .width = .fill, .height = px(10) }, "bm.end");
@@ -117,26 +146,14 @@ fn sameAim(x: ?state.Aim, y: ?state.Aim) bool {
     return x.?.zone == y.?.zone;
 }
 
-fn rows(b: *Browser, c: *ui.Context, p: *const Palette, use: Use, nodes: []const Bookmark, depth: usize, parent: ?Uuid, arrows: bool, carrying: bool) void {
-    const open = b.marks_ui.expanded(use.list);
-    for (nodes, 0..) |*node, index| {
-        const is_open = node.isFolder() and open.has(node.id);
-        row(b, c, p, use, node, depth, parent, index, arrows, is_open, carrying);
-        if (!is_open) continue;
-        const kids = node.kids();
-        if (kids.len > 0) {
-            rows(b, c, p, use, kids, depth + 1, node.id, arrows, carrying);
-            continue;
-        }
-        // Where its first bookmark would be: a drop here goes in.
-        const i = c.open(.{ .width = .fill, .padding = .{ .left = indent(depth + 1) + 26, .top = 5, .bottom = 5 } }, null);
-        const it = c.interact(i, .{});
-        ui.text(c, "Empty", .{ .size = 12, .color = p.muted });
-        c.end();
-        if (carrying and allows(b, c, node.id)) if (it.rect) |r| if (r.contains(c.input.mouse)) {
-            b.marks_ui.drag.aimed = .{ .id = node.id, .zone = .after, .depth = depth + 1, .into = node.id, .at = null };
-        };
+fn enclosingScroll(c: *ui.Context) ?u64 {
+    var k = c.stack.items.len;
+    while (k > 0) {
+        k -= 1;
+        const n = c.node(c.stack.items[k]);
+        if (n.style.scroll) return n.id;
     }
+    return null;
 }
 
 fn indent(depth: usize) f32 {
@@ -164,6 +181,7 @@ fn row(b: *Browser, c: *ui.Context, p: *const Palette, use: Use, node: *const Bo
         .gap = 8,
         .padding = .{ .left = indent(depth) + 10, .right = 10, .top = 6, .bottom = 6 },
         .width = .fill,
+        .height = px(27),
         .radius = 8,
         .align_items = .center,
         .control = true,
@@ -215,7 +233,7 @@ fn row(b: *Browser, c: *ui.Context, p: *const Palette, use: Use, node: *const Bo
     ui.text(c, label, .{ .size = 12.5, .color = if (node.unnamed()) p.muted else p.ink, .truncate = true });
     _ = c.leaf(.{ .grow = 1, .min_width = 8 }, .none, null);
     if (node.isFolder()) if (node.children) |kids| if (kids.len > 0)
-        ui.text(c, c.print("{d}", .{Bookmarks.count(kids)}), .{ .size = 11, .color = p.muted });
+        ui.text(c, c.print("{d}", .{b.bookmarks.folderCount(node.id, kids)}), .{ .size = 11, .color = p.muted });
     if (aim == .before or aim == .after) line(c, p, d.aimed.?.depth, aim.?, it.rect);
     c.end();
 
@@ -239,7 +257,7 @@ fn row(b: *Browser, c: *ui.Context, p: *const Palette, use: Use, node: *const Bo
 fn tapped(b: *Browser, c: *ui.Context, use: Use, node: *const Bookmark, double: bool) void {
     const s = &b.marks_ui;
     if (use.picks and !double) {
-        const order = state.visible(c.alloc(), b.bookmarks.roots, s.expanded(use.list)) catch return;
+        const order = s.flat(b.gpa, use.list, b.bookmarks).ids.items;
         s.picks.click(b.gpa, node.id, c.input.shift, c.input.cmd, order);
     } else if (node.isFolder()) {
         s.expanded(use.list).toggle(b.gpa, node.id);

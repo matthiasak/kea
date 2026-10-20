@@ -12,18 +12,23 @@ const Uuid = json.Uuid;
 /// A set of ids, in no order (on the window's allocator).
 pub const Ids = struct {
     items: std.ArrayList(Uuid) = .empty,
+    gen: u64 = 0,
 
     pub fn has(s: *const Ids, id: Uuid) bool {
         return bm.has(s.items.items, id);
     }
 
     pub fn put(s: *Ids, gpa: std.mem.Allocator, id: Uuid) void {
-        if (!s.has(id)) s.items.append(gpa, id) catch {};
+        if (!s.has(id)) {
+            s.items.append(gpa, id) catch {};
+            s.gen +%= 1;
+        }
     }
 
     pub fn remove(s: *Ids, id: Uuid) void {
         for (s.items.items, 0..) |x, i| if (x.eql(id)) {
             _ = s.items.swapRemove(i);
+            s.gen +%= 1;
             return;
         };
     }
@@ -35,9 +40,11 @@ pub const Ids = struct {
     pub fn set(s: *Ids, gpa: std.mem.Allocator, ids: []const Uuid) void {
         s.items.clearRetainingCapacity();
         s.items.appendSlice(gpa, ids) catch {};
+        s.gen +%= 1;
     }
 
     pub fn clear(s: *Ids) void {
+        if (s.items.items.len > 0) s.gen +%= 1;
         s.items.clearRetainingCapacity();
     }
 
@@ -45,7 +52,6 @@ pub const Ids = struct {
         s.items.deinit(gpa);
     }
 };
-
 /// Which list is drawn: each keeps its own open folders.
 pub const List = enum { dropdown, sidebar, manager };
 
@@ -71,6 +77,28 @@ pub const Drag = struct {
     aimed: ?Aim = null,
     /// A closed folder held over opens after a moment.
     spring_since: f64 = 0,
+};
+
+pub const FlatRow = struct {
+    node: *const Bookmark,
+    depth: usize,
+    parent: ?Uuid,
+    index: usize,
+    is_open: bool,
+    empty_placeholder: bool = false,
+};
+
+pub const FlatCache = struct {
+    revision: u64 = std.math.maxInt(u64),
+    expanded_gen: u64 = std.math.maxInt(u64),
+    arrows: bool = false,
+    rows: std.ArrayList(FlatRow) = .empty,
+    ids: std.ArrayList(Uuid) = .empty,
+
+    pub fn deinit(fc: *FlatCache, gpa: std.mem.Allocator) void {
+        fc.rows.deinit(gpa);
+        fc.ids.deinit(gpa);
+    }
 };
 
 /// `BookmarkPicks`: what the manager has picked, what it looks for, which
@@ -186,6 +214,12 @@ pub const State = struct {
     switch_gen: u32 = 0,
     switch_from: f32 = 0,
     switching: bool = false,
+    flats: [3]FlatCache = .{ .{}, .{}, .{} },
+    found_arena: ?std.heap.ArenaAllocator = null,
+    found_revision: u64 = std.math.maxInt(u64),
+    found_query_hash: u64 = std.math.maxInt(u64),
+    found_hits: []bm.Match = &.{},
+    found_order: []Uuid = &.{},
 
     pub fn expanded(s: *State, list: List) *Ids {
         return switch (list) {
@@ -195,6 +229,54 @@ pub const State = struct {
         };
     }
 
+    pub fn flat(s: *State, gpa: std.mem.Allocator, list: List, bookmarks: *const bm.Bookmarks) *const FlatCache {
+        const open = s.expanded(list);
+        const fc = &s.flats[@intFromEnum(list)];
+        if (fc.revision == bookmarks.revision and fc.expanded_gen == open.gen) return fc;
+        fc.revision = bookmarks.revision;
+        fc.expanded_gen = open.gen;
+        fc.arrows = false;
+        for (bookmarks.roots) |n| fc.arrows = fc.arrows or n.isFolder();
+        fc.rows.clearRetainingCapacity();
+        fc.ids.clearRetainingCapacity();
+        buildFlat(fc, gpa, bookmarks.roots, open, 0, null);
+        return fc;
+    }
+
+    fn buildFlat(fc: *FlatCache, gpa: std.mem.Allocator, nodes: []const Bookmark, open: *const Ids, depth: usize, parent: ?Uuid) void {
+        for (nodes, 0..) |*node, index| {
+            const is_open = node.isFolder() and open.has(node.id);
+            fc.rows.append(gpa, .{ .node = node, .depth = depth, .parent = parent, .index = index, .is_open = is_open }) catch return;
+            fc.ids.append(gpa, node.id) catch return;
+            if (!is_open) continue;
+            const kids = node.kids();
+            if (kids.len > 0) {
+                buildFlat(fc, gpa, kids, open, depth + 1, node.id);
+            } else {
+                fc.rows.append(gpa, .{ .node = node, .depth = depth + 1, .parent = node.id, .index = 0, .is_open = false, .empty_placeholder = true }) catch return;
+            }
+        }
+    }
+
+    pub fn cachedMatches(s: *State, gpa: std.mem.Allocator, bookmarks: *const bm.Bookmarks, query: []const u8) struct { hits: []const bm.Match, order: []const Uuid } {
+        const qhash = std.hash.Wyhash.hash(0, query);
+        if (s.found_revision == bookmarks.revision and s.found_query_hash == qhash and s.found_arena != null) {
+            return .{ .hits = s.found_hits, .order = s.found_order };
+        }
+        if (s.found_arena == null) {
+            s.found_arena = std.heap.ArenaAllocator.init(gpa);
+        } else {
+            _ = s.found_arena.?.reset(.retain_capacity);
+        }
+        const a = s.found_arena.?.allocator();
+        s.found_revision = bookmarks.revision;
+        s.found_query_hash = qhash;
+        s.found_hits = bookmarks.matches(a, query) catch &.{};
+        s.found_order = a.alloc(Uuid, s.found_hits.len) catch &.{};
+        for (s.found_hits, s.found_order) |h, *o| o.* = h.node.id;
+        return .{ .hits = s.found_hits, .order = s.found_order };
+    }
+
     pub fn deinit(s: *State, gpa: std.mem.Allocator) void {
         s.card_title.deinit();
         s.dropdown.deinit(gpa);
@@ -202,6 +284,9 @@ pub const State = struct {
         s.picks.deinit(gpa);
         s.drag.carrying.deinit(gpa);
         s.menu_for.deinit(gpa);
+        for (&s.flats) |*fc| fc.deinit(gpa);
+        if (s.found_arena) |*fa| fa.deinit();
+        s.found_arena = null;
     }
 };
 

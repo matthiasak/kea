@@ -15,7 +15,8 @@ const Palette = palette.Palette;
 const metrics = @import("../design/metrics.zig");
 const motion = @import("../design/motion.zig");
 const card = @import("../design/card.zig");
-const Room = @import("room.zig").Room;
+const room_mod = @import("room.zig");
+const Room = room_mod.Room;
 const presence = @import("presence.zig");
 const bars = @import("bars.zig");
 const hidden_panel = @import("hidden_panel.zig");
@@ -242,7 +243,7 @@ fn drawBookmarksBar(b: *Browser, c: *ui.Context, p: *const Palette, r: Room, swa
         const trail = if (right) r.chrome().w else r.farGap();
         at.* = .{ .x = lead, .y = r.band(), .w = c.size.w - lead - trail, .cards = r.cards() };
     }
-    _ = c.open(.{ .absolute = true, .width = .fill, .height = .fill, .opacity = std.math.clamp(t, 0, 1) }, "kea.bar.fade");
+    _ = c.open(.{ .absolute = true, .width = .fill, .height = .fill, .offset = .{ .y = (t - 1) * room_mod.bar_height }, .opacity = std.math.clamp(t, 0, 1) }, "kea.bar.fade");
     defer c.end();
     @import("bookmarks/bar.zig").view(b, c, p, at.x, at.y, at.w, at.cards);
 }
