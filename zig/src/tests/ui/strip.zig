@@ -114,7 +114,7 @@ test "right click opens tab menu" {
     const want = [_][]const u8{
         "Pin",          "Move to New Window", "-",          "Rename",           "Duplicate",
         "Site Information…", "Copy Address", "Copy as Markdown Link", "Send to Device", "Mute Tab",
-        "Put to Sleep", "-",                  "Close Tab",  "Close Other Tabs", "Reopen Closed Tab",
+        "Put to Sleep", "Put Other Tabs to Sleep", "-",     "Close Tab",        "Close Other Tabs", "Reopen Closed Tab",
     };
     try std.testing.expectEqual(want.len, items.len);
     for (want, items) |w, it| {

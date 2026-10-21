@@ -23,6 +23,7 @@ const substitutions = @import("../web/substitutions.zig");
 const Substitution = substitutions.Substitution;
 const bookmarks_menu = @import("../chrome/bookmarks/menu.zig");
 const send = @import("../sync/send.zig");
+const Uuid = @import("../data/json.zig").Uuid;
 
 /// The bar's own menus, in its order.
 pub const Top = enum { app, file, edit, view, tabs, bookmarks, history, window };
@@ -173,6 +174,7 @@ const Act = struct {
             .set_listed => |listed| if (b.activeTab()) |t| b.setListed(t, listed),
             .change_letter => if (b.activeTab()) |t| b.editLetter(t),
             .unpin => if (b.activeTab()) |t| b.unpin(t),
+            .to_space => |id| if (b.activeTab()) |t| b.moveToSpace(t, id),
             .glyph => |g| b.prefs.set("glyph", g),
             .show_substitutions => substitutions.showPanel(),
             .substitution => |s| substitutions.toggleSubstitution(b, s),
@@ -192,6 +194,7 @@ const What = union(enum) {
     set_listed: bool,
     change_letter,
     unpin,
+    to_space: Uuid,
     glyph: Glyph,
     show_substitutions,
     substitution: Substitution,
@@ -431,21 +434,32 @@ fn tabs(m: *Build, active: ?*@import("../web/tab.zig").Tab, blank: bool) !void {
     if (active) |t| {
         const rows = b.prefs.showsPinRows();
         if (t.pin == null) {
-            try m.plain("Pin Tab", .{ .pin = false }, t.isBlank() or t.shy);
+            try m.command("tabs.pin", .{ .disabled = t.isBlank() or t.shy });
             if (rows) try m.plain("Pin Tab as Row", .{ .pin = true }, t.isBlank() or t.shy);
         } else {
             if (rows) try m.plain(if (t.listed) "Show Pin as Square" else "Show Pin as Row", .{ .set_listed = !t.listed }, false);
             if (!(rows and t.listed)) try m.plain("Change Letter", .change_letter, false);
-            try m.plain("Unpin Tab", .unpin, false);
+            try m.command("tabs.pin", .{ .label = "Unpin Tab" });
         }
-    }
+    } else try m.command("tabs.pin", .{ .disabled = true });
     try m.command("tabs.rename", .{ .disabled = active == null });
     try m.command("tabs.duplicate", .{ .disabled = blank });
+    try m.command("tabs.toggleMute", .{ .label = if (active != null and active.?.muted) "Unmute Tab" else "Mute Tab", .disabled = active == null });
+    try m.command("tabs.newGroup", .{ .disabled = if (active) |t| t.pin != null or t.shy else true });
+    if (b.prefs.uses_spaces) {
+        var sp: Build = .{ .a = m.a, .kea = m.kea, .b = b };
+        const can_move = if (active) |t| t.pin == null and !t.shy else false;
+        for (b.kea.spaces.value) |s| if (!s.id.eql(b.space_id)) {
+            try sp.add(.{ .label = s.name, .disabled = !can_move, .click = try sp.act(.{ .to_space = s.id }) });
+        };
+        try m.add(.{ .label = "Move Tab to Space", .disabled = !can_move or sp.out.items.len == 0, .submenu = sp.out.items });
+    }
     try m.command("tabs.copyAddress", .{ .disabled = blank });
     try m.command("tabs.copyMarkdown", .{ .disabled = blank });
     if (active) |t| try m.add(try send.menu(m.a, b, t));
     try m.command("tabs.pasteAndGo", .{});
     try m.line();
     try m.command("tabs.closeOthers", .{ .disabled = b.tabs.items.len < 2 });
+    try m.command("tabs.sleepOthers", .{ .disabled = b.tabs.items.len < 2 });
     try m.command("tabs.mute", .{});
 }

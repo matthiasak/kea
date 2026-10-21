@@ -98,6 +98,7 @@ const Pick = struct {
         copy_link,
         mute,
         sleep,
+        sleep_others,
         close,
         close_others,
         reopen,
@@ -158,6 +159,7 @@ const Pick = struct {
             },
             .mute => t.toggleMute(),
             .sleep => if (comptime sleeps) b.sleep(t, slept),
+            .sleep_others => @import("../web/sleep.zig").sleepOthers(b),
             .close => b.close(t),
             .close_others => b.closeOthers(t),
             .reopen => b.reopen(),
@@ -278,6 +280,7 @@ pub fn items(arena: std.mem.Allocator, b: *Browser, tab: *Tab) ![]MenuItem {
     // nor one that has to stay awake.
     const awake = if (comptime sleeps) b.awake(tab) != null else true;
     try out.append(arena, try add.plain("Put to Sleep", .sleep, awake));
+    try out.append(arena, try add.plain("Put Other Tabs to Sleep", .sleep_others, b.tabs.items.len < 2));
     try out.append(arena, .separator);
     try out.append(arena, try add.plain("Close Tab", .close, false));
     try out.append(arena, try add.plain("Close Other Tabs", .close_others, b.tabs.items.len < 2));

@@ -104,12 +104,16 @@ pub const all = [_]Command{
     c("tabs.focusOtherPane", "Focus Other Page", .tabs, null, act.focusOther),
     c("tabs.swapSplit", "Swap Pages", .tabs, null, act.swap),
     c("tabs.separateSplit", "Separate Split Tabs", .tabs, null, act.separate),
+    c("tabs.pin", "Pin Tab", .tabs, k("p", .{ .option = true }), act.pin),
     c("tabs.rename", "Rename Tab", .tabs, null, act.rename),
     c("tabs.duplicate", "Duplicate Tab", .tabs, k("d", .{}), Browser.duplicate),
+    c("tabs.toggleMute", "Mute Tab", .tabs, k("m", .{ .option = true, .shift = true }), act.toggleMute),
+    c("tabs.newGroup", "New Tab Group", .tabs, k("g", .{ .option = true }), act.newGroup),
     c("tabs.copyAddress", "Copy Address", .tabs, k("c", .{ .shift = true }), Browser.copyAddress),
     c("tabs.copyMarkdown", "Copy as Markdown Link", .tabs, null, Browser.copyMarkdownLink),
     c("tabs.pasteAndGo", "Paste and Go", .tabs, k("v", .{ .shift = true }), Browser.pasteAndGo),
     c("tabs.closeOthers", "Close Other Tabs", .tabs, null, act.closeOthers),
+    c("tabs.sleepOthers", "Put Other Tabs to Sleep", .tabs, k("z", .{ .option = true }), @import("../web/sleep.zig").sleepOthers),
     c("tabs.mute", "Stop Sound in Tab", .tabs, k("m", .{ .shift = true }), Browser.pauseMedia),
 
     c("bookmarks.add", "Add This Page", .bookmarks, k("b", .{ .shift = true }), Browser.bookmarkCurrent),
@@ -212,6 +216,19 @@ const act = struct {
     fn separate(b: *Browser) void {
         if (!b.prefs.split_view) return;
         if (b.activeTab()) |t| b.detachSplit(t);
+    }
+    fn pin(b: *Browser) void {
+        const t = b.activeTab() orelse return;
+        if (t.pin != null) b.unpin(t) else if (!t.isBlank() and !t.shy) b.pin(t, false);
+    }
+    fn toggleMute(b: *Browser) void {
+        if (b.activeTab()) |t| t.toggleMute();
+    }
+    fn newGroup(b: *Browser) void {
+        const t = b.activeTab() orelse return;
+        if (t.pin != null or t.shy) return;
+        if (!b.prefs.uses_tab_groups) b.prefs.set("uses_tab_groups", true);
+        _ = b.addTabGroup(t);
     }
     fn rename(b: *Browser) void {
         if (b.activeTab()) |t| b.beginTabRename(t);

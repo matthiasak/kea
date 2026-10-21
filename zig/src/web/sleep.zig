@@ -231,3 +231,20 @@ fn pictured(t: *Tab, _: bool, picture: ?[]u8, arg: usize) void {
     b.redraw();
     finish(t, ask, "asleep");
 }
+
+/// `sleepOthers`: puts every other tab in this Space that can sleep to sleep.
+// ponytail: covers this Space only; other Spaces' tabs sleep on their own timer.
+pub fn sleepOthers(b: *Browser) void {
+    const vis = b.visibleTabIDs();
+    var count: usize = 0;
+    for (b.tabs.items) |t| {
+        if (t.id == b.active_id or t.id == vis[0] or t.id == vis[1]) continue;
+        if (b.awake(t) != null) continue;
+        b.sleep(t, null);
+        count += 1;
+    }
+    if (count == 0) return b.announce("No other tabs to put to sleep");
+    var buf: [64]u8 = undefined;
+    const msg = if (count == 1) "1 tab put to sleep" else std.fmt.bufPrint(&buf, "{d} tabs put to sleep", .{count}) catch "Tabs put to sleep";
+    b.announce(msg);
+}
