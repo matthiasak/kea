@@ -23,6 +23,7 @@ extern "c" fn CGEventCreateScrollWheelEvent2(
 extern "c" fn CGEventSetLocation(event: *anyopaque, location: objc.CGPoint) void;
 extern "c" fn CFRelease(cf: *anyopaque) void;
 extern "c" fn NSTemporaryDirectory() objc.Object;
+extern "c" fn kill(pid: c_int, sig: c_int) c_int;
 
 pub const ExtraMetrics = struct {
     fps: f64 = 0,
@@ -81,8 +82,31 @@ pub fn run(
             .http = http,
         };
         defer {
+            var web_pids: [32]c_int = undefined;
+            var web_pid_count: usize = 0;
+            if (h.kea) |k| for (k.browsers.items) |bw| for (bw.tabs.items) |tab| {
+                const wv = tab.web orelse continue;
+                if (!objc.msg(objc.BOOL, wv, "respondsToSelector:", .{objc.sel("_webProcessIdentifier")})) continue;
+                const pid = objc.msg(c_int, wv, "_webProcessIdentifier", .{});
+                if (pid > 0 and web_pid_count < web_pids.len) {
+                    web_pids[web_pid_count] = pid;
+                    web_pid_count += 1;
+                }
+            };
             h.quit();
-            nanoui.runFor(0.02);
+            const deadline = ui.clock.now() + 3.0;
+            while (ui.clock.now() < deadline) {
+                var any_alive = false;
+                for (web_pids[0..web_pid_count]) |pid| {
+                    if (kill(pid, 0) == 0) {
+                        any_alive = true;
+                        break;
+                    }
+                }
+                if (!any_alive) break;
+                nanoui.runFor(0.05);
+            }
+            nanoui.runFor(0.5);
             h.temp.deinit(gpa);
         }
 
@@ -90,7 +114,7 @@ pub fn run(
         if (start_res) |b| {
             const s = b.window.?.surface.?;
             const fl = &s.frame_log.?;
-            waitLoop(0.15);
+            waitLoop(0.5);
 
             const spans_res = sc.run(&h, b, s, fl);
             s.renderer.waitIdle();

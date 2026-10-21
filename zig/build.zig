@@ -103,7 +103,7 @@ pub fn build(b: *std.Build) void {
     const run_smooth = b.addRunArtifact(smooth);
     run_smooth.addArg("--onscreen");
     run_smooth.has_side_effects = true;
-    b.step("smooth", "Run on-screen smoothness scenarios S1-S13").dependOn(&run_smooth.step);
+    b.step("smooth", "Run on-screen smoothness scenarios S1-S16").dependOn(&run_smooth.step);
 
     // Chrome states rendered to PNGs ($KEA_SNAPSHOTS or $TMPDIR/kea-snapshots)
     const snaps = b.addExecutable(.{ .name = "kea-snapshots", .root_module = harness(b, "src/tests/snapshots.zig", target, optimize) });
