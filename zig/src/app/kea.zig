@@ -89,8 +89,14 @@ pub const Kea = struct {
     ext: ?*@import("../ext/controller.zig").Extensions = null,
     /// Temporary CSV written by `passwords/apple.zig` `move`, removed at quit.
     moved_csv: ?[]u8 = null,
+    launch_t0: f64 = 0,
+    launch_ai_ms: f64 = 0,
+    launch_history_ms: f64 = 0,
+    launch_ext_ms: f64 = 0,
+    launch_create_ms: f64 = 0,
 
     pub fn create(gpa: std.mem.Allocator, ui_app: ?*nanoui.App, opts: Options) !*Kea {
+        const t_start = nanoui.ui.clock.now();
         const self = try gpa.create(Kea);
         errdefer gpa.destroy(self);
         self.* = .{
@@ -111,9 +117,14 @@ pub const Kea = struct {
         });
         self.passkeys = .init(self);
         self.passkeys.on_changed = .{ .ctx = self, .func = @import("../passwords/form_relay.zig").passkeysOffered };
+        self.launch_t0 = t_start;
+        const t_ai = nanoui.ui.clock.now();
         self.ai = try @import("../ai/ai.zig").Ai.create(gpa, &self.store, &self.prefs, opts.root != null);
+        self.launch_ai_ms = (nanoui.ui.clock.now() - t_ai) * 1000.0;
         self.ai.open_settings = @import("../model/browser_chat.zig").openAISettings;
+        const t_hist = nanoui.ui.clock.now();
         self.history.init(gpa, &self.store);
+        self.launch_history_ms = (nanoui.ui.clock.now() - t_hist) * 1000.0;
         self.shortcuts = .init(gpa, &self.store);
         self.bookmarks = Bookmarks.init(gpa, &self.store);
         self.site_search = SiteSearch.init(gpa, &self.store);
@@ -137,8 +148,10 @@ pub const Kea = struct {
         self.fetches = .{ .kea = self, .gpa = gpa };
         // Before any tab is built: every page view is handed its controller.
         // Failing that, the browser opens without extensions.
+        const t_ext = nanoui.ui.clock.now();
         if (@import("../ext/ext.zig").available() and !opts.headless)
             self.ext = @import("../ext/controller.zig").Extensions.create(self) catch null;
+        self.launch_ext_ms = (nanoui.ui.clock.now() - t_ext) * 1000.0;
         // Its popups and the recording pill are Kea's own windows.
         if (self.ext) |e| {
             @import("../ext/popup.zig").install(e);
@@ -154,6 +167,7 @@ pub const Kea = struct {
         self.sync.shortcuts_changed = shortcutsChanged;
         // AppleScript reads this app's windows (app/scripting.zig).
         if (ui_app != null) @import("scripting.zig").install(self);
+        self.launch_create_ms = (nanoui.ui.clock.now() - t_start) * 1000.0;
         return self;
     }
 

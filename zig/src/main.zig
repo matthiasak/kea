@@ -35,6 +35,10 @@ pub fn main(init: std.process.Init) !void {
     k.sync.start();
     // Addresses from other apps have somewhere to go from here on.
     links.hand(k);
+    const ready_ms = (nanoui.ui.clock.now() - k.launch_t0) * 1000.0;
+    std.log.info("launch: ai {d:.1} ms, history {d:.1} ms, ext {d:.1} ms, create {d:.1} ms, ready {d:.1} ms", .{
+        k.launch_ai_ms, k.launch_history_ms, k.launch_ext_ms, k.launch_create_ms, ready_ms,
+    });
     try app.run();
 }
 
