@@ -170,6 +170,22 @@ test "welcome walks its pages and is seen once" {
     try t.expect(!f.tester.hasText("Bring things over."));
 }
 
+test "welcome features page toggles prefs" {
+    var f: Fixture = undefined;
+    try f.init(gpa, .{ .welcome = true });
+    defer f.deinit();
+    const b = f.browser;
+    b.welcome.page = 3;
+    f.tester.settle(2);
+    try t.expect(f.tester.hasText("Make " ++ app.kea.app_name ++ " yours"));
+    try clickControl(&f, .switch_toggle, "Spaces");
+    try t.expect(b.prefs.uses_spaces);
+    try clickControl(&f, .switch_toggle, "Split View");
+    try t.expect(b.prefs.split_view);
+    try clickControl(&f, .switch_toggle, "Bookmarks bar");
+    try t.expect(b.prefs.bookmarks_bar);
+}
+
 test "Settings fields with a placeholder keep focus past the first key" {
     var f: Fixture = undefined;
     try f.init(gpa, .{});

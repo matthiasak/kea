@@ -39,6 +39,7 @@ const states = [_]State{
     .{ .name = "p8-settings-ai", .opts = .{ .sidebar = true, .tabs = 2 }, .setup = settingsOn(.ai) },
     .{ .name = "p8-settings-about", .opts = .{ .sidebar = true, .tabs = 2 }, .setup = settingsOn(.about) },
     .{ .name = "p8-welcome", .opts = .{ .sidebar = true, .welcome = true } },
+    .{ .name = "p8-welcome-features", .opts = .{ .sidebar = true, .welcome = true }, .setup = welcomeFeatures },
     .{ .name = "p8-history", .opts = .{ .sidebar = true, .tabs = 2 }, .setup = @import("snapshots_recall.zig").history },
     .{ .name = "p8-downloads", .opts = .{ .sidebar = true, .tabs = 2 }, .setup = @import("snapshots_recall.zig").downloads },
     .{ .name = "p8-find", .opts = .{ .sidebar = false, .tabs = 2 }, .setup = @import("snapshots_recall.zig").find },
@@ -65,6 +66,10 @@ fn settingsOn(comptime page: @import("kea").settings.Page) *const fn (*Fixture) 
             @import("kea").settings.open(f.browser, page);
         }
     }.setup;
+}
+
+fn welcomeFeatures(f: *Fixture) void {
+    f.browser.welcome.page = 3;
 }
 
 /// Settings › Sync with a folder chosen, waiting for the passphrase. A

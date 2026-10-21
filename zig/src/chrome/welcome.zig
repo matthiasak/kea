@@ -1,6 +1,6 @@
-//! The first time (`WelcomePanel`, Welcome.swift): four short pages over
-//! the whole window — what this is, what to bring over, how to hold it, and
-//! whether links from other apps come here — each sliding in 40 points and
+//! The first time (`WelcomePanel`, Welcome.swift): five short pages over
+//! the whole window — what this is, what to bring over, how to hold it,
+//! which features to turn on, and whether links from other apps come here —
 //! fading under `Motion.glide`, at most 520 wide, every one skippable.
 //! Shown until `welcomed`; again from the menu (`welcoming`).
 const std = @import("std");
@@ -29,7 +29,7 @@ pub const State = struct {
     shown: bool = false,
 };
 
-const pages = 4;
+const pages = 5;
 const panel_id: u64 = std.hash.Wyhash.hash(0, "kea.welcome");
 
 pub fn view(b: *Browser, c: *ui.Context, p: *const Palette) void {
@@ -67,6 +67,7 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette) void {
             0 => welcome(c, p),
             1 => bring(b, c, p),
             2 => hold(b, c, p),
+            3 => features(b, c, p),
             else => linksPage(b, c, p),
         }
         c.end();
@@ -162,6 +163,29 @@ fn choice(c: *ui.Context, p: *const Palette, title: []const u8, detail: []const 
     ui.text(c, detail, .{ .size = 11.5, .color = p.muted });
     ui.end(c);
     _ = controls.switch_(c, p, on, title);
+}
+
+fn toggle(c: *ui.Context, p: *const Palette, b: *Browser, comptime field: []const u8, title: []const u8, detail: []const u8) bool {
+    var on = @field(b.prefs, field);
+    choice(c, p, title, detail, &on);
+    if (on == @field(b.prefs, field)) return false;
+    b.prefs.set(field, on);
+    return true;
+}
+
+fn features(b: *Browser, c: *ui.Context, p: *const Palette) void {
+    ui.column(c, .{ .gap = 22, .width = .fill });
+    defer ui.end(c);
+    heading(c, p, "Make " ++ app_name ++ " yours", "A few things kept out of the way until you ask for them. You can change any of them later in Settings.");
+    ui.column(c, .{ .gap = 14, .width = .fill });
+    _ = toggle(c, p, b, "uses_spaces", "Spaces", "Separate sets of tabs and sign-ins, switched with ⌃1–⌃9 or a swipe");
+    _ = toggle(c, p, b, "uses_tab_groups", "Tab groups", "Fold tabs into named, coloured groups");
+    if (toggle(c, p, b, "split_view", "Split View", "Two pages side by side in one tab (⌥⌘N)"))
+        for (b.kea.browsers.items) |w| w.splitViewChanged(b.prefs.split_view);
+    if (toggle(c, p, b, "bookmarks_bar", "Bookmarks bar", "A row of your top-level bookmarks under the toolbar"))
+        @import("side_panels.zig").redrawAll(b.kea);
+    _ = toggle(c, p, b, "command_bar", "Address bar commands", "Type \"settings\" or \"new tab\" in the address field to run it");
+    ui.end(c);
 }
 
 fn hold(b: *Browser, c: *ui.Context, p: *const Palette) void {
