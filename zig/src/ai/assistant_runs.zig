@@ -108,7 +108,7 @@ pub const Asking = struct {
     }
 };
 
-const Phase = enum { reading, keying, streaming };
+pub const Phase = enum { reading, keying, streaming, tooling };
 
 fn copyProvider(a: A, p: ai.Provider) !ai.Provider {
     return json.clone(a, p);

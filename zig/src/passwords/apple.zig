@@ -17,7 +17,10 @@ const vault_csv = @import("vault_csv.zig");
 const files = @import("../import/files.zig");
 
 extern "c" fn access(path: [*:0]const u8, mode: c_int) c_int;
-extern "c" fn chmod(path: [*:0]const u8, mode: c_uint) c_int;
+extern "c" fn mkdir(path: [*:0]const u8, mode: c_uint) c_int;
+extern "c" fn open(path: [*:0]const u8, oflag: c_int, mode: c_uint) c_int;
+extern "c" fn write(fd: c_int, buf: [*]const u8, nbyte: usize) isize;
+extern "c" fn close(fd: c_int) c_int;
 extern "c" fn unlink(path: [*:0]const u8) c_int;
 
 const heap = std.heap.c_allocator;
@@ -123,15 +126,23 @@ fn proved(ctx: *MoveCtx, ok: bool) void {
         };
     }
     const bytes = vault_csv.write(gpa, logins.items) catch return;
+    defer {
+        std.crypto.secureZero(u8, bytes);
+        gpa.free(bytes);
+    }
     for (logins.items) |l| std.crypto.secureZero(u8, l.password);
-    const folder = files.scratchFolder(gpa) catch return gpa.free(bytes);
+    const folder = files.scratchFolder(gpa) catch return;
     defer gpa.free(folder);
-    const path = std.fs.path.join(gpa, &.{ folder, "Kea Passwords.csv" }) catch return gpa.free(bytes);
-    kea.store.disk.write(path, bytes, true);
-    if (gpa.dupeSentinel(u8, path, 0)) |z| {
-        defer gpa.free(z);
-        _ = chmod(z, 0o600);
-    } else |_| {}
+    const folder_z = gpa.dupeSentinel(u8, folder, 0) catch return;
+    defer gpa.free(folder_z);
+    _ = mkdir(folder_z, 0o700);
+    const path = std.fs.path.join(gpa, &.{ folder, "Kea Passwords.csv" }) catch return;
+    const path_z = gpa.dupeSentinel(u8, path, 0) catch return gpa.free(path);
+    defer gpa.free(path_z);
+    const fd = open(path_z, 0x0601, 0o600);
+    if (fd < 0) return gpa.free(path);
+    _ = write(fd, bytes.ptr, bytes.len);
+    _ = close(fd);
     if (kea.moved_csv) |old| {
         kea.store.disk.remove(old);
         gpa.free(old);

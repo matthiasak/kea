@@ -82,7 +82,7 @@ pub fn dropChoice(b: *Browser) void {
 
 pub fn step(b: *Browser, dir: i2) void {
     const a = &b.passwords.accounts;
-    const s = &(a.suggesting orelse return);
+    const s = if (a.suggesting) |*x| x else return;
     const count: i64 = @intCast(s.passkeys.len + s.logins.len);
     if (count == 0) return;
     s.shown = 0;

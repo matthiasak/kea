@@ -9,6 +9,8 @@ const menus = @import("app/menus.zig");
 const keys = @import("app/keys.zig");
 const importing = @import("model/browser_import.zig");
 
+pub const std_options: std.Options = .{ .log_level = .info };
+
 pub fn main(init: std.process.Init) !void {
     // Closing the last window keeps the app, as Safari and Chrome do (#327).
     const app = try nanoui.App.create(init, .{ .name = kea.app_name, .quit_on_last_window_closed = false });

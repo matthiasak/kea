@@ -62,6 +62,7 @@ pub const Surface = struct {
     cached_theme: Theme = Theme.light,
     reduce_motion: bool = false,
     is_visible: bool = false,
+    released: bool = false,
     in_live_resize: bool = false,
     geometry_changed: bool = false,
     transparent: bool = false,
@@ -481,17 +482,14 @@ pub const Surface = struct {
         self.link_fps = fps;
         const s = self.max_fps;
         const Range = extern struct { minimum: f32, maximum: f32, preferred: f32 };
-        const range: Range = if (fps == 0)
-            .{ .minimum = s, .maximum = s, .preferred = s }
-        else
-            .{ .minimum = fps, .maximum = fps, .preferred = fps };
+        const range: Range = if (fps == 0) .{ .minimum = s, .maximum = s, .preferred = s } else .{ .minimum = fps, .maximum = fps, .preferred = fps };
         objc.msg(void, link, "setPreferredFrameRateRange:", .{range});
     }
 
     pub fn visible(self: *Surface) bool {
         if (!self.is_visible) {
             self.is_visible = objc.msg(objc.BOOL, self.window.nswindow, "isVisible", .{}) and (objc.msg(objc.NSUInteger, self.window.nswindow, "occlusionState", .{}) & 2 != 0);
-            if (self.is_visible) self.renderer.resize(self.size, self.scale);
+            if (self.is_visible and self.released) { self.released = false; self.renderer.resize(self.size, self.scale); }
         }
         return self.is_visible;
     }
@@ -499,21 +497,19 @@ pub const Surface = struct {
     fn setPaced(self: *Surface, on: bool) void {
         if (self.paced == on) return;
         self.paced = on;
-        if (!on) {
-            if (self.frame_log) |*fl| fl.last_t = 0;
-        }
+        if (!on) if (self.frame_log) |*fl| { fl.last_t = 0; };
         if (self.display_link) |link| objc.msg(void, link, "setPaused:", .{!on});
     }
 
-    /// The window was shown, uncovered or covered.
     pub fn occlusionChanged(self: *Surface) void {
         const was = self.is_visible;
         self.is_visible = objc.msg(objc.BOOL, self.window.nswindow, "isVisible", .{}) and (objc.msg(objc.NSUInteger, self.window.nswindow, "occlusionState", .{}) & 2 != 0);
         if (was and !self.is_visible) {
             self.pending = true;
+            self.released = true;
             self.renderer.resize(.{ .w = 1, .h = 1 }, self.scale);
         } else if (!was and self.is_visible) {
-            self.renderer.resize(self.size, self.scale);
+            if (self.released) { self.released = false; self.renderer.resize(self.size, self.scale); }
             if (self.pending) self.frame();
         }
     }

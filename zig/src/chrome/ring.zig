@@ -88,7 +88,9 @@ fn paint(b: cg.Bitmap, p: Picture) void {
     }
 }
 
-fn show(c: *ui.Context, p: Picture) void {
+fn show(c: *ui.Context, raw: Picture) void {
+    var p = raw;
+    p.size = @round(p.size * 2) / 2;
     const bytes = png(p) orelse {
         _ = c.leaf(.{ .width = .{ .px = p.size }, .height = .{ .px = p.size } }, .none, null);
         return;

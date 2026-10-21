@@ -89,7 +89,7 @@ test "account list arrow keys move highlight and return fills" {
     const logins = try gpa.alloc(app.vault.Login, 2);
     logins[0] = try (app.vault.Login{ .host = @constCast("example.com"), .user = @constCast("one@example.com"), .password = @constCast("p1") }).clone(gpa);
     logins[1] = try (app.vault.Login{ .host = @constCast("example.com"), .user = @constCast("two@example.com"), .password = @constCast("p2") }).clone(gpa);
-    b.passwords.accounts.suggesting = .{ .tab = tab.id, .logins = logins, .passkeys = try gpa.alloc(app.passkeys.Offered, 0), .host = try gpa.dupe(u8, "example.com"), .clear = false, .shown = 0 };
+    b.passwords.accounts.suggesting = .{ .tab = tab.id, .logins = logins, .passkeys = try gpa.alloc(app.passkeys.Offered, 0), .host = try gpa.dupe(u8, "example.com"), .clear = false, .shown = app.json.toUnix(app.json.now()) };
     b.passwords.accounts.spot = .{ .x = 40, .y = 100, .w = 300, .h = 30 };
     f.tester.settle(1);
     try t.expect(f.press("", 125, .{}));
@@ -142,6 +142,9 @@ test "Apple Passwords extension enabled steps Kea's sign-in list aside" {
     var f: Fixture = undefined;
     try f.init(gpa, .{});
     defer f.deinit();
+    const b = f.browser;
+    const tab = b.activeTab().?;
+    try t.expect(app.form_relay.fills(tab));
     const e = (try @import("ext_fixture.zig").controller(&f)) orelse return;
     try e.installed.append(e.gpa, .{
         .id = try e.gpa.dupe(u8, app.ext_controller.Extensions.apple_passwords_id),
@@ -152,8 +155,7 @@ test "Apple Passwords extension enabled steps Kea's sign-in list aside" {
         .permissions = try e.gpa.alloc([]const u8, 0),
     });
     try t.expect(e.usesApple());
-    const b = f.browser;
-    const tab = b.activeTab().?;
+    try t.expect(!app.form_relay.fills(tab));
     if (tab.address) |old| b.gpa.free(old);
     tab.address = try b.gpa.dupe(u8, "https://example.com/");
     const logins = try gpa.alloc(app.vault.Login, 1);

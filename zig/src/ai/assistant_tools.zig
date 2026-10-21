@@ -15,6 +15,7 @@ pub const AccCall = struct {
     id: std.ArrayList(u8) = .empty,
     name: std.ArrayList(u8) = .empty,
     args: std.ArrayList(u8) = .empty,
+    thought_sig: ?[]const u8 = null,
 };
 
 pub const Round = struct {
@@ -53,6 +54,9 @@ pub fn onTool(raw: *anyopaque, ev: sse.ToolEvent) void {
     if (ev.args_delta.len > 0) {
         c.args.appendSlice(a, ev.args_delta) catch {};
     }
+    if (ev.thought_sig) |sig| if (sig.len > 0) {
+        c.thought_sig = a.dupe(u8, sig) catch null;
+    };
 }
 
 pub fn ask(r: *Send) void {
@@ -106,11 +110,12 @@ pub fn ended(r: *Send) bool {
     for (r.round.pending.items, 0..) |c, i| {
         const id = if (c.id.items.len > 0) c.id.items else (std.fmt.allocPrint(a, "call_{d}", .{i}) catch "call_0");
         const args = if (c.args.items.len > 0) c.args.items else "{}";
-        calls[i] = .{ .id = id, .name = c.name.items, .args = args };
+        calls[i] = .{ .id = id, .name = c.name.items, .args = args, .thought_sig = c.thought_sig };
     }
     const text = a.dupe(u8, r.asking.text.items) catch "";
     r.round.extra.append(a, .{ .role = .assistant, .text = text, .calls = calls }) catch return false;
     if (r.owner()) |self| if (self.live) |*l| l.answer.clearRetainingCapacity();
+    r.phase = .tooling;
     r.round.next_call = 0;
     runNext(r);
     return true;
@@ -138,8 +143,15 @@ fn toolDone(raw: *anyopaque, res: tools.Result) void {
     const idx = r.round.next_call - 1;
     const call = r.round.pending.items[idx];
     const id = if (call.id.items.len > 0) call.id.items else (std.fmt.allocPrint(a, "call_{d}", .{idx}) catch "call_0");
-    r.round.extra.append(a, .{ .role = .tool, .text = res.text, .call_id = id, .name = call.name.items }) catch {};
-    if (res.read) |rd| r.reads.append(a, rd) catch {};
+    var result_text = res.text;
+    if (res.read) |rd| {
+        r.reads.append(a, rd) catch {};
+        if (rd.addressed) {
+            if (r.owner()) |self| self.addressed = true;
+        }
+        result_text = page.fenced(a, rd, &r.fence) catch res.text;
+    }
+    r.round.extra.append(a, .{ .role = .tool, .text = result_text, .call_id = id, .name = call.name.items }) catch {};
     if (r.owner()) |self| if (self.live) |*l| {
         if (self.gpa.dupe(u8, res.said)) |dup| {
             l.tools.append(self.gpa, .{ .said = dup }) catch self.gpa.free(dup);

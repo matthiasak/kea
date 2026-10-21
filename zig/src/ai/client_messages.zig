@@ -239,6 +239,7 @@ pub fn gemini(a: A, messages: []const client.Message) ![]Value {
             try fc.put(a, "args", try parseOrEmptyObject(a, c.args));
             var p: ObjectMap = .empty;
             try p.put(a, "functionCall", .{ .object = fc });
+            if (c.thought_sig) |sig| try p.put(a, "thoughtSignature", str(sig));
             try parts.append(.{ .object = p });
         }
         var obj: ObjectMap = .empty;

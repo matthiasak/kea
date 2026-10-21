@@ -21,8 +21,8 @@ fn unixNow() f64 {
     return json.toUnix(json.now());
 }
 
-fn apple(t: *const Tab) bool {
-    return if (t.kea.ext) |x| x.usesApple() else false;
+pub fn fills(t: *const Tab) bool {
+    return t.kea.prefs.fills_passwords and !(if (t.kea.ext) |x| x.usesApple() else false);
 }
 
 /// `pageAddress`: the page on screen, else where it is going.
@@ -64,7 +64,7 @@ pub fn hang(t: *Tab, spot: ?forms.Rect, passwords: bool, name: bool) void {
         .spot = spot,
         .passwords = passwords,
         .name = name,
-        .fills = t.kea.prefs.fills_passwords and !apple(t),
+        .fills = fills(t),
         .given = t.sign_in.givenName(t.gpa, page, unixNow()),
         .passkeys = t.kea.passkeys.offered(t.web),
         .now = unixNow(),

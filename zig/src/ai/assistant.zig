@@ -436,7 +436,7 @@ pub const Assistant = struct {
         }
         const t = b.activeTab();
         if (!self.shareable(t)) return self.announce("AI works on web pages");
-        @import("../web/tab_state.zig").snapshot(t.?, shotDone, self.serial);
+        @import("../web/tab_state.zig").snapshotWidth(t.?, 1024, shotDone, self.serial);
     }
 
     fn shotDone(t: *Tab, _: bool, picture: ?[]u8, arg: usize) void {

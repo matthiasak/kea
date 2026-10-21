@@ -20,7 +20,7 @@ pub const Failure = sse.Failure;
 const client_messages = @import("client_messages.zig");
 pub const Role = enum { user, assistant, tool };
 pub const Image = struct { media_type: []const u8, b64: []const u8 };
-pub const Call = struct { id: []const u8, name: []const u8, args: []const u8 };
+pub const Call = struct { id: []const u8, name: []const u8, args: []const u8, thought_sig: ?[]const u8 = null };
 pub const Message = struct {
     role: Role,
     text: []const u8,

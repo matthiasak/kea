@@ -358,11 +358,24 @@ fn snapped(s: *Snap, image: ?objc.Object, _: ?objc.Object) void {
 /// `snapshot`: drawn by the page's own process, so a view off screen can
 /// still be pictured; null when there is nothing to draw.
 pub fn snapshot(t: *Tab, done: Done, arg: usize) void {
+    snapshotWidth(t, 0, done, arg);
+}
+
+pub fn snapshotWidth(t: *Tab, width: f64, done: Done, arg: usize) void {
     const wv = t.web orelse return done(t, false, null, arg);
     const s = std.heap.c_allocator.create(Snap) catch return done(t, false, null, arg);
     s.* = .{ .serial = t.serial, .done = done, .arg = arg };
+    const pool = objc.Pool.push();
+    defer pool.pop();
+    var cfg: ?objc.Object = null;
+    if (width > 0) {
+        cfg = objc.msg(objc.Object, objc.alloc("WKSnapshotConfiguration"), "init", .{});
+        const num = objc.msg(objc.Object, objc.class("NSNumber"), "numberWithDouble:", .{width});
+        objc.msg(void, cfg.?, "setSnapshotWidth:", .{num});
+    }
+    defer if (cfg) |c| objc.release(c);
     var block = SnapBlock.init(s, snapped);
-    objc.msg(void, wv, "takeSnapshotWithConfiguration:completionHandler:", .{ @as(?objc.Object, null), @as(*anyopaque, @ptrCast(&block)) });
+    objc.msg(void, wv, "takeSnapshotWithConfiguration:completionHandler:", .{ cfg, @as(*anyopaque, @ptrCast(&block)) });
 }
 
 const Typed = struct { done: Done, arg: usize };

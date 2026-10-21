@@ -37,6 +37,7 @@ pub const ToolEvent = struct {
     id: ?[]const u8 = null,
     name: ?[]const u8 = null,
     args_delta: []const u8 = "",
+    thought_sig: ?[]const u8 = null,
 };
 
 /// A stream's lines, split as `bytes.lines` splits them, read as events.
@@ -200,7 +201,7 @@ fn emitTools(a: std.mem.Allocator, r: *Reader, v: std.json.Value, ctx: *anyopaqu
                 const idx = r.tool_calls;
                 r.tool_calls += 1;
                 const id = std.fmt.allocPrint(a, "call_{d}", .{idx}) catch "call_0";
-                on_tool(ctx, .{ .index = idx, .id = id, .name = name, .args_delta = args_str });
+                on_tool(ctx, .{ .index = idx, .id = id, .name = name, .args_delta = args_str, .thought_sig = string(field(p, "thoughtSignature")) });
             }
         },
     }
