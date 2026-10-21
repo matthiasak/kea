@@ -87,6 +87,8 @@ pub const Kea = struct {
     /// Chrome extensions (`Extensions.shared`, ext/controller.zig): only on
     /// macOS 15.4 and later, never headless.
     ext: ?*@import("../ext/controller.zig").Extensions = null,
+    /// Temporary CSV written by `passwords/apple.zig` `move`, removed at quit.
+    moved_csv: ?[]u8 = null,
 
     pub fn create(gpa: std.mem.Allocator, ui_app: ?*nanoui.App, opts: Options) !*Kea {
         const self = try gpa.create(Kea);
@@ -211,6 +213,11 @@ pub const Kea = struct {
     pub fn flush(self: *Kea) void {
         browsers.flush(self);
         self.history.flush();
+        if (self.moved_csv) |p| {
+            self.moved_csv = null;
+            self.store.disk.remove(p);
+            self.gpa.free(p);
+        }
         self.store.disk.drain();
     }
 

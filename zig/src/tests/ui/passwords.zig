@@ -111,3 +111,28 @@ test "cmd-option-L opens the Passwords panel and esc closes it" {
     try t.expect(f.press("\x1b", 53, .{}));
     try t.expect(!b.managing);
 }
+
+test "Apple Passwords extension enabled steps Kea's sign-in list aside" {
+    var f: Fixture = undefined;
+    try f.init(gpa, .{});
+    defer f.deinit();
+    const e = (try @import("ext_fixture.zig").controller(&f)) orelse return;
+    try e.installed.append(e.gpa, .{
+        .id = try e.gpa.dupe(u8, app.ext_controller.Extensions.apple_passwords_id),
+        .name = try e.gpa.dupe(u8, "iCloud Passwords"),
+        .version = try e.gpa.dupe(u8, "3.4.0"),
+        .enabled = true,
+        .fromStore = true,
+        .permissions = try e.gpa.alloc([]const u8, 0),
+    });
+    try t.expect(e.usesApple());
+    const b = f.browser;
+    const tab = b.activeTab().?;
+    if (tab.address) |old| b.gpa.free(old);
+    tab.address = try b.gpa.dupe(u8, "https://example.com/");
+    const logins = try gpa.alloc(app.vault.Login, 1);
+    logins[0] = try (app.vault.Login{ .host = @constCast("example.com"), .user = @constCast("kea@example.com"), .password = @constCast("hunter2") }).clone(gpa);
+    b.passwords.accounts.suggesting = .{ .tab = tab.id, .logins = logins, .passkeys = try gpa.alloc(app.passkeys.Offered, 0), .host = try gpa.dupe(u8, "example.com"), .clear = false, .shown = 0 };
+    app.form_relay.hang(tab, .{ .x = 40, .y = 100, .w = 300, .h = 30 }, true, false);
+    try t.expect(b.passwords.accounts.suggesting == null);
+}

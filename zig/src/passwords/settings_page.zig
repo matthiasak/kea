@@ -12,6 +12,45 @@ const frame = @import("../chrome/settings/frame.zig");
 const sheet = @import("../chrome/sheet.zig");
 const vault = @import("vault.zig");
 const passkeys = @import("passkeys.zig");
+const apple = @import("apple.zig");
+const ring = @import("../chrome/ring.zig");
+const Extensions = @import("../ext/controller.zig").Extensions;
+const buttons = @import("../ext/controller_buttons.zig");
+
+fn appleCard(b: *Browser, c: *ui.Context, p: *const Palette) void {
+    const e = b.kea.ext orelse return;
+    const id = Extensions.apple_passwords_id;
+    plate.cardBox(c, p);
+    defer ui.end(c);
+    if (!apple.available()) {
+        plate.line(c, p, "Apple Passwords", "Needs iCloud Keychain on this Mac");
+        ui.end(c);
+        return;
+    }
+    const row = e.row(id);
+    const busy = if (e.busy) |bid| std.mem.eql(u8, bid, id) else false;
+    const detail = if (row == null)
+        "Fill and save with the passwords in Apple's Passwords app, using Apple's own extension"
+    else if (row.?.enabled)
+        "On: Apple's key fills sign-in boxes. Kea's list steps aside."
+    else
+        "Installed, turned off";
+    plate.line(c, p, "Apple Passwords", detail);
+    if (busy) {
+        ring.ring(c, 12);
+    } else if (row == null) {
+        if (controls.pill(c, p, "Use Apple Passwords", .{}).clicked) apple.setUp(b);
+    } else if (!row.?.enabled) {
+        if (controls.pill(c, p, "Turn On", .{}).clicked) e.setEnabled(id, true);
+    } else {
+        if (controls.pill(c, p, "Pair…", .{}).clicked) buttons.press(e, id);
+    }
+    ui.end(c);
+    frame.rule(c, p);
+    plate.line(c, p, "Move Kea's passwords", "Write a CSV for Passwords › File › Import Passwords…");
+    if (controls.pill(c, p, "Move…", .{}).clicked) apple.move(b);
+    ui.end(c);
+}
 
 /// Says so when a password manager extension has taken the saving over.
 fn savingDetail(b: *Browser, c: *ui.Context) []const u8 {
@@ -21,6 +60,7 @@ fn savingDetail(b: *Browser, c: *ui.Context) []const u8 {
 }
 
 pub fn view(b: *Browser, c: *ui.Context, p: *const Palette) void {
+    appleCard(b, c, p);
     plate.cardBox(c, p);
     plate.line(c, p, "Your passwords", "In the macOS keychain, shown with Touch ID");
     if (controls.pill(c, p, "Open…", .{}).clicked) {
@@ -31,7 +71,11 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette) void {
     frame.rule(c, p);
     _ = frame.prefLine(b, c, p, "saves_passwords", "Offer to save passwords", savingDetail(b, c));
     frame.rule(c, p);
-    _ = frame.prefLine(b, c, p, "fills_passwords", "Fill in sign-ins", "Click a sign-in box and the accounts kept for the site hang from it");
+    const fill_detail = if (if (b.kea.ext) |x| x.usesApple() else false)
+        "Apple Passwords does the filling while it's on."
+    else
+        "Click a sign-in box and the accounts kept for the site hang from it";
+    _ = frame.prefLine(b, c, p, "fills_passwords", "Fill in sign-ins", fill_detail);
     frame.rule(c, p);
     const detail = if (!b.prefs.passkeys_possible)
         "Needs an Apple entitlement this build doesn't have — off keeps sites to the password"

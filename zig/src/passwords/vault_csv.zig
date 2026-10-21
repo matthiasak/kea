@@ -5,6 +5,7 @@ const std = @import("std");
 const vault = @import("vault.zig");
 
 pub const Taken = struct { kept: usize = 0, skipped: usize = 0 };
+pub const Login = vault.Login;
 
 /// The import worker's control (`ImportFile.Control`): progress and cancel.
 pub const Progress = struct {
@@ -150,4 +151,53 @@ pub fn take(v: vault.Vault, text: []const u8, progress: ?Progress) !Taken {
         if (v.save(site, row[user_at.?], password, null, clear)) out.kept += 1 else out.skipped += 1;
     }
     return out;
+}
+
+fn writeField(out: *std.ArrayList(u8), gpa: std.mem.Allocator, s: []const u8) !void {
+    if (std.mem.indexOfAny(u8, s, ",\"\r\n") == null) return out.appendSlice(gpa, s);
+    try out.append(gpa, '"');
+    for (s) |c| {
+        if (c == '"') try out.append(gpa, '"');
+        try out.append(gpa, c);
+    }
+    try out.append(gpa, '"');
+}
+
+pub fn write(gpa: std.mem.Allocator, logins: []const Login) ![]u8 {
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(gpa);
+    try out.appendSlice(gpa, "Title,URL,Username,Password,Notes,OTPAuth\n");
+    for (logins) |l| {
+        const url = try std.fmt.allocPrint(gpa, "{s}{s}", .{ if (l.clear) "http://" else "https://", l.host });
+        defer gpa.free(url);
+        try writeField(&out, gpa, l.host);
+        try out.append(gpa, ',');
+        try writeField(&out, gpa, url);
+        try out.append(gpa, ',');
+        try writeField(&out, gpa, l.user);
+        try out.append(gpa, ',');
+        try writeField(&out, gpa, l.password);
+        try out.appendSlice(gpa, ",,\n");
+    }
+    return out.toOwnedSlice(gpa);
+}
+
+test "write and parse round trip with comma, quote and newline" {
+    const gpa = std.testing.allocator;
+    const logins = [_]Login{.{
+        .host = @constCast("kea.example"),
+        .user = @constCast("kea, \"bird\"\nline"),
+        .password = @constCast("sec,ret\"1\r\n2"),
+        .clear = true,
+    }};
+    const csv = try write(gpa, &logins);
+    defer gpa.free(csv);
+    const rows = try parse(gpa, csv, null);
+    defer freeRows(gpa, rows);
+    try std.testing.expectEqual(@as(usize, 2), rows.len);
+    try std.testing.expectEqualStrings("Title", rows[0][0]);
+    try std.testing.expectEqualStrings("kea.example", rows[1][0]);
+    try std.testing.expectEqualStrings("http://kea.example", rows[1][1]);
+    try std.testing.expectEqualStrings("kea, \"bird\"\nline", rows[1][2]);
+    try std.testing.expectEqualStrings("sec,ret\"1\r\n2", rows[1][3]);
 }

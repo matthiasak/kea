@@ -18,6 +18,8 @@ const gpa = testing.allocator;
 test {
     // Modules, then each struct's own methods (refAllDecls is one level deep).
     testing.refAllDecls(vault);
+    testing.refAllDecls(@import("vault_csv.zig"));
+    testing.refAllDecls(@import("apple.zig"));
     testing.refAllDecls(forms);
     testing.refAllDecls(accounts);
     testing.refAllDecls(reply);

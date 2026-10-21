@@ -18,16 +18,20 @@ pub const manifest =
 ;
 pub const popup = "<!doctype html><title>Fixture Popup</title><body>The fixture's popup</body>";
 
-/// The controller with the fixture extension loaded in it.
-pub fn install(f: *Fixture) !?*app.ext_controller.Extensions {
+/// An empty extensions controller on the fixture's `Kea`.
+pub fn controller(f: *Fixture) !?*app.ext_controller.Extensions {
     if (!app.ext.available()) return null;
     const k = f.kea;
-    const e = k.ext orelse made: {
-        const made = try app.ext_controller.Extensions.create(k);
-        k.ext = made;
-        made.start(f.browser);
-        break :made made;
-    };
+    if (k.ext) |e| return e;
+    const made = try app.ext_controller.Extensions.create(k);
+    k.ext = made;
+    return made;
+}
+
+/// The controller with the fixture extension loaded in it.
+pub fn install(f: *Fixture) !?*app.ext_controller.Extensions {
+    const e = (try controller(f)) orelse return null;
+    e.start(f.browser);
     const dir = try f.temp.path(f.gpa, "Kea Fixture");
     defer f.gpa.free(dir);
     app.disk.makePath(f.gpa, dir);

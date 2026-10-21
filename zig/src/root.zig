@@ -67,6 +67,7 @@ pub const sync_send = @import("sync/send.zig");
 pub const sync_settings = @import("sync/settings_page.zig");
 pub const browser_passwords = @import("passwords/browser_passwords.zig");
 pub const accounts_view = @import("passwords/accounts_view.zig");
+pub const form_relay = @import("passwords/form_relay.zig");
 pub const vault = @import("passwords/vault.zig");
 pub const passkeys = @import("passwords/passkeys.zig");
 pub const ext = @import("ext/ext.zig");

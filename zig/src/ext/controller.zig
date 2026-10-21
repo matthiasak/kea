@@ -411,6 +411,12 @@ pub const Extensions = struct {
         return null;
     }
 
+    pub const apple_passwords_id = "pejdijmoenmkgeppbflobdenhhabjlaj";
+
+    pub fn usesApple(self: *Extensions) bool {
+        return if (self.row(apple_passwords_id)) |r| r.enabled else false;
+    }
+
     // MARK: switches
 
     pub fn setPinned(self: *Extensions, id: []const u8, on: bool) void {

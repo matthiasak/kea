@@ -21,6 +21,10 @@ fn unixNow() f64 {
     return json.toUnix(json.now());
 }
 
+fn apple(t: *const Tab) bool {
+    return if (t.kea.ext) |x| x.usesApple() else false;
+}
+
 /// `pageAddress`: the page on screen, else where it is going.
 pub fn pageAddress(t: *const Tab) ?[]const u8 {
     return t.committed orelse t.address;
@@ -60,7 +64,7 @@ pub fn hang(t: *Tab, spot: ?forms.Rect, passwords: bool, name: bool) void {
         .spot = spot,
         .passwords = passwords,
         .name = name,
-        .fills = t.kea.prefs.fills_passwords,
+        .fills = t.kea.prefs.fills_passwords and !apple(t),
         .given = t.sign_in.givenName(t.gpa, page, unixNow()),
         .passkeys = t.kea.passkeys.offered(t.web),
         .now = unixNow(),
@@ -130,7 +134,7 @@ fn asked(t: *Tab, value: ?objc.Object, _: ?objc.Object, _: usize) void {
         .shy = t.shy,
         .extension_page = extensionPage(t.address),
         // A password manager extension that asked to do the saving itself.
-        .extension_saves = if (t.kea.ext) |x| x.passwordSavingTakenBy() != null else false,
+        .extension_saves = if (t.kea.ext) |x| x.passwordSavingTakenBy() != null or x.usesApple() else false,
     };
     const o = forms.offerFor(Vault.of(t.kea), gate, sent, b.passwords.offering, unixNow()) catch return;
     if (o) |made| ops.offer(b, made);
