@@ -491,6 +491,7 @@ pub const Surface = struct {
     pub fn visible(self: *Surface) bool {
         if (!self.is_visible) {
             self.is_visible = objc.msg(objc.BOOL, self.window.nswindow, "isVisible", .{}) and (objc.msg(objc.NSUInteger, self.window.nswindow, "occlusionState", .{}) & 2 != 0);
+            if (self.is_visible) self.renderer.resize(self.size, self.scale);
         }
         return self.is_visible;
     }
@@ -506,10 +507,15 @@ pub const Surface = struct {
 
     /// The window was shown, uncovered or covered.
     pub fn occlusionChanged(self: *Surface) void {
+        const was = self.is_visible;
         self.is_visible = objc.msg(objc.BOOL, self.window.nswindow, "isVisible", .{}) and (objc.msg(objc.NSUInteger, self.window.nswindow, "occlusionState", .{}) & 2 != 0);
-        if (!self.is_visible) return self.renderer.resize(.{ .w = 1, .h = 1 }, self.scale);
-        self.updateGeometry();
-        self.frame();
+        if (was and !self.is_visible) {
+            self.pending = true;
+            self.renderer.resize(.{ .w = 1, .h = 1 }, self.scale);
+        } else if (!was and self.is_visible) {
+            self.renderer.resize(self.size, self.scale);
+            if (self.pending) self.frame();
+        }
     }
 
     pub fn updateCursor(self: *Surface) void {
