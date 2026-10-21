@@ -171,6 +171,15 @@ pub fn take(b: *Browser, event: objc.Object) bool {
 
     // Escape puts the page back, one thing at a time.
     if (code == 53) return escape(b);
+    if (flags == 0) if (b.passwords.accounts.suggesting) |s| if (s.tab == b.active_id) {
+        const pw = @import("../passwords/browser_passwords.zig");
+        switch (code) {
+            125 => return done(pw.step(b, 1)),
+            126 => return done(pw.step(b, -1)),
+            36, 76 => if (pw.takeSelected(b)) return true,
+            else => {},
+        }
+    };
     if (flags == 0 and code != 48 and !b.kea.shortcuts.anyChanged() and (b.kea.ext == null or b.kea.ext.?.contexts.count() == 0)) return false;
     const chars = objc.msg(?objc.Object, event, "charactersIgnoringModifiers", .{});
     const key = if (chars) |s| objc.fromNSString(objc.msg(objc.Object, s, "lowercaseString", .{})) else "";

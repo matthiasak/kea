@@ -72,6 +72,7 @@ pub const Choice = union(enum) {
 pub const Accounts = struct {
     gpa: std.mem.Allocator,
     suggesting: ?Suggesting = null,
+    selected: ?usize = null,
     /// `hanging.spot`: where the list hangs from.
     spot: Rect = .{ .x = 0, .y = 0, .w = 0, .h = 0 },
     /// Set once you have picked, until the caret leaves the boxes.
@@ -92,6 +93,7 @@ pub const Accounts = struct {
     fn drop(a: *Accounts) void {
         if (a.suggesting) |s| s.deinit(a.gpa);
         a.suggesting = null;
+        a.selected = null;
     }
 
     fn forgetLooked(a: *Accounts) void {
@@ -114,6 +116,7 @@ pub const Accounts = struct {
     /// `hang(from:)`. Returns a token when the list should come down after
     /// `lowering_delay`: then call `lowered(tab, token)`.
     pub fn hang(a: *Accounts, v: Vault, h: Hang) !?u64 {
+        a.selected = null;
         const at = h.spot orelse {
             if (a.field) |f| if (f.tab == h.tab) {
                 a.field = null;
@@ -215,6 +218,7 @@ pub const Accounts = struct {
         const list = a.suggesting orelse return null;
         if (now - list.shown <= settling) return null;
         a.suggesting = null;
+        a.selected = null;
         const host = Curtain.hostOf(a.gpa, page);
         defer if (host) |h| a.gpa.free(h);
         if (host == null or !std.mem.eql(u8, host.?, list.host) or isClear(page) != list.clear) {

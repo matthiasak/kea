@@ -110,7 +110,7 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette) void {
     if (!shown) {
         for (last_rows[0..last_rows_len]) |*sr| {
             const mk: Mark = if (sr.passkey) .{ .symbol = "person.badge.key" } else .{ .letter = sr.mark_buf[0..sr.mark_len] };
-            _ = row(c, p, mk, sr.name_buf[0..sr.name_len], sr.detail_buf[0..sr.detail_len], false);
+            _ = row(c, p, mk, sr.name_buf[0..sr.name_len], sr.detail_buf[0..sr.detail_len], false, false);
         }
         ui.row(c, .{ .width = .fill, .gap = 6, .align_items = .center, .padding = .xy(12, 7), .background = p.wash.alpha(0.5) });
         ui.icon(c, "key", .{ .size = 9, .weight = .medium, .color = p.muted });
@@ -122,6 +122,7 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette) void {
     _ = c.interact(i, .{});
     c.addA11y(i, .popover, @tagName(overlays.Overlay.account_list), "", false, true);
     var picked: ?struct { i: usize, passkey: bool } = null;
+    const sel = b.passwords.accounts.selected;
     var count: usize = 0;
     for (a.passkeys, 0..) |pk, n| {
         const detail = if (pk.provider) |pr| c.print("Passkey · {s}", .{pr}) else "Passkey";
@@ -129,7 +130,7 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette) void {
             last_rows[count].set(true, "", pk.name, detail);
             count += 1;
         }
-        if (row(c, p, .{ .symbol = "person.badge.key" }, pk.name, detail, true)) picked = .{ .i = n, .passkey = true };
+        if (row(c, p, .{ .symbol = "person.badge.key" }, pk.name, detail, sel == n, true)) picked = .{ .i = n, .passkey = true };
     }
     for (a.logins, 0..) |l, n| {
         const init_str = mark_mod.initial(c, l.user);
@@ -138,7 +139,7 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette) void {
             last_rows[count].set(false, init_str, nm, l.host);
             count += 1;
         }
-        if (row(c, p, .{ .letter = init_str }, nm, l.host, true)) picked = .{ .i = n, .passkey = false };
+        if (row(c, p, .{ .letter = init_str }, nm, l.host, sel == a.passkeys.len + n, true)) picked = .{ .i = n, .passkey = false };
     }
     last_rows_len = count;
     last_logins_empty = a.logins.len == 0;
@@ -152,12 +153,13 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette) void {
 
 const Mark = union(enum) { letter: []const u8, symbol: []const u8 };
 
-fn row(c: *ui.Context, p: *const Palette, mark: Mark, name: []const u8, detail: []const u8, live: bool) bool {
+fn row(c: *ui.Context, p: *const Palette, mark: Mark, name: []const u8, detail: []const u8, selected: bool, live: bool) bool {
     const i = c.open(.{ .direction = .row, .gap = 10, .width = .fill, .align_items = .center, .padding = .xy(10, 7), .control = live }, null);
     defer c.end();
     const it = if (live) c.interact(i, .{}) else ui.Interaction{ .id = c.node(i).id, .rect = null, .hovered = false, .pressed = false, .clicked = false, .focused = false };
-    if (live) c.addA11y(i, .button, name, detail, false, true);
-    c.node(i).style.background = p.hover.alpha(motion.quickTo(c, it.id, 0, if (it.hovered) 1 else 0));
+    if (live) c.addA11y(i, .button, name, detail, selected, true);
+    const h = motion.quickTo(c, it.id, 0, if (it.hovered) 1 else 0);
+    c.node(i).style.background = if (selected) p.sunset.alpha(0.12) else p.hover.alpha(h);
     ui.row(c, .{ .width = .{ .px = 22 }, .height = .{ .px = 22 }, .radius = 6, .background = p.wash, .align_items = .center, .justify = .center });
     switch (mark) {
         .letter => |l| ui.text(c, l, .{ .size = 11, .weight = .medium, .color = p.ink }),

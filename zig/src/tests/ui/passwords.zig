@@ -77,6 +77,32 @@ test "account list anchors 6 pt under the box and esc closes it" {
     try t.expect(control(&f, .popover, "account_list") == null);
 }
 
+test "account list arrow keys move highlight and return fills" {
+    var f: Fixture = undefined;
+    try f.init(gpa, .{ .sidebar = true });
+    defer f.deinit();
+    const b = f.browser;
+    b.active_page_frame = f.holes()[0];
+    const tab = b.activeTab().?;
+    if (tab.address) |old| b.gpa.free(old);
+    tab.address = try b.gpa.dupe(u8, "https://example.com/");
+    const logins = try gpa.alloc(app.vault.Login, 2);
+    logins[0] = try (app.vault.Login{ .host = @constCast("example.com"), .user = @constCast("one@example.com"), .password = @constCast("p1") }).clone(gpa);
+    logins[1] = try (app.vault.Login{ .host = @constCast("example.com"), .user = @constCast("two@example.com"), .password = @constCast("p2") }).clone(gpa);
+    b.passwords.accounts.suggesting = .{ .tab = tab.id, .logins = logins, .passkeys = try gpa.alloc(app.passkeys.Offered, 0), .host = try gpa.dupe(u8, "example.com"), .clear = false, .shown = 0 };
+    b.passwords.accounts.spot = .{ .x = 40, .y = 100, .w = 300, .h = 30 };
+    f.tester.settle(1);
+    try t.expect(f.press("", 125, .{}));
+    try t.expectEqual(@as(?usize, 0), b.passwords.accounts.selected);
+    try t.expect(f.press("", 125, .{}));
+    try t.expectEqual(@as(?usize, 1), b.passwords.accounts.selected);
+    try t.expect(f.press("", 126, .{}));
+    try t.expectEqual(@as(?usize, 0), b.passwords.accounts.selected);
+    try t.expect(f.press("\r", 36, .{}));
+    try t.expect(b.passwords.accounts.suggesting == null);
+    try t.expectEqual(@as(?u64, tab.id), b.passwords.accounts.picked_into);
+}
+
 test "Settings Passwords page renders its rows" {
     var f: Fixture = undefined;
     try f.init(gpa, .{});

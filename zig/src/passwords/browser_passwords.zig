@@ -80,6 +80,37 @@ pub fn dropChoice(b: *Browser) void {
     b.redraw();
 }
 
+pub fn step(b: *Browser, dir: i2) void {
+    const a = &b.passwords.accounts;
+    const s = &(a.suggesting orelse return);
+    const count: i64 = @intCast(s.passkeys.len + s.logins.len);
+    if (count == 0) return;
+    s.shown = 0;
+    if (a.selected) |here| {
+        const next = @as(i64, @intCast(here)) + dir;
+        a.selected = if (next < 0 or next >= count) null else @intCast(next);
+    } else {
+        a.selected = if (dir > 0) 0 else @intCast(count - 1);
+    }
+    b.redraw();
+}
+
+pub fn takeSelected(b: *Browser) bool {
+    const a = &b.passwords.accounts;
+    const s = a.suggesting orelse return false;
+    const sel = a.selected orelse return false;
+    const pk_len = s.passkeys.len;
+    if (sel < pk_len) {
+        @import("form_relay.zig").pick(b, sel, true);
+        return true;
+    }
+    if (sel - pk_len < s.logins.len) {
+        @import("form_relay.zig").pick(b, sel - pk_len, false);
+        return true;
+    }
+    return false;
+}
+
 // MARK: the list of what is kept
 
 /// `relist()`: read again from the keychain, without secrets.
