@@ -59,13 +59,18 @@
   var title = (heading && heading.innerText.trim()) || document.title;
 
   var sheet = document.createElement('style');
+  sheet.id = 'kea-reader-style';
   sheet.textContent = [
-    'html,body{background:#fff !important;margin:0 !important;padding:0 !important}',
-    '#kea-reader{max-width:38em;margin:0 auto;padding:72px 24px 160px;',
-    'font:400 18px/1.72 ui-serif,Georgia,"Times New Roman",serif;color:#171717}',
+    'html{--kr-bg:#ffffff;--kr-ink:#171717;--kr-muted:#a3a3a3;--kr-code:#f5f5f5;--kr-rule:#e8e8e8;--kr-quote:#555555;--kr-size:18px;--kr-width:38em}',
+    'html[data-kr-theme="sepia"]{--kr-bg:#f4ecd8;--kr-ink:#3b2f1e;--kr-muted:#8a7a5c;--kr-code:#ebe1c8;--kr-rule:#d9cba8;--kr-quote:#5c4b33}',
+    'html[data-kr-theme="dark"]{--kr-bg:#1c1c1e;--kr-ink:#e6e6e6;--kr-muted:#8e8e93;--kr-code:#2c2c2e;--kr-rule:#3a3a3c;--kr-quote:#b0b0b5}',
+    '@media (prefers-color-scheme: dark){html[data-kr-theme="auto"]{--kr-bg:#1c1c1e;--kr-ink:#e6e6e6;--kr-muted:#8e8e93;--kr-code:#2c2c2e;--kr-rule:#3a3a3c;--kr-quote:#b0b0b5}}',
+    'html,body{background:var(--kr-bg) !important;margin:0 !important;padding:0 !important}',
+    '#kea-reader{max-width:var(--kr-width);margin:0 auto;padding:72px 24px 160px;',
+    'font:400 18px/1.72 ui-serif,Georgia,"Times New Roman",serif;font-size:var(--kr-size);color:var(--kr-ink)}',
     '#kea-reader h1{font:600 30px/1.24 -apple-system,BlinkMacSystemFont,sans-serif;',
     'margin:0 0 8px;letter-spacing:-0.01em}',
-    '#kea-reader .kea-from{font:400 12px/1 -apple-system,sans-serif;color:#a3a3a3;',
+    '#kea-reader .kea-from{font:400 12px/1 -apple-system,sans-serif;color:var(--kr-muted);',
     'margin:0 0 40px;text-transform:uppercase;letter-spacing:.06em}',
     '#kea-reader p{margin:0 0 1.35em}',
     '#kea-reader img,#kea-reader video,#kea-reader iframe{max-width:100%;',
@@ -73,14 +78,14 @@
     '#kea-reader iframe{width:100%;aspect-ratio:16/9;height:auto;border:0}',
     '#kea-reader figure{margin:1.8em 0}',
     '#kea-reader figcaption{font:400 13px/1.5 -apple-system,sans-serif;',
-    'color:#a3a3a3;margin-top:.6em}',
-    '#kea-reader a{color:#171717;text-underline-offset:3px}',
+    'color:var(--kr-muted);margin-top:.6em}',
+    '#kea-reader a{color:var(--kr-ink);text-underline-offset:3px}',
     '#kea-reader h2,#kea-reader h3{font:600 20px/1.3 -apple-system,sans-serif;',
     'margin:2em 0 .6em}',
     '#kea-reader pre,#kea-reader code{font-family:ui-monospace,monospace;font-size:14px}',
-    '#kea-reader pre{background:#f5f5f5;padding:14px;border-radius:8px;overflow:auto}',
+    '#kea-reader pre{background:var(--kr-code);padding:14px;border-radius:8px;overflow:auto}',
     '#kea-reader blockquote{margin:1.6em 0;padding-left:1.2em;',
-    'border-left:2px solid #e8e8e8;color:#555}'
+    'border-left:2px solid var(--kr-rule);color:var(--kr-quote)}'
   ].join('');
 
   var wrap = document.createElement('div');

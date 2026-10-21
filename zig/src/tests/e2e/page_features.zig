@@ -11,6 +11,7 @@ const web = @import("web.zig");
 pub const cases = [_]Case{
     .{ .name = "find counts matches", .run = findCounts },
     .{ .name = "reader takes the article and says when there is none", .run = readerMode },
+    .{ .name = "reader applies theme and size", .run = readerTheme },
     .{ .name = "shield rule list compiles", .run = shieldCompiles },
     .{ .name = "curtain veil hides a fixture element", .run = veilHides },
 };
@@ -70,6 +71,17 @@ fn readerMode(h: *Harness) !void {
     try h.expect(!b.activeTab().?.reader, "a new page still reading", .{});
     app.reader.toggleReader(b);
     h.waitFor(b, nothingSaid, 5, "the announcement") catch return h.fail("announced '{s}'", .{toast(b)});
+}
+
+fn readerTheme(h: *Harness) !void {
+    const b = try h.start();
+    b.prefs.set("reader_theme", .sepia);
+    b.prefs.set("reader_size", 22);
+    const t = try web.open(h, b, "kea-test://site/f/article.html");
+    app.reader.toggleReader(b);
+    try h.waitFor(t, reading, 5, "reading mode");
+    try web.evalUntil(h, t, "getComputedStyle(document.body).backgroundColor", "rgb(244, 236, 216)");
+    try web.evalUntil(h, t, "getComputedStyle(document.getElementById('kea-reader')).fontSize", "22px");
 }
 
 fn compiledOrNot(k: *app.Kea) bool {

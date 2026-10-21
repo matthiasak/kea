@@ -35,7 +35,35 @@ fn answered(t: *Tab, value: ?objc.Object, _: ?objc.Object, _: usize) void {
         false;
     if (!worked) return nothing(t);
     t.reader = true;
+    apply(t);
     t.changed(.state);
+}
+
+fn apply(t: *Tab) void {
+    const p = &t.kea.prefs;
+    const em: u32 = switch (p.reader_width) {
+        .narrow => 32,
+        .medium => 38,
+        .wide => 46,
+    };
+    const size: u32 = @intFromFloat(@round(std.math.clamp(p.reader_size, 14, 26)));
+    var buf: [256]u8 = undefined;
+    const js = std.fmt.bufPrint(
+        &buf,
+        "document.documentElement.dataset.krTheme='{s}';document.documentElement.style.setProperty('--kr-size','{d}px');document.documentElement.style.setProperty('--kr-width','{d}em');",
+        .{ @tagName(p.reader_theme), size, em },
+    ) catch return;
+    t.evaluate(js, .page, null, 0);
+}
+
+pub fn restyleAll(kea: *@import("../app/kea.zig").Kea) void {
+    for (kea.browsers.items) |w| {
+        const parked = w.parkedTabs(w.gpa) catch continue;
+        defer w.gpa.free(parked);
+        for ([_][]const *Tab{ w.tabs.items, parked }) |list| for (list) |t| {
+            if (t.reader and t.web != null) apply(t);
+        };
+    }
 }
 
 fn nothing(t: *Tab) void {

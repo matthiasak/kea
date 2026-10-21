@@ -60,6 +60,9 @@ const swift_defaults = .{
     .{ "autoscroll", "auto_scroll", false },
     .{ "pages.120", "fast_pages", false },
     .{ "pageZoom", "page_zoom", @as(f64, 1) },
+    .{ "reader.theme", "reader_theme", prefs.ReaderTheme.auto },
+    .{ "reader.size", "reader_size", @as(f64, 18) },
+    .{ "reader.width", "reader_width", prefs.ReaderWidth.medium },
 };
 
 fn expectPref(want: anytype, got: anytype) !void {
@@ -148,6 +151,9 @@ test "prefs setters write through" {
     p.set("custom_engine", "https://e.example/?q=%s");
     p.set("ai_provider", "anthropic");
     p.set("autocorrect", !p.autocorrect);
+    p.set("reader_theme", .sepia);
+    p.set("reader_size", 22);
+    p.set("reader_width", .wide);
     p.setChatZoom(1.26);
     p.setAIModel("claude-x", "anthropic");
     p.setAIModel("sk-secret", "openAI");
@@ -166,6 +172,9 @@ test "prefs setters write through" {
     try testing.expectEqual(p.autocorrect, q.autocorrect);
     try testing.expectEqual(p.autocorrect, store.bool("WebAutomaticSpellingCorrectionEnabled").?);
     try testing.expectEqual(@as(f64, 1.3), q.chat_zoom);
+    try testing.expectEqual(prefs.ReaderTheme.sepia, q.reader_theme);
+    try testing.expectEqual(@as(f64, 22), q.reader_size);
+    try testing.expectEqual(prefs.ReaderWidth.wide, q.reader_width);
     try testing.expectEqualStrings("claude-x", q.aiModel("anthropic", "s"));
     try testing.expectEqualStrings("s", q.aiModel("openAI", "s"));
     try testing.expectEqual(@as(usize, 1), q.keywords.len);

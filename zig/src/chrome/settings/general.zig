@@ -27,6 +27,7 @@ const frame = @import("frame.zig");
 const tab_scripts = @import("../../web/tab_scripts.zig");
 const tab_state = @import("../../web/tab_state.zig");
 const frame_rate = @import("../../web/frame_rate.zig");
+const reader = @import("../../web/reader.zig");
 
 /// A site shortcut being written, kept out of the prefs until it's saved.
 const Draft = struct {
@@ -106,6 +107,33 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette) void {
     ui.end(c);
     frame.rule(c, p);
 
+    plate.line(c, p, "Reader", "Paper and ink for Reading Mode (⇧⌘R)");
+    var r_theme: usize = @intFromEnum(prefs.reader_theme);
+    if (controls.segmented(c, p, &.{ "Auto", "Light", "Sepia", "Dark" }, &r_theme, false)) {
+        prefs.set("reader_theme", @enumFromInt(r_theme));
+        reader.restyleAll(b.kea);
+    }
+    ui.end(c);
+    frame.rule(c, p);
+
+    plate.line(c, p, "Reader text", "Size in Reading Mode");
+    var r_size = prefs.reader_size;
+    if (controls.steps(c, p, &reader_sizes, &r_size, 18, points)) {
+        prefs.set("reader_size", r_size);
+        reader.restyleAll(b.kea);
+    }
+    ui.end(c);
+    frame.rule(c, p);
+
+    plate.line(c, p, "Reader width", "Line length in Reading Mode");
+    var r_width: usize = @intFromEnum(prefs.reader_width);
+    if (controls.segmented(c, p, &.{ "Narrow", "Medium", "Wide" }, &r_width, false)) {
+        prefs.set("reader_width", @enumFromInt(r_width));
+        reader.restyleAll(b.kea);
+    }
+    ui.end(c);
+    frame.rule(c, p);
+
     _ = frame.prefLine(b, c, p, "autocorrect", "Correct spelling as you type", "macOS's autocorrect inside pages — the one that capitalises for you");
     frame.rule(c, p);
     _ = frame.prefLine(b, c, p, "peeks_links", "Peek at a link with a shift-click", "Its page opens in a panel over the one you're reading. Escape puts it away; the other button keeps it as a tab");
@@ -145,6 +173,12 @@ const zooms = blk: {
 
 fn percent(c: *ui.Context, v: f64) []const u8 {
     return c.print("{d}%", .{@as(i64, @intFromFloat(@round(v * 100)))});
+}
+
+const reader_sizes = [_]f64{ 14, 16, 18, 20, 22, 24, 26 };
+
+fn points(c: *ui.Context, v: f64) []const u8 {
+    return c.print("{d} px", .{@as(i64, @intFromFloat(@round(v)))});
 }
 
 /// `prefs.$pageZoom`: every open page without a size of its own takes it.

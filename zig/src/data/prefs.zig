@@ -17,6 +17,8 @@ pub const Look = enum { light, dark, system };
 /// `Glyph`.
 pub const Glyph = enum { letters, icons };
 
+pub const ReaderTheme = enum { auto, light, sepia, dark };
+pub const ReaderWidth = enum { narrow, medium, wide };
 // ponytail: Design.swift `Metrics` widths, here until design/metrics.zig (P3) holds them.
 pub const side_std: f32 = 232;
 pub const side_min: f32 = 176;
@@ -58,6 +60,9 @@ pub const keys = .{
     .welcomed = "welcomed",
     .autocorrect = "autocorrect",
     .page_zoom = "pageZoom",
+    .reader_theme = "reader.theme",
+    .reader_size = "reader.size",
+    .reader_width = "reader.width",
     .auto_scroll = "autoscroll",
     .fast_pages = "pages.120",
     .peeks_links = "links.peek",
@@ -133,6 +138,9 @@ pub const Prefs = struct {
     welcomed: bool = false,
     autocorrect: bool = false,
     page_zoom: f64 = 1,
+    reader_theme: ReaderTheme = .auto,
+    reader_size: f64 = 18,
+    reader_width: ReaderWidth = .medium,
     auto_scroll: bool = false,
     fast_pages: bool = false,
     peeks_links: bool = true,
@@ -201,6 +209,7 @@ pub const Prefs = struct {
         p.tellWebKit(p.autocorrect);
         @import("../web/substitutions.zig").register(&p);
         p.chat_zoom = std.math.clamp(p.chat_zoom, 0.5, 2);
+        p.reader_size = std.math.clamp(p.reader_size, 14, 26);
         inline for (.{ "mind.model", "mind.effort", "mind.acting", "mind.width", "mind.open" }) |k| store.remove(k);
         return p;
     }
