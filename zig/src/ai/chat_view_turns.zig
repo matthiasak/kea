@@ -130,6 +130,12 @@ fn turnView(b: *Browser, c: *ui.Context, p: *const Palette, st: *State, t: Turn,
         ui.text(c, "Screenshot", .{ .size = 11 * z, .color = p.muted });
         ui.end(c);
     }
+    for (t.tools) |u| {
+        ui.row(c, .{ .width = .fill, .gap = 6, .align_items = .center });
+        ui.icon(c, "magnifyingglass", .{ .size = 10 * z, .weight = .medium, .color = p.muted });
+        ui.text(c, u.said, .{ .size = 11.5 * z, .color = p.muted, .truncate = true });
+        ui.end(c);
+    }
     if (t.answer.len == 0 and !t.done) ui.text(c, "…", .{ .size = 13 * z, .color = p.faint });
     if (t.answer.len > 0) markdown_view.answer(b, c, p, &st.answers, t.answer, .{ .zoom = z });
     if (t.failed) |failed| ui.text(c, failed, .{ .size = 12 * z, .color = p.muted, .wrap = true });

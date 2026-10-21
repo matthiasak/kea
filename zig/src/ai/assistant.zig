@@ -30,6 +30,7 @@ pub const Live = struct {
     answer: std.ArrayList(u8) = .empty,
     place: []u8,
     shot: bool = false,
+    tools: std.ArrayList(cs.Used) = .empty,
 };
 
 /// What a provider off this Mac is sent, shown before the first question goes.
@@ -115,7 +116,7 @@ pub const Assistant = struct {
     /// The answer coming in, as a turn (borrowed).
     pub fn liveTurn(self: *const Assistant) ?Turn {
         const l = self.live orelse return null;
-        return .{ .id = l.id, .question = l.question, .answer = l.answer.items, .place = l.place, .shot = l.shot };
+        return .{ .id = l.id, .question = l.question, .answer = l.answer.items, .place = l.place, .shot = l.shot, .tools = l.tools.items };
     }
 
     fn clearLive(self: *Assistant) void {
@@ -123,6 +124,8 @@ pub const Assistant = struct {
         self.gpa.free(l.question);
         self.gpa.free(l.place);
         l.answer.deinit(self.gpa);
+        for (l.tools.items) |u| self.gpa.free(u.said);
+        l.tools.deinit(self.gpa);
         self.live = null;
     }
 
@@ -327,7 +330,7 @@ pub const Assistant = struct {
     pub fn finish(self: *Assistant, id: Uuid, failed: ?[]const u8, reads: []const page.Read) void {
         const l = self.live orelse return;
         if (!l.id.eql(id)) return;
-        const turn: Turn = .{ .id = l.id, .question = l.question, .answer = l.answer.items, .done = true, .failed = failed, .place = l.place, .shot = l.shot };
+        const turn: Turn = .{ .id = l.id, .question = l.question, .answer = l.answer.items, .done = true, .failed = failed, .place = l.place, .shot = l.shot, .tools = l.tools.items };
         self.mutate(turn, struct {
             fn f(t: Turn, a: A, c: *Chat) !void {
                 const list = try a.alloc(Turn, c.turns.len + 1);

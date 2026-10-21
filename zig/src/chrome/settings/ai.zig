@@ -67,6 +67,10 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette) void {
         plate.cardBox(c, p);
         defer ui.end(c);
         _ = frame.prefLine(b, c, p, "ai", "Use AI on pages", "Summarize a page, or open Ubi Chat, from the View menu. Nothing is sent until you ask");
+        if (b.prefs.ai) {
+            frame.rule(c, p);
+            _ = frame.prefLine(b, c, p, "ubi_tools", "Let Ubi Chat look through your tabs, history and bookmarks", "When a question needs it, Ubi Chat can search your open tabs, history and bookmarks or read an open tab");
+        }
     }
     if (!disclose.begin(c, 0x6b65_612e_6169_626c, b.prefs.ai, motion.settle)) return;
     defer disclose.end(c);

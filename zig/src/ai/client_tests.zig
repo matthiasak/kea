@@ -51,6 +51,60 @@ test "SSE: Gemini streamGenerateContent, CRLF, thoughts left out, no [DONE]" {
     try expectStream(.gemini, @embedFile("../tests/fixtures/ai/gemini.txt"), "Bonjour le monde");
 }
 
+test "SSE: tool calls for OpenAI, Anthropic and Gemini" {
+    const ToolCollector = struct {
+        events: std.ArrayList(sse.ToolEvent) = .empty,
+        arena: std.heap.ArenaAllocator,
+        fn onPiece(_: *anyopaque, _: []const u8) void {}
+        fn onTool(raw: *anyopaque, ev: sse.ToolEvent) void {
+            const self: *@This() = @ptrCast(@alignCast(raw));
+            const a = self.arena.allocator();
+            self.events.append(a, .{
+                .index = ev.index,
+                .id = if (ev.id) |s| (a.dupe(u8, s) catch null) else null,
+                .name = if (ev.name) |s| (a.dupe(u8, s) catch null) else null,
+                .args_delta = a.dupe(u8, ev.args_delta) catch "",
+            }) catch {};
+        }
+    };
+    {
+        var tc: ToolCollector = .{ .arena = .init(t.allocator) };
+        defer tc.arena.deinit();
+        var r: sse.Reader = .{ .a = t.allocator, .keep = t.allocator, .wire = .openAI, .key = null, .on_tool = ToolCollector.onTool };
+        defer r.deinit();
+        const data = "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_abc\",\"function\":{\"name\":\"search_history\",\"arguments\":\"{\\\"query\\\":\\\"kea\\\"}\"}}]}}]}\ndata: [DONE]\n";
+        try t.expect(r.feed(data, &tc, ToolCollector.onPiece) == .done);
+        try t.expectEqual(@as(usize, 1), tc.events.items.len);
+        try t.expectEqualStrings("call_abc", tc.events.items[0].id.?);
+        try t.expectEqualStrings("search_history", tc.events.items[0].name.?);
+        try t.expectEqualStrings("{\"query\":\"kea\"}", tc.events.items[0].args_delta);
+    }
+    {
+        var tc: ToolCollector = .{ .arena = .init(t.allocator) };
+        defer tc.arena.deinit();
+        var r: sse.Reader = .{ .a = t.allocator, .keep = t.allocator, .wire = .anthropic, .key = null, .on_tool = ToolCollector.onTool };
+        defer r.deinit();
+        const data = "data: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"tu_1\",\"name\":\"search_tabs\"}}\ndata: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"query\\\":\\\"x\\\"}\"}}\n";
+        try t.expect(r.feed(data, &tc, ToolCollector.onPiece) == .more);
+        try t.expectEqual(@as(usize, 2), tc.events.items.len);
+        try t.expectEqualStrings("tu_1", tc.events.items[0].id.?);
+        try t.expectEqualStrings("search_tabs", tc.events.items[0].name.?);
+        try t.expectEqualStrings("{\"query\":\"x\"}", tc.events.items[1].args_delta);
+    }
+    {
+        var tc: ToolCollector = .{ .arena = .init(t.allocator) };
+        defer tc.arena.deinit();
+        var r: sse.Reader = .{ .a = t.allocator, .keep = t.allocator, .wire = .gemini, .key = null, .on_tool = ToolCollector.onTool };
+        defer r.deinit();
+        const data = "data: {\"candidates\":[{\"content\":{\"parts\":[{\"functionCall\":{\"name\":\"search_bookmarks\",\"args\":{\"query\":\"zig\"}}}]}}]}\n";
+        try t.expect(r.feed(data, &tc, ToolCollector.onPiece) == .more);
+        try t.expectEqual(@as(usize, 1), tc.events.items.len);
+        try t.expectEqualStrings("call_0", tc.events.items[0].id.?);
+        try t.expectEqualStrings("search_bookmarks", tc.events.items[0].name.?);
+        try t.expectEqualStrings("{\"query\":\"zig\"}", tc.events.items[0].args_delta);
+    }
+}
+
 test "SSE: an error inside the stream stops it" {
     var arena: std.heap.ArenaAllocator = .init(t.allocator);
     defer arena.deinit();
@@ -139,6 +193,26 @@ test "requests: shapes per wire, limits and thinking as Swift sets them" {
     try t.expect(std.mem.indexOf(u8, an_img.body, "\"content\":[{\"type\":\"image\",\"source\":{\"type\":\"base64\",\"media_type\":\"image/jpeg\",\"data\":\"abc=\"}},{\"type\":\"text\",\"text\":\"See\"}]") != null);
     const ge_img = try client.request(rig.ai, a, .{ .provider = ai.gemini, .model = "g", .system = "S", .messages = &img_msgs, .key = "k3" });
     try t.expect(std.mem.indexOf(u8, ge_img.body, "\"parts\":[{\"inlineData\":{\"mimeType\":\"image/jpeg\",\"data\":\"abc=\"}},{\"text\":\"See\"}]") != null);
+    const calls = [_]client.Call{.{ .id = "call_1", .name = "search_history", .args = "{\"query\":\"kea\"}" }};
+    const tool_msgs = [_]client.Message{
+        .{ .role = .user, .text = "Find kea" },
+        .{ .role = .assistant, .text = "", .calls = &calls },
+        .{ .role = .tool, .text = "[{\"title\":\"Kea\",\"url\":\"https://kea.example/\"}]", .call_id = "call_1", .name = "search_history" },
+    };
+    const oa_tools = try client.request(rig.ai, a, .{ .provider = ai.openAI, .model = "m", .system = "S", .messages = &tool_msgs, .key = "k1", .tools = true });
+    try t.expect(std.mem.indexOf(u8, oa_tools.body, "\"tools\":[{\"type\":\"function\",\"function\":{\"name\":\"search_tabs\"") != null);
+    try t.expect(std.mem.indexOf(u8, oa_tools.body, "\"tool_calls\":[{\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"search_history\",\"arguments\":\"{\\\"query\\\":\\\"kea\\\"}\"}}]") != null);
+    try t.expect(std.mem.indexOf(u8, oa_tools.body, "{\"role\":\"tool\",\"tool_call_id\":\"call_1\",\"content\":\"[{\\\"title\\\":\\\"Kea\\\",\\\"url\\\":\\\"https://kea.example/\\\"}]\"}") != null);
+
+    const an_tools = try client.request(rig.ai, a, .{ .provider = ai.anthropic, .model = "c", .system = "S", .messages = &tool_msgs, .key = "k2", .tools = true });
+    try t.expect(std.mem.indexOf(u8, an_tools.body, "\"tools\":[{\"name\":\"search_tabs\"") != null);
+    try t.expect(std.mem.indexOf(u8, an_tools.body, "{\"type\":\"tool_use\",\"id\":\"call_1\",\"name\":\"search_history\",\"input\":{\"query\":\"kea\"}}") != null);
+    try t.expect(std.mem.indexOf(u8, an_tools.body, "{\"role\":\"user\",\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"call_1\",\"content\":\"[{\\\"title\\\":\\\"Kea\\\",\\\"url\\\":\\\"https://kea.example/\\\"}]\"}]}") != null);
+
+    const ge_tools = try client.request(rig.ai, a, .{ .provider = ai.gemini, .model = "g", .system = "S", .messages = &tool_msgs, .key = "k3", .tools = true });
+    try t.expect(std.mem.indexOf(u8, ge_tools.body, "\"tools\":[{\"functionDeclarations\":[{\"name\":\"search_tabs\"") != null);
+    try t.expect(std.mem.indexOf(u8, ge_tools.body, "{\"functionCall\":{\"name\":\"search_history\",\"args\":{\"query\":\"kea\"}}}") != null);
+    try t.expect(std.mem.indexOf(u8, ge_tools.body, "{\"functionResponse\":{\"name\":\"search_history\",\"response\":{\"result\":\"[{\\\"title\\\":\\\"Kea\\\",\\\"url\\\":\\\"https://kea.example/\\\"}]\"}}}") != null);
 }
 
 test "allowed: a provider's own host only" {

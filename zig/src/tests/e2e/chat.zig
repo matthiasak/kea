@@ -12,6 +12,7 @@ const web = @import("web.zig");
 
 pub const cases = [_]Case{
     .{ .name = "summarize page streams into transcript", .run = summarize },
+    .{ .name = "ubi chat tool call searches history and answers", .run = toolCallHistory },
 };
 
 const pieces = [_][]const u8{ "Kea are ", "alpine parrots ", "of New Zealand, ", "known for their curiosity." };
@@ -107,4 +108,49 @@ fn summarize(h: *Harness) !void {
     try h.expect(std.mem.indexOf(u8, stub.asked.items, body) != null, "the page's text wasn't asked about", .{});
     h.frame();
     try h.expect(drew(b, "alpine parrots"), "the transcript didn't draw the answer", .{});
+}
+
+var tool_round: usize = 0;
+
+fn toolStream(_: ?*anyopaque, _: *app.ai_core.Ai, q: client.Ask, sink: client.Sink) ?client.Handle {
+    if (std.mem.startsWith(u8, q.system, "Name this chat")) {
+        sink.piece(sink.ctx, "Kea History");
+        sink.done(sink.ctx, null);
+        return null;
+    }
+    if (tool_round == 0) {
+        tool_round = 1;
+        if (sink.tool) |on_tool| {
+            on_tool(sink.ctx, .{ .index = 0, .id = "call_1", .name = "search_history", .args_delta = "{\"query\":\"kea\"}" });
+        }
+        sink.done(sink.ctx, null);
+        return null;
+    }
+    for (q.messages) |m| stub.asked.appendSlice(std.heap.c_allocator, m.text) catch {};
+    sink.piece(sink.ctx, "Found the kea page in history.");
+    sink.done(sink.ctx, null);
+    return null;
+}
+
+fn toolCallHistory(h: *Harness) !void {
+    stub = .{};
+    defer stub.asked.deinit(std.heap.c_allocator);
+    tool_round = 0;
+    const b = try h.start();
+    b.kea.history.record("https://kea.example/alpine", "Alpine Kea");
+    const m = b.kea.ai;
+    m.client = .{ .stream = toolStream };
+    m.prefs.set("ai", true);
+    m.prefs.set("ai_provider", "ollama");
+    m.prefs.setAIModel("m", "ollama");
+    b.toggleChat();
+    const a = b.assisting.?;
+    _ = a.ask("What did I read about keas?");
+    try h.waitFor(b, answered, 10, "the tool-assisted answer");
+    const turn = a.chat.turns[0];
+    try h.expect(turn.failed == null, "failed: {s}", .{turn.failed orelse ""});
+    try h.expect(turn.tools.len == 1, "tools len {d}", .{turn.tools.len});
+    try h.expect(std.mem.eql(u8, turn.tools[0].said, "Searched history for “kea”"), "tool said '{s}'", .{turn.tools[0].said});
+    try h.expect(std.mem.eql(u8, turn.answer, "Found the kea page in history."), "answer '{s}'", .{turn.answer});
+    try h.expect(std.mem.indexOf(u8, stub.asked.items, "https://kea.example/alpine") != null, "tool result not sent on second ask", .{});
 }

@@ -30,6 +30,7 @@ pub const Asking = struct {
     owner: *anyopaque,
     /// False: the owner has no use for it any more (dropped).
     on_piece: ?*const fn (*anyopaque, []const u8) bool = null,
+    on_tool: ?*const fn (*anyopaque, sse.ToolEvent) void = null,
     on_end: *const fn (*anyopaque) void,
     most: usize,
     /// `most` counts UTF-8 bytes rather than characters.
@@ -40,6 +41,7 @@ pub const Asking = struct {
     dropped: bool = false,
     /// Why it failed, on `gpa`; null when it finished.
     failure: ?[]u8 = null,
+    http_status: ?i64 = null,
     text: std.ArrayList(u8) = .empty,
     chars: usize = 0,
 
@@ -51,7 +53,7 @@ pub const Asking = struct {
     /// The tail call of whoever starts it: `on_end` may free the owner.
     pub fn begin(s: *Asking, m: *ai.Ai, q: client.Ask) void {
         s.starting = true;
-        const h = client.stream(m, q, .{ .ctx = s, .piece = piece, .done = done });
+        const h = client.stream(m, q, .{ .ctx = s, .piece = piece, .tool = if (s.on_tool != null) tool else null, .done = done });
         s.starting = false;
         if (s.over) {
             if (h) |x| x.cancel();
@@ -79,6 +81,12 @@ pub const Asking = struct {
         if (s.chars > s.most) s.cut();
     }
 
+    fn tool(raw: *anyopaque, ev: sse.ToolEvent) void {
+        const s: *Asking = @ptrCast(@alignCast(raw));
+        if (s.over) return;
+        if (s.on_tool) |f| f(s.owner, ev);
+    }
+
     /// Read as far as it went: the stream stopped, the answer kept.
     fn cut(s: *Asking) void {
         s.over = true;
@@ -92,7 +100,10 @@ pub const Asking = struct {
         if (s.over) return;
         s.over = true;
         s.handle = null;
-        if (f) |x| s.failure = x.describe(s.gpa) catch s.gpa.dupe(u8, "") catch null;
+        if (f) |x| {
+            if (x == .http) s.http_status = x.http.status;
+            s.failure = x.describe(s.gpa) catch s.gpa.dupe(u8, "") catch null;
+        }
         if (!s.starting) s.on_end(s.owner);
     }
 };
@@ -127,12 +138,13 @@ pub const Send = struct {
     phase: Phase = .reading,
     dead: bool = false,
     fence: [21]u8 = undefined,
+    round: @import("assistant_tools.zig").Round = .{},
     asking: Asking,
 
     /// The question already live on `self`; `tab` the page shared with it.
     pub fn start(self: *Assistant, p: ai.Provider, model: []const u8, tab: ?*Tab) void {
         const r = self.gpa.create(Send) catch return self.finish(self.live.?.id, "", &.{});
-        r.* = .{ .gpa = self.gpa, .m = self.m, .kea = if (self.browser) |b| b.kea else null, .serial = self.serial, .id = self.live.?.id, .arena = .init(self.gpa), .provider = undefined, .model = undefined, .question = undefined, .recap = null, .earlier = &.{}, .pins = &.{}, .asking = .{ .gpa = self.gpa, .owner = r, .on_piece = arrived, .on_end = ended, .most = Assistant.longest } };
+        r.* = .{ .gpa = self.gpa, .m = self.m, .kea = if (self.browser) |b| b.kea else null, .serial = self.serial, .id = self.live.?.id, .arena = .init(self.gpa), .provider = undefined, .model = undefined, .question = undefined, .recap = null, .earlier = &.{}, .pins = &.{}, .asking = .{ .gpa = self.gpa, .owner = r, .on_piece = arrived, .on_tool = @import("assistant_tools.zig").onTool, .on_end = ended, .most = Assistant.longest } };
         const a = r.arena.allocator();
         r.setUp(self, a, p, model) catch {
             r.free();
@@ -170,7 +182,7 @@ pub const Send = struct {
         }
     }
 
-    fn free(r: *Send) void {
+    pub fn free(r: *Send) void {
         if (r.key) |k| r.gpa.free(k);
         r.asking.deinit();
         r.arena.deinit();
@@ -186,13 +198,13 @@ pub const Send = struct {
         }
     }
 
-    fn owner(r: *Send) ?*Assistant {
+    pub fn owner(r: *Send) ?*Assistant {
         const self = r.m.assistant(r.serial) orelse return null;
         const l = self.live orelse return null;
         return if (l.id.eql(r.id)) self else null;
     }
 
-    fn release(r: *Send) void {
+    pub fn release(r: *Send) void {
         if (r.m.assistant(r.serial)) |self| if (self.task == r) {
             self.task = null;
         };
@@ -260,23 +272,10 @@ pub const Send = struct {
     fn keyed(raw: *anyopaque, key: ?[]u8) void {
         const r: *Send = @ptrCast(@alignCast(raw));
         r.key = key;
-        if (r.dead) return r.free();
-        const a = r.arena.allocator();
-        const fence = page.newFence(&r.fence);
-        const msgs = r.messages(a, fence) catch return r.fail();
-        r.phase = .streaming;
-        r.asking.begin(r.m, .{
-            .provider = r.provider,
-            .model = r.model,
-            .system = ubi.system(a, fence) catch return r.fail(),
-            .messages = msgs,
-            .key = r.key,
-            .max_tokens = 4096,
-            .thinking = 1024,
-        });
+        @import("assistant_tools.zig").ask(r);
     }
 
-    fn messages(r: *Send, a: A, fence: []const u8) ![]client.Message {
+    pub fn messages(r: *Send, a: A, fence: []const u8) ![]client.Message {
         var out: std.ArrayList(client.Message) = .empty;
         if (r.recap) |s| {
             try out.append(a, .{ .role = .user, .text = try std.mem.concat(a, u8, &.{ ubi.recap, s }) });
@@ -295,7 +294,7 @@ pub const Send = struct {
         return out.items;
     }
 
-    fn fail(r: *Send) void {
+    pub fn fail(r: *Send) void {
         if (r.owner()) |self| self.finish(r.id, "The provider's answer couldn't be read.", r.reads.items);
         r.release();
     }
@@ -311,6 +310,7 @@ pub const Send = struct {
 
     fn ended(raw: *anyopaque) void {
         const r: *Send = @ptrCast(@alignCast(raw));
+        if (@import("assistant_tools.zig").ended(r)) return;
         if (r.asking.dropped) return r.release();
         const self = r.owner() orelse return r.release();
         self.finish(r.id, r.asking.failure, r.reads.items);

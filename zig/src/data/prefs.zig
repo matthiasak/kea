@@ -88,6 +88,7 @@ pub const keys = .{
     .uses_tab_groups = "tabs.groups",
     .lists_pins = "pins.list",
     .ai = "ai",
+    .ubi_tools = "ai.tools",
     .ai_provider = "ai.provider",
     .ai_server = "ai.server",
     .split_view = "splitView",
@@ -168,6 +169,7 @@ pub const Prefs = struct {
     uses_tab_groups: bool = false,
     lists_pins: bool = false,
     ai: bool = true,
+    ubi_tools: bool = true,
     /// An `AIProvider.id`; resolved against the catalog by its users.
     ai_provider: ?[]u8 = null,
     ai_server: []u8 = &.{},

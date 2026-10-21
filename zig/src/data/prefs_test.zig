@@ -40,6 +40,7 @@ const swift_defaults = .{
     .{ "pins.list", "lists_pins", false },
     .{ "splitView", "split_view", false },
     .{ "ai", "ai", true },
+    .{ "ai.tools", "ubi_tools", true },
     .{ "ai.server", "ai_server", "http://127.0.0.1:8080/v1/" },
     .{ "commandbar", "command_bar", false },
     .{ "swipe.history", "holds_history", false },

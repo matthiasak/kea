@@ -19,6 +19,10 @@ pub const ChatPin = struct {
     hidden: bool = false,
 };
 
+pub const Used = struct {
+    said: []const u8,
+};
+
 pub const Turn = struct {
     id: Uuid,
     question: []const u8,
@@ -30,6 +34,7 @@ pub const Turn = struct {
     /// Where it ran, as the assistant's place said when it was sent.
     place: []const u8 = "",
     shot: bool = false,
+    tools: []const Used = &.{},
 };
 
 pub const Chat = struct {

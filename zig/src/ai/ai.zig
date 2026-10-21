@@ -100,6 +100,7 @@ pub const Ai = struct {
     /// Settings › AI opened in `b`'s window (`settingsPage = .ai; tuning =
     /// true`); the chrome sets it.
     open_settings: ?*const fn (b: *Browser) void = null,
+    no_tools: std.StringHashMapUnmanaged(void) = .empty,
 
     pub fn create(gpa: std.mem.Allocator, store: *Store, prefs: *Prefs, testing: bool) !*Ai {
         const self = try gpa.create(Ai);
@@ -119,6 +120,9 @@ pub const Ai = struct {
     pub fn destroy(self: *Ai) void {
         if (self.session) |s| s.destroy();
         self.assistants.deinit(self.gpa);
+        var ntit = self.no_tools.keyIterator();
+        while (ntit.next()) |k| self.gpa.free(k.*);
+        self.no_tools.deinit(self.gpa);
         self.keys.deinit();
         self.catalog.deinit();
         self.chats.deinit();
@@ -144,6 +148,18 @@ pub const Ai = struct {
         if (self.testing) if (self.mock) |m| return std.mem.concat(a, u8, &.{ std.mem.trimEnd(u8, m, "/"), "/", p.id, "/" });
         if (p.is("custom")) return a.dupe(u8, if (self.prefs.ai_server.len > 0 and url.Parts.parse(self.prefs.ai_server) != null) self.prefs.ai_server else custom.home);
         return a.dupe(u8, p.home);
+    }
+
+    pub fn isNoTools(self: *const Ai, provider_id: []const u8, model_name: []const u8) bool {
+        var buf: [256]u8 = undefined;
+        const key = std.fmt.bufPrint(&buf, "{s}:{s}", .{ provider_id, model_name }) catch return false;
+        return self.no_tools.contains(key);
+    }
+
+    pub fn rememberNoTools(self: *Ai, provider_id: []const u8, model_name: []const u8) void {
+        if (self.isNoTools(provider_id, model_name)) return;
+        const key = std.fmt.allocPrint(self.gpa, "{s}:{s}", .{ provider_id, model_name }) catch return;
+        self.no_tools.put(self.gpa, key, {}) catch self.gpa.free(key);
     }
 
     /// The base address's host, lowercased; "" when it has none. On `a`.

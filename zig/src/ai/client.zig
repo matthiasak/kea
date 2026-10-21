@@ -18,9 +18,17 @@ const sse = @import("client_sse.zig");
 
 pub const Failure = sse.Failure;
 const client_messages = @import("client_messages.zig");
-pub const Role = enum { user, assistant };
+pub const Role = enum { user, assistant, tool };
 pub const Image = struct { media_type: []const u8, b64: []const u8 };
-pub const Message = struct { role: Role, text: []const u8, images: []const Image = &.{} };
+pub const Call = struct { id: []const u8, name: []const u8, args: []const u8 };
+pub const Message = struct {
+    role: Role,
+    text: []const u8,
+    images: []const Image = &.{},
+    calls: []const Call = &.{},
+    call_id: ?[]const u8 = null,
+    name: ?[]const u8 = null,
+};
 
 /// One question: what is asked of `provider`. Borrowed for the call.
 pub const Ask = struct {
@@ -33,6 +41,7 @@ pub const Ask = struct {
     max_tokens: u32 = 2048,
     /// Caps how many tokens Gemini thinks in first; null leaves it to the model.
     thinking: ?u32 = null,
+    tools: bool = false,
 };
 
 /// Where the answer goes. `done` comes once, last — unless the stream is
@@ -42,6 +51,7 @@ pub const Sink = struct {
     ctx: *anyopaque,
     piece: *const fn (*anyopaque, []const u8) void,
     done: *const fn (*anyopaque, ?Failure) void,
+    tool: ?*const fn (*anyopaque, sse.ToolEvent) void = null,
 };
 
 /// A stream under way.
@@ -113,6 +123,7 @@ pub fn request(m: *const ai.Ai, a: std.mem.Allocator, q: Ask) (error{ RefusedHos
                 .model = q.model,
                 .stream = true,
                 .messages = said,
+                .tools = if (q.tools) @as(?std.json.Value, try client_messages.toolsFor(a, .openAI)) else null,
                 // Only providers that keep nothing of the request.
                 .provider = if (p.is("openRouter")) @as(?struct { zdr: bool }, .{ .zdr = true }) else null,
                 // A limit on the answer, for every one: OpenAI's own models
@@ -124,7 +135,14 @@ pub fn request(m: *const ai.Ai, a: std.mem.Allocator, q: Ask) (error{ RefusedHos
         .anthropic => {
             address = try join(a, base, "messages");
             const said = try client_messages.anthropic(a, q.messages);
-            body = try json.encode(a, .{ .model = q.model, .stream = true, .max_tokens = q.max_tokens, .system = q.system, .messages = said });
+            body = try json.encode(a, .{
+                .model = q.model,
+                .stream = true,
+                .max_tokens = q.max_tokens,
+                .system = q.system,
+                .messages = said,
+                .tools = if (q.tools) @as(?std.json.Value, try client_messages.toolsFor(a, .anthropic)) else null,
+            });
         },
         .gemini => {
             // The model's name is part of the path; nothing of the key is.
@@ -144,6 +162,7 @@ pub fn request(m: *const ai.Ai, a: std.mem.Allocator, q: Ask) (error{ RefusedHos
             body = try json.encode(a, .{
                 .systemInstruction = Parts{ .parts = sys },
                 .contents = contents,
+                .tools = if (q.tools) @as(?std.json.Value, try client_messages.toolsFor(a, .gemini)) else null,
                 .generationConfig = .{
                     .maxOutputTokens = q.max_tokens,
                     .thinkingConfig = if (q.thinking) |t| @as(?struct { thinkingBudget: u32 }, .{ .thinkingBudget = t }) else null,
@@ -289,7 +308,7 @@ fn realStream(_: ?*anyopaque, m: *ai.Ai, q: Ask, sink: Sink) ?Handle {
     l.* = .{ .gpa = m.gpa, .arena = .init(m.gpa), .m = m, .provider = q.provider, .key = null, .sink = sink, .reader = undefined };
     const a = l.arena.allocator();
     l.key = if (q.key) |k| a.dupe(u8, k) catch null else null;
-    l.reader = .{ .a = m.gpa, .keep = a, .wire = q.provider.wire, .key = l.key };
+    l.reader = .{ .a = m.gpa, .keep = a, .wire = q.provider.wire, .key = l.key, .on_tool = sink.tool };
     const built = request(m, a, q) catch |e| {
         l.end(switch (e) {
             error.RefusedHost => .refused_host,

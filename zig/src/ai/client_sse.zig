@@ -32,6 +32,13 @@ pub const Failure = union(enum) {
 /// What a line said: keep reading, the answer is whole, or it failed.
 pub const Said = union(enum) { more, done, failed: Failure };
 
+pub const ToolEvent = struct {
+    index: usize = 0,
+    id: ?[]const u8 = null,
+    name: ?[]const u8 = null,
+    args_delta: []const u8 = "",
+};
+
 /// A stream's lines, split as `bytes.lines` splits them, read as events.
 pub const Reader = struct {
     /// Owns the pending line and the event name; each event is read on a
@@ -46,6 +53,8 @@ pub const Reader = struct {
     event: std.ArrayList(u8) = .empty,
     /// The CR of a CRLF split across two pieces.
     after_cr: bool = false,
+    on_tool: ?*const fn (*anyopaque, ToolEvent) void = null,
+    tool_calls: usize = 0,
 
     pub fn deinit(r: *Reader) void {
         r.line.deinit(r.a);
@@ -94,6 +103,7 @@ pub const Reader = struct {
         const value = std.json.parseFromSliceLeaky(std.json.Value, arena.allocator(), data, .{}) catch return .more;
         if (value != .object) return .more;
         if (failure(r.keep, value, r.event.items, r.key)) |f| return .{ .failed = f };
+        if (r.on_tool) |on_tool| emitTools(arena.allocator(), r, value, ctx, on_tool);
         if (pieceOf(arena.allocator(), r.wire, value)) |text| if (text.len > 0) piece(ctx, text);
         return .more;
     }
@@ -139,6 +149,59 @@ pub fn pieceOf(a: std.mem.Allocator, wire: Wire, v: std.json.Value) ?[]const u8 
                 out.appendSlice(a, string(field(p, "text")) orelse continue) catch return null;
             }
             return out.items;
+        },
+    }
+}
+
+fn intIndex(v: ?std.json.Value) usize {
+    const x = v orelse return 0;
+    return if (x == .integer and x.integer >= 0) @intCast(x.integer) else 0;
+}
+
+fn emitTools(a: std.mem.Allocator, r: *Reader, v: std.json.Value, ctx: *anyopaque, on_tool: *const fn (*anyopaque, ToolEvent) void) void {
+    switch (r.wire) {
+        .openAI => {
+            const choice = first(field(v, "choices")) orelse return;
+            const delta = field(choice, "delta") orelse return;
+            const tcs = field(delta, "tool_calls") orelse return;
+            if (tcs != .array) return;
+            for (tcs.array.items) |tc| {
+                const idx = intIndex(field(tc, "index"));
+                const id = string(field(tc, "id"));
+                const fn_obj = field(tc, "function");
+                const name = if (fn_obj) |f| string(field(f, "name")) else null;
+                const args = if (fn_obj) |f| (string(field(f, "arguments")) orelse "") else "";
+                on_tool(ctx, .{ .index = idx, .id = id, .name = name, .args_delta = args });
+            }
+        },
+        .anthropic => {
+            const kind = string(field(v, "type")) orelse return;
+            const idx = intIndex(field(v, "index"));
+            if (std.mem.eql(u8, kind, "content_block_start")) {
+                const cb = field(v, "content_block") orelse return;
+                if (!std.mem.eql(u8, string(field(cb, "type")) orelse "", "tool_use")) return;
+                on_tool(ctx, .{ .index = idx, .id = string(field(cb, "id")), .name = string(field(cb, "name")), .args_delta = "" });
+            } else if (std.mem.eql(u8, kind, "content_block_delta")) {
+                const delta = field(v, "delta") orelse return;
+                if (!std.mem.eql(u8, string(field(delta, "type")) orelse "", "input_json_delta")) return;
+                on_tool(ctx, .{ .index = idx, .args_delta = string(field(delta, "partial_json")) orelse "" });
+            }
+        },
+        .gemini => {
+            const candidate = first(field(v, "candidates")) orelse return;
+            const parts = field(field(candidate, "content") orelse return, "parts") orelse return;
+            if (parts != .array) return;
+            for (parts.array.items) |p| {
+                const fc = field(p, "functionCall") orelse continue;
+                if (fc != .object) continue;
+                const name = string(field(fc, "name")) orelse continue;
+                const args_val = field(fc, "args");
+                const args_str = if (args_val) |av| (@import("../data/json.zig").encode(a, av) catch "{}") else "{}";
+                const idx = r.tool_calls;
+                r.tool_calls += 1;
+                const id = std.fmt.allocPrint(a, "call_{d}", .{idx}) catch "call_0";
+                on_tool(ctx, .{ .index = idx, .id = id, .name = name, .args_delta = args_str });
+            }
         },
     }
 }

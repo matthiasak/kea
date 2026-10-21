@@ -1,7 +1,9 @@
-//! Per-wire JSON encoding of chat messages (and images/tools) for OpenAI,
-//! Anthropic and Gemini requests.
+//! Per-wire JSON encoding of chat messages, images, tool definitions,
+//! assistant tool calls, and tool results for OpenAI, Anthropic and Gemini.
 const std = @import("std");
+const ai = @import("ai.zig");
 const client = @import("client.zig");
+const tools = @import("tools.zig");
 const Value = std.json.Value;
 const ObjectMap = std.json.ObjectMap;
 const Array = std.json.Array;
@@ -9,6 +11,71 @@ const A = std.mem.Allocator;
 
 fn str(s: []const u8) Value {
     return .{ .string = s };
+}
+
+fn parseOrEmptyObject(a: A, raw: []const u8) !Value {
+    if (raw.len > 0) {
+        if (std.json.parseFromSliceLeaky(Value, a, raw, .{})) |v| {
+            if (v == .object) return v;
+        } else |_| {}
+    }
+    return .{ .object = .empty };
+}
+
+fn paramSchema(a: A, param: []const u8, desc: []const u8) !Value {
+    var prop: ObjectMap = .empty;
+    try prop.put(a, "type", str("string"));
+    try prop.put(a, "description", str(desc));
+    var props: ObjectMap = .empty;
+    try props.put(a, param, .{ .object = prop });
+    var req = Array.init(a);
+    try req.append(str(param));
+    var schema: ObjectMap = .empty;
+    try schema.put(a, "type", str("object"));
+    try schema.put(a, "properties", .{ .object = props });
+    try schema.put(a, "required", .{ .array = req });
+    return .{ .object = schema };
+}
+
+pub fn toolsFor(a: A, wire: ai.Wire) !Value {
+    var list = Array.init(a);
+    for (tools.specs) |s| {
+        const schema = try paramSchema(a, s.param, s.param_description);
+        switch (wire) {
+            .openAI => {
+                var fn_obj: ObjectMap = .empty;
+                try fn_obj.put(a, "name", str(s.name));
+                try fn_obj.put(a, "description", str(s.description));
+                try fn_obj.put(a, "parameters", schema);
+                var item: ObjectMap = .empty;
+                try item.put(a, "type", str("function"));
+                try item.put(a, "function", .{ .object = fn_obj });
+                try list.append(.{ .object = item });
+            },
+            .anthropic => {
+                var item: ObjectMap = .empty;
+                try item.put(a, "name", str(s.name));
+                try item.put(a, "description", str(s.description));
+                try item.put(a, "input_schema", schema);
+                try list.append(.{ .object = item });
+            },
+            .gemini => {
+                var item: ObjectMap = .empty;
+                try item.put(a, "name", str(s.name));
+                try item.put(a, "description", str(s.description));
+                try item.put(a, "parameters", schema);
+                try list.append(.{ .object = item });
+            },
+        }
+    }
+    if (wire == .gemini) {
+        var wrap = Array.init(a);
+        var decls: ObjectMap = .empty;
+        try decls.put(a, "functionDeclarations", .{ .array = list });
+        try wrap.append(.{ .object = decls });
+        return .{ .array = wrap };
+    }
+    return .{ .array = list };
 }
 
 pub fn openAI(a: A, system: []const u8, messages: []const client.Message) ![]Value {
@@ -22,7 +89,24 @@ pub fn openAI(a: A, system: []const u8, messages: []const client.Message) ![]Val
     for (messages) |msg| {
         var obj: ObjectMap = .empty;
         try obj.put(a, "role", str(@tagName(msg.role)));
-        if (msg.images.len == 0) {
+        if (msg.role == .tool) {
+            try obj.put(a, "tool_call_id", str(msg.call_id orelse ""));
+            try obj.put(a, "content", str(msg.text));
+        } else if (msg.calls.len > 0) {
+            if (msg.text.len > 0) try obj.put(a, "content", str(msg.text));
+            var tcs = Array.init(a);
+            for (msg.calls) |c| {
+                var fn_obj: ObjectMap = .empty;
+                try fn_obj.put(a, "name", str(c.name));
+                try fn_obj.put(a, "arguments", str(c.args));
+                var tc: ObjectMap = .empty;
+                try tc.put(a, "id", str(c.id));
+                try tc.put(a, "type", str("function"));
+                try tc.put(a, "function", .{ .object = fn_obj });
+                try tcs.append(.{ .object = tc });
+            }
+            try obj.put(a, "tool_calls", .{ .array = tcs });
+        } else if (msg.images.len == 0) {
             try obj.put(a, "content", str(msg.text));
         } else {
             var parts = Array.init(a);
@@ -48,10 +132,45 @@ pub fn openAI(a: A, system: []const u8, messages: []const client.Message) ![]Val
 
 pub fn anthropic(a: A, messages: []const client.Message) ![]Value {
     var out: std.ArrayList(Value) = .empty;
-    for (messages) |msg| {
+    var i: usize = 0;
+    while (i < messages.len) {
+        const msg = messages[i];
+        if (msg.role == .tool) {
+            var blocks = Array.init(a);
+            while (i < messages.len and messages[i].role == .tool) : (i += 1) {
+                var tr: ObjectMap = .empty;
+                try tr.put(a, "type", str("tool_result"));
+                try tr.put(a, "tool_use_id", str(messages[i].call_id orelse ""));
+                try tr.put(a, "content", str(messages[i].text));
+                try blocks.append(.{ .object = tr });
+            }
+            var obj: ObjectMap = .empty;
+            try obj.put(a, "role", str("user"));
+            try obj.put(a, "content", .{ .array = blocks });
+            try out.append(a, .{ .object = obj });
+            continue;
+        }
+        i += 1;
         var obj: ObjectMap = .empty;
         try obj.put(a, "role", str(@tagName(msg.role)));
-        if (msg.images.len == 0) {
+        if (msg.calls.len > 0) {
+            var blocks = Array.init(a);
+            if (msg.text.len > 0) {
+                var txt: ObjectMap = .empty;
+                try txt.put(a, "type", str("text"));
+                try txt.put(a, "text", str(msg.text));
+                try blocks.append(.{ .object = txt });
+            }
+            for (msg.calls) |c| {
+                var tu: ObjectMap = .empty;
+                try tu.put(a, "type", str("tool_use"));
+                try tu.put(a, "id", str(c.id));
+                try tu.put(a, "name", str(c.name));
+                try tu.put(a, "input", try parseOrEmptyObject(a, c.args));
+                try blocks.append(.{ .object = tu });
+            }
+            try obj.put(a, "content", .{ .array = blocks });
+        } else if (msg.images.len == 0) {
             try obj.put(a, "content", str(msg.text));
         } else {
             var blocks = Array.init(a);
@@ -78,7 +197,28 @@ pub fn anthropic(a: A, messages: []const client.Message) ![]Value {
 
 pub fn gemini(a: A, messages: []const client.Message) ![]Value {
     var out: std.ArrayList(Value) = .empty;
-    for (messages) |msg| {
+    var i: usize = 0;
+    while (i < messages.len) {
+        const msg = messages[i];
+        if (msg.role == .tool) {
+            var parts = Array.init(a);
+            while (i < messages.len and messages[i].role == .tool) : (i += 1) {
+                var resp: ObjectMap = .empty;
+                try resp.put(a, "result", str(messages[i].text));
+                var fr: ObjectMap = .empty;
+                try fr.put(a, "name", str(messages[i].name orelse ""));
+                try fr.put(a, "response", .{ .object = resp });
+                var p: ObjectMap = .empty;
+                try p.put(a, "functionResponse", .{ .object = fr });
+                try parts.append(.{ .object = p });
+            }
+            var obj: ObjectMap = .empty;
+            try obj.put(a, "role", str("user"));
+            try obj.put(a, "parts", .{ .array = parts });
+            try out.append(a, .{ .object = obj });
+            continue;
+        }
+        i += 1;
         var parts = Array.init(a);
         for (msg.images) |img| {
             var inline_data: ObjectMap = .empty;
@@ -88,9 +228,19 @@ pub fn gemini(a: A, messages: []const client.Message) ![]Value {
             try p.put(a, "inlineData", .{ .object = inline_data });
             try parts.append(.{ .object = p });
         }
-        var tp: ObjectMap = .empty;
-        try tp.put(a, "text", str(msg.text));
-        try parts.append(.{ .object = tp });
+        if (msg.text.len > 0 or msg.calls.len == 0) {
+            var tp: ObjectMap = .empty;
+            try tp.put(a, "text", str(msg.text));
+            try parts.append(.{ .object = tp });
+        }
+        for (msg.calls) |c| {
+            var fc: ObjectMap = .empty;
+            try fc.put(a, "name", str(c.name));
+            try fc.put(a, "args", try parseOrEmptyObject(a, c.args));
+            var p: ObjectMap = .empty;
+            try p.put(a, "functionCall", .{ .object = fc });
+            try parts.append(.{ .object = p });
+        }
         var obj: ObjectMap = .empty;
         try obj.put(a, "role", str(if (msg.role == .user) "user" else "model"));
         try obj.put(a, "parts", .{ .array = parts });
