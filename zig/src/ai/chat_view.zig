@@ -109,6 +109,7 @@ pub const Do = union(enum) {
     unpin: Uuid,
     toggle_page,
     pin_page,
+    attach_shot,
     add_pins,
     /// Its strings on the frame's arena.
     pick: ubi.Suggestion,
@@ -418,6 +419,7 @@ fn apply(b: *Browser, a: *Assistant, todo: Do, roomy: bool) void {
         .unpin => |id| a.unpin(id),
         .toggle_page => a.togglePage(),
         .pin_page => a.pinPage(),
+        .attach_shot => a.toggleShot(b),
         .add_pins => {
             // `draft += draft.isEmpty || draft.hasSuffix(" ") ? "@" : " @"`
             const d = a.draft.items;

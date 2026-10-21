@@ -131,6 +131,14 @@ test "requests: shapes per wire, limits and thinking as Swift sets them" {
     const ol = try client.request(rig.ai, a, .{ .provider = ai.ollama, .model = "llama", .system = "S", .messages = &msgs, .key = null });
     try t.expectEqualStrings("http://127.0.0.1:11434/v1/chat/completions", ol.url);
     try t.expectEqual(@as(usize, 2), ol.headers.len);
+    const imgs = [_]client.Image{.{ .media_type = "image/jpeg", .b64 = "abc=" }};
+    const img_msgs = [_]client.Message{.{ .role = .user, .text = "See", .images = &imgs }};
+    const oa_img = try client.request(rig.ai, a, .{ .provider = ai.openAI, .model = "m", .system = "S", .messages = &img_msgs, .key = "k1" });
+    try t.expect(std.mem.indexOf(u8, oa_img.body, "\"content\":[{\"type\":\"text\",\"text\":\"See\"},{\"type\":\"image_url\",\"image_url\":{\"url\":\"data:image/jpeg;base64,abc=\"}}]") != null);
+    const an_img = try client.request(rig.ai, a, .{ .provider = ai.anthropic, .model = "c", .system = "S", .messages = &img_msgs, .key = "k2" });
+    try t.expect(std.mem.indexOf(u8, an_img.body, "\"content\":[{\"type\":\"image\",\"source\":{\"type\":\"base64\",\"media_type\":\"image/jpeg\",\"data\":\"abc=\"}},{\"type\":\"text\",\"text\":\"See\"}]") != null);
+    const ge_img = try client.request(rig.ai, a, .{ .provider = ai.gemini, .model = "g", .system = "S", .messages = &img_msgs, .key = "k3" });
+    try t.expect(std.mem.indexOf(u8, ge_img.body, "\"parts\":[{\"inlineData\":{\"mimeType\":\"image/jpeg\",\"data\":\"abc=\"}},{\"text\":\"See\"}]") != null);
 }
 
 test "allowed: a provider's own host only" {

@@ -29,6 +29,7 @@ pub const Live = struct {
     question: []u8,
     answer: std.ArrayList(u8) = .empty,
     place: []u8,
+    shot: bool = false,
 };
 
 /// What a provider off this Mac is sent, shown before the first question goes.
@@ -47,6 +48,7 @@ pub const Assistant = struct {
     live: ?Live = null,
     draft: std.ArrayList(u8) = .empty,
     notice: ?Notice = null,
+    shot: ?[]u8 = null,
     /// A shared page has words addressed to an AI (see page_text.addressesAI).
     addressed: bool = false,
     listing: bool = false,
@@ -89,6 +91,7 @@ pub const Assistant = struct {
         self.clearLive();
         self.clearNotice();
         if (self.waiting) |w| self.gpa.free(w);
+        if (self.shot) |s| self.gpa.free(s);
         self.draft.deinit(self.gpa);
         self.naming.deinit(self.gpa);
         if (self.sugg_arena) |*sa| sa.deinit();
@@ -112,7 +115,7 @@ pub const Assistant = struct {
     /// The answer coming in, as a turn (borrowed).
     pub fn liveTurn(self: *const Assistant) ?Turn {
         const l = self.live orelse return null;
-        return .{ .id = l.id, .question = l.question, .answer = l.answer.items, .place = l.place };
+        return .{ .id = l.id, .question = l.question, .answer = l.answer.items, .place = l.place, .shot = l.shot };
     }
 
     fn clearLive(self: *Assistant) void {
@@ -314,7 +317,7 @@ pub const Assistant = struct {
         const place = ubi.place(self.gpa, self.m, p, model) catch return;
         const q = self.gpa.dupe(u8, question) catch return self.gpa.free(place);
         self.clearLive();
-        self.live = .{ .id = Uuid.random(), .question = q, .place = place };
+        self.live = .{ .id = Uuid.random(), .question = q, .place = place, .shot = self.shot != null };
         const tab: ?*Tab = if (self.sharesPage()) self.active() else null;
         runs.Send.start(self, p, model, tab);
     }
@@ -324,7 +327,7 @@ pub const Assistant = struct {
     pub fn finish(self: *Assistant, id: Uuid, failed: ?[]const u8, reads: []const page.Read) void {
         const l = self.live orelse return;
         if (!l.id.eql(id)) return;
-        const turn: Turn = .{ .id = l.id, .question = l.question, .answer = l.answer.items, .done = true, .failed = failed, .place = l.place };
+        const turn: Turn = .{ .id = l.id, .question = l.question, .answer = l.answer.items, .done = true, .failed = failed, .place = l.place, .shot = l.shot };
         self.mutate(turn, struct {
             fn f(t: Turn, a: A, c: *Chat) !void {
                 const list = try a.alloc(Turn, c.turns.len + 1);
@@ -419,6 +422,33 @@ pub const Assistant = struct {
             }
         }.f);
         self.keep();
+    }
+
+    pub fn toggleShot(self: *Assistant, b: *Browser) void {
+        if (self.shot) |s| {
+            self.gpa.free(s);
+            self.shot = null;
+            self.changed();
+            return;
+        }
+        const t = b.activeTab();
+        if (!self.shareable(t)) return self.announce("AI works on web pages");
+        @import("../web/tab_state.zig").snapshot(t.?, shotDone, self.serial);
+    }
+
+    fn shotDone(t: *Tab, _: bool, picture: ?[]u8, arg: usize) void {
+        const self = t.kea.ai.assistant(@intCast(arg)) orelse {
+            if (picture) |p| t.gpa.free(p);
+            return;
+        };
+        if (!self.shareable(t)) {
+            if (picture) |p| t.gpa.free(p);
+            return;
+        }
+        const pic = picture orelse return;
+        if (self.shot) |old| self.gpa.free(old);
+        self.shot = pic;
+        self.changed();
     }
 
     pub fn pinPage(self: *Assistant) void {

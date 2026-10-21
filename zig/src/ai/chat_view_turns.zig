@@ -124,6 +124,12 @@ fn turnView(b: *Browser, c: *ui.Context, p: *const Palette, st: *State, t: Turn,
     hug(c, t.question, .{ .size = 12.5 * z, .color = p.ink });
     c.end();
     ui.end(c);
+    if (t.shot) {
+        ui.row(c, .{ .width = .fill, .gap = 4, .align_items = .center, .justify = .end });
+        ui.icon(c, "camera", .{ .size = 10 * z, .weight = .medium, .color = p.muted });
+        ui.text(c, "Screenshot", .{ .size = 11 * z, .color = p.muted });
+        ui.end(c);
+    }
     if (t.answer.len == 0 and !t.done) ui.text(c, "…", .{ .size = 13 * z, .color = p.faint });
     if (t.answer.len > 0) markdown_view.answer(b, c, p, &st.answers, t.answer, .{ .zoom = z });
     if (t.failed) |failed| ui.text(c, failed, .{ .size = 12 * z, .color = p.muted, .wrap = true });

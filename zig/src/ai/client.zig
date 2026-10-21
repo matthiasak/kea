@@ -17,8 +17,10 @@ const ai = @import("ai.zig");
 const sse = @import("client_sse.zig");
 
 pub const Failure = sse.Failure;
+const client_messages = @import("client_messages.zig");
 pub const Role = enum { user, assistant };
-pub const Message = struct { role: Role, text: []const u8 };
+pub const Image = struct { media_type: []const u8, b64: []const u8 };
+pub const Message = struct { role: Role, text: []const u8, images: []const Image = &.{} };
 
 /// One question: what is asked of `provider`. Borrowed for the call.
 pub const Ask = struct {
@@ -93,11 +95,8 @@ pub const Built = struct {
     body: []const u8,
 };
 
-const Said = struct { role: []const u8, content: []const u8 };
 const Text = struct { text: []const u8 };
 const Parts = struct { parts: []const Text };
-const Content = struct { role: []const u8, parts: []const Text };
-
 /// The request as the provider wants it, with the key in a header — never
 /// in the address, which ends up in errors and logs — and only once the
 /// address is known to be the provider's own. On `a`.
@@ -109,9 +108,7 @@ pub fn request(m: *const ai.Ai, a: std.mem.Allocator, q: Ask) (error{ RefusedHos
     switch (p.wire) {
         .openAI => {
             address = try join(a, base, "chat/completions");
-            const said = try a.alloc(Said, q.messages.len + 1);
-            said[0] = .{ .role = "system", .content = q.system };
-            for (q.messages, said[1..]) |msg, *s| s.* = .{ .role = @tagName(msg.role), .content = msg.text };
+            const said = try client_messages.openAI(a, q.system, q.messages);
             body = try json.encode(a, .{
                 .model = q.model,
                 .stream = true,
@@ -126,8 +123,7 @@ pub fn request(m: *const ai.Ai, a: std.mem.Allocator, q: Ask) (error{ RefusedHos
         },
         .anthropic => {
             address = try join(a, base, "messages");
-            const said = try a.alloc(Said, q.messages.len);
-            for (q.messages, said) |msg, *s| s.* = .{ .role = @tagName(msg.role), .content = msg.text };
+            const said = try client_messages.anthropic(a, q.messages);
             body = try json.encode(a, .{ .model = q.model, .stream = true, .max_tokens = q.max_tokens, .system = q.system, .messages = said });
         },
         .gemini => {
@@ -139,12 +135,7 @@ pub fn request(m: *const ai.Ai, a: std.mem.Allocator, q: Ask) (error{ RefusedHos
             }
             const path = try std.fmt.allocPrint(a, "models/{s}:streamGenerateContent", .{name.items});
             address = try std.mem.concat(a, u8, &.{ try join(a, base, path), "?alt=sse" });
-            const contents = try a.alloc(Content, q.messages.len);
-            for (q.messages, contents) |msg, *c| {
-                const one = try a.alloc(Text, 1);
-                one[0] = .{ .text = msg.text };
-                c.* = .{ .role = if (msg.role == .user) "user" else "model", .parts = one };
-            }
+            const contents = try client_messages.gemini(a, q.messages);
             const sys = try a.alloc(Text, 1);
             sys[0] = .{ .text = q.system };
             // Gemini counts its thinking in maxOutputTokens and sends nothing

@@ -29,6 +29,7 @@ pub const Turn = struct {
     strays: []const []const u8 = &.{},
     /// Where it ran, as the assistant's place said when it was sent.
     place: []const u8 = "",
+    shot: bool = false,
 };
 
 pub const Chat = struct {

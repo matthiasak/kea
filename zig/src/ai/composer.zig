@@ -50,6 +50,7 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette, a: *Assistant, st: *
     ui.text(c, pageLine(c, b, a), .{ .size = 11.5, .color = p.muted, .truncate = true });
     _ = c.leaf(.{ .grow = 1, .min_width = 0 }, .none, null);
     if (pins.len == 0 and controls.door(c, p, "plus", .{ .help = "Add Pins\u{2026}" }).clicked) todo.* = .add_pins;
+    if (controls.door(c, p, "camera", .{ .on = a.shot != null, .help = if (a.shot != null) "Remove the screenshot" else "Attach a screenshot of this page" }).clicked) todo.* = .attach_shot;
     if (controls.door(c, p, "pin", .{ .help = "Pin This Page" }).clicked) todo.* = .pin_page;
     ui.end(c);
 
