@@ -63,6 +63,7 @@ pub const browser_arc = @import("model/browser_arc.zig");
 pub const browser_import = @import("model/browser_import.zig");
 pub const import_bring = @import("import/bring.zig");
 pub const sqlite = @import("sys/sqlite.zig");
+pub const footprint = @import("sys/footprint.zig");
 pub const sync_send = @import("sync/send.zig");
 pub const sync_settings = @import("sync/settings_page.zig");
 pub const browser_passwords = @import("passwords/browser_passwords.zig");

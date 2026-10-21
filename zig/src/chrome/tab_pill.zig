@@ -136,7 +136,7 @@ pub fn pill(b: *Browser, c: *ui.Context, p: *const Palette, tab: *Tab, o: Option
         c.node(i).style.shadow = .{ .color = p.ink.alpha(0.10 * lift), .blur = 10, .y = 2 };
     }
     if (o.interactive) {
-        c.help(i, tab.label());
+        c.help(i, helpText(b, c, tab, hovered));
         c.addA11y(i, .tab, if (tab.label().len == 0) "New Tab" else tab.label(), if (o.live) "Selected" else "", o.live, true);
     }
     // The ground: hover's grey, a pin's faint one; the live grey is the strip's.
@@ -159,6 +159,32 @@ pub fn pill(b: *Browser, c: *ui.Context, p: *const Palette, tab: *Tab, o: Option
         d.close = titledContent(b, c, p, tab, colour, it.id, it.hovered and o.interactive, o.interactive);
     }
     return d;
+}
+
+/// Tooltip for a tab in the strip or sidebar: includes physical footprint MB when hovered.
+pub fn helpText(b: *const Browser, c: *ui.Context, t: *Tab, hovered: bool) []const u8 {
+    const label = t.label();
+    if (!hovered or label.len == 0) return label;
+    if (t.asleep()) return c.print("{s} — asleep", .{label});
+    const footprint = @import("../sys/footprint.zig");
+    const pid = footprint.webPid(t.web) orelse return label;
+    const now = ui.clock.now();
+    if (t.mem_at == 0 or now - t.mem_at >= 5.0) {
+        t.mem_at = now;
+        t.mem_mb = if (footprint.mb(pid)) |m| @floatCast(m) else 0;
+    }
+    const mb: u32 = @intFromFloat(@round(@max(0, t.mem_mb)));
+    if (mb == 0) return label;
+    var others: usize = 0;
+    for (b.tabs.items) |other| if (other != t) {
+        if (footprint.webPid(other.web)) |op| if (op == pid) {
+            others += 1;
+        };
+    };
+    return if (others == 0)
+        c.print("{s} — {d} MB", .{ label, mb })
+    else
+        c.print("{s} — {d} MB, shared with {d} tabs", .{ label, mb, others });
 }
 
 /// A pinned square: the letter being typed, the ring, the icon, or the letter.

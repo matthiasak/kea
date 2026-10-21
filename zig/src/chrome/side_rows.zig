@@ -187,7 +187,7 @@ pub fn sideRow(b: *Browser, c: *ui.Context, p: *const Palette, t: *Tab, live: bo
     const press = if (c.reduce_motion or !interactive) 0 else motion.liftTo(c, it.id, 7, if (it.pressed) 1 else 0);
     c.node(i).style.scale *= 1 + 0.012 * lift - 0.03 * press;
     const label = if (t.label().len == 0) "New Tab" else t.label();
-    c.help(i, t.label());
+    c.help(i, @import("tab_pill.zig").helpText(b, c, t, hovering));
     c.addA11y(i, .tab, label, if (live) "Selected" else "", live, true);
 
     // The ground: the sliding grey when live (`matchedGeometryEffect`), the

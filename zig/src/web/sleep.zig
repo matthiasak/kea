@@ -28,7 +28,7 @@ const a = std.heap.c_allocator;
 /// `Browser.sleepAfter`: ten minutes, or `sleep.after` in seconds.
 pub fn sleepAfter(b: *const Browser) f64 {
     const set = b.store.double("sleep.after") orelse 0;
-    return if (set > 0) set else 10 * 60;
+    return if (set > 0) set else @max(60, b.prefs.sleep_minutes * 60);
 }
 
 const pressure_warning = dispatch.pressure_warning;

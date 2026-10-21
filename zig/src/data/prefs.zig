@@ -43,6 +43,7 @@ pub const keys = .{
     .glyph = "glyph",
     .engine = "search.engine",
     .custom_engine = "search.custom",
+    .sleep_minutes = "tabs.sleep.minutes",
     .sleeps_tabs = "tabs.sleep",
     .site_notifications = "notifications.ask",
     .lazy_tabs = "tabs.lazy",
@@ -119,6 +120,7 @@ pub const Prefs = struct {
     custom_engine: []u8 = &.{},
     /// `search.keywords`; replace through `setKeywords`.
     keywords: []Keyword = &.{},
+    sleep_minutes: f64 = 10,
     sleeps_tabs: bool = true,
     site_notifications: bool = true,
     lazy_tabs: bool = true,

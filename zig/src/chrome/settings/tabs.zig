@@ -54,7 +54,18 @@ fn tabs(b: *Browser, c: *ui.Context, p: *const Palette) void {
     frame.rule(c, p);
     _ = frame.prefLine(b, c, p, "shows_reading", "Show how far you've read", "The tab you're on fills with grey as you scroll down the page");
     frame.rule(c, p);
-    _ = frame.prefLine(b, c, p, "sleeps_tabs", "Sleep tabs you aren't using", "After ten minutes away they come back where you left them. Pinned tabs stay awake until memory runs critically short; sound, calls and anything typed always do.");
+    _ = frame.prefLine(b, c, p, "sleeps_tabs", "Sleep tabs you aren't using", "After a while unseen they come back where you left them. Pinned tabs stay awake until memory runs critically short; sound, calls and anything typed always do.");
+    if (disclose.begin(c, 0x6b65_612e_7462_7333, prefs.sleeps_tabs, motion.settle)) {
+        defer disclose.end(c);
+        frame.rule(c, p);
+        plate.line(c, p, "Sleep after", "How long an unseen tab waits before sleeping");
+        const mins = [_]f64{ 5, 10, 30, 60 };
+        var idx: usize = for (mins, 0..) |m, i| {
+            if (@abs(prefs.sleep_minutes - m) < 0.5) break i;
+        } else 1;
+        if (controls.segmented(c, p, &.{ "5 min", "10 min", "30 min", "1 hour" }, &idx, false)) prefs.set("sleep_minutes", mins[idx]);
+        ui.end(c);
+    }
     frame.rule(c, p);
     _ = frame.prefLine(b, c, p, "lazy_tabs", "Load background tabs when you go to them", "A link opened behind the page, with ⌘-click or the middle button, or a batch of links from another app, waits until you go to its tab. ⇧⌘-click still takes you there at once.");
     frame.rule(c, p);

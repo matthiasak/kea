@@ -9,31 +9,12 @@ const Case = main.Case;
 const Harness = main.Harness;
 const smooth = @import("smooth.zig");
 
-const RUSAGE_INFO_V4: c_int = 4;
-
-const rusage_info_v4 = extern struct {
-    ri_uuid: [16]u8 = @splat(0),
-    ri_user_time: u64 = 0,
-    ri_system_time: u64 = 0,
-    ri_pkg_idle_wkups: u64 = 0,
-    ri_interrupt_wkups: u64 = 0,
-    ri_pageins: u64 = 0,
-    ri_wired_size: u64 = 0,
-    ri_resident_size: u64 = 0,
-    ri_phys_footprint: u64 = 0,
-    rest: [27]u64 = @splat(0),
-};
-
-extern "c" fn proc_pid_rusage(pid: c_int, flavor: c_int, buffer: *anyopaque) c_int;
-
 pub const cases = [_]Case{
     .{ .name = "webkit metrics (report)", .run = webkitMetrics },
 };
 
 fn physFootprintMb(pid: c_int) f64 {
-    var info: rusage_info_v4 = .{};
-    if (proc_pid_rusage(pid, RUSAGE_INFO_V4, &info) != 0) return 0;
-    return @as(f64, @floatFromInt(info.ri_phys_footprint)) / (1024.0 * 1024.0);
+    return app.footprint.mb(pid) orelse 0;
 }
 
 fn waitLoadedAndPainted(h: *Harness, t: *app.Tab, timeout_s: f64) !f64 {
@@ -84,10 +65,7 @@ fn webkitMetrics(h: *Harness) !void {
     var pid_count: usize = 0;
     var web_mb: f64 = 0;
     for (b.tabs.items) |tab| {
-        const wv = tab.web orelse continue;
-        if (!objc.msg(objc.BOOL, wv, "respondsToSelector:", .{objc.sel("_webProcessIdentifier")})) continue;
-        const pid = objc.msg(c_int, wv, "_webProcessIdentifier", .{});
-        if (pid <= 0) continue;
+        const pid = app.footprint.webPid(tab.web) orelse continue;
         var seen = false;
         for (pids[0..pid_count]) |p| {
             if (p == pid) {

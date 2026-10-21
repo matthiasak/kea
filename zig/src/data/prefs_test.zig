@@ -21,6 +21,7 @@ const swift_defaults = .{
     .{ "search.engine", "engine", prefs.Engine.google },
     .{ "search.custom", "custom_engine", "" },
     .{ "tabs.sleep", "sleeps_tabs", true },
+    .{ "tabs.sleep.minutes", "sleep_minutes", @as(f64, 10) },
     .{ "tabs.lazy", "lazy_tabs", true },
     .{ "start.fresh", "starts_fresh", false },
     .{ "search.sites", "searches_sites", false },
@@ -154,6 +155,7 @@ test "prefs setters write through" {
     p.set("reader_theme", .sepia);
     p.set("reader_size", 22);
     p.set("reader_width", .wide);
+    p.set("sleep_minutes", 30);
     p.setChatZoom(1.26);
     p.setAIModel("claude-x", "anthropic");
     p.setAIModel("sk-secret", "openAI");
@@ -175,6 +177,7 @@ test "prefs setters write through" {
     try testing.expectEqual(prefs.ReaderTheme.sepia, q.reader_theme);
     try testing.expectEqual(@as(f64, 22), q.reader_size);
     try testing.expectEqual(prefs.ReaderWidth.wide, q.reader_width);
+    try testing.expectEqual(@as(f64, 30), q.sleep_minutes);
     try testing.expectEqualStrings("claude-x", q.aiModel("anthropic", "s"));
     try testing.expectEqualStrings("s", q.aiModel("openAI", "s"));
     try testing.expectEqual(@as(usize, 1), q.keywords.len);

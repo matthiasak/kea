@@ -82,6 +82,8 @@ pub const Tab = struct {
     typing: bool = false,
     /// `zoom`: how much bigger the page is laid out.
     zoom: f64 = 1,
+    mem_mb: f32 = 0,
+    mem_at: f64 = 0,
     /// Its process went away out of sight (`stale`).
     stale: bool = false,
     /// When its process went away lately (`crashes`), SwiftDates.
