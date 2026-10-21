@@ -107,4 +107,30 @@ fn webkitMetrics(h: *Harness) !void {
         "webkit-metrics: first_paint_ms={d:.1} nav_ms_p50={d:.1} nav_ms_max={d:.1} idle_cpu={d:.2}% web_procs={d} web_mb={d:.1} app_mb={d:.1}\n",
         .{ first_paint_ms, nav_ms_p50, nav_ms_max, idle_cpu_pct, pid_count, web_mb, app_mb },
     );
+    var pid_buf: [24]u8 = undefined;
+    const pid_str = std.fmt.bufPrint(&pid_buf, "{d}", .{std.c.getpid()}) catch "0";
+    if (std.process.run(h.gpa, main.ui_app.io, .{
+        .argv = &.{ "/usr/bin/footprint", "-p", pid_str },
+        .stdout_limit = .limited(1 << 20),
+        .stderr_limit = .limited(1 << 20),
+    })) |res| {
+        defer h.gpa.free(res.stdout);
+        defer h.gpa.free(res.stderr);
+        var lines = std.mem.splitScalar(u8, res.stdout, '\n');
+        while (lines.next()) |line| {
+            const trimmed = std.mem.trim(u8, line, " \t\r");
+            for ([_][]const u8{
+                "IOSurface",
+                "MALLOC_SMALL",
+                "MALLOC_LARGE",
+                "Owned physical footprint (unmapped) (graphics)",
+                "IOAccelerator (graphics)",
+            }) |needle| {
+                if (std.mem.indexOf(u8, trimmed, needle) != null) {
+                    std.debug.print("mem: {s}\n", .{trimmed});
+                    break;
+                }
+            }
+        }
+    } else |_| {}
 }

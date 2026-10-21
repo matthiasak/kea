@@ -228,7 +228,7 @@ Source-by-source (`Sources/Kea/*.swift` vs `zig/src/**`) and snapshot (`$TMPDIR/
 | 10. Downloads panel idle (50 kept + 3 active) | 3.92 | 0.15 | 0.17 | 0.23 | 0.41 | 1.42 | 2.15 | 581 | 0.0 (0) | PASS |
 | 11. Ctrl+Tab switcher (120 candidates) | 4.48 | 0.23 | 0.27 | 0.32 | 0.36 | 1.02 | 1.34 | 967 | 0.0 (0) | PASS |
 
-### 3. WebKit metrics (`KEAZIG_E2E="webkit metrics" zig build e2e`)
+### 3. WebKit metrics (`KEA_E2E="webkit metrics" zig build e2e`)
 
 ```
 webkit-metrics: first_paint_ms=48.7 nav_ms_p50=50.0 nav_ms_max=52.0 idle_cpu=0.77% web_procs=6 web_mb=78.0 app_mb=64.1
@@ -279,11 +279,13 @@ webkit-metrics: first_paint_ms=48.7 nav_ms_p50=50.0 nav_ms_max=52.0 idle_cpu=0.7
 | 11. Ctrl+Tab switcher (120 candidates) | 2.54 | 0.28 | 0.35 | 0.63 | 0.71 | 1.17 | 1.85 | 977 | 0.0 (0) | PASS |
 | 12. Cold icons (200 distinct hosts) | 11.85 | 0.41 | 0.50 | 0.71 | 0.73 | 0.92 | 1.08 | 1450 | 0.0 (0) | PASS |
 
-### 3. WebKit metrics (`KEAZIG_E2E="webkit metrics" zig build e2e`)
+### 3. WebKit metrics (`KEA_E2E="webkit metrics" zig build e2e`)
 
 ```
 webkit-metrics: first_paint_ms=20.1 nav_ms_p50=52.0 nav_ms_max=60.0 idle_cpu=0.93% web_procs=6 web_mb=77.8 app_mb=140.0
 ```
+
+- Note: both `app_mb` numbers (64.1 MB and 140.0 MB) came from the Debug e2e build (`DebugAllocator`), and the second run invoked `KEAZIG_E2E` instead of `KEA_E2E`, running all 63 e2e cases in one process before measuring.
 
 - `first_paint_ms` improved from `48.7 ms` (Q0 baseline) to `20.1 ms` via immediate `StageHost.setPanes` placement (`addSubview:` + `setFrame:` inside `setPanes` while held at `alphaValue = 0` until `_doAfterNextPresentationUpdate:`).
 

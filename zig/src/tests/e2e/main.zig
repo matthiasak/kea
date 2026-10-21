@@ -208,7 +208,7 @@ fn placeOnFastestScreen(nswindow: objc.Object) void {
     });
 }
 
-var ui_app: *nanoui.App = undefined;
+pub var ui_app: *nanoui.App = undefined;
 
 /// Every allocation (and growing remap) the cases make on `gpa`, from any
 /// thread: the idle case asks that a frame make none.

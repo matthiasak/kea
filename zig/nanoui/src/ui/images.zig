@@ -35,7 +35,7 @@ pub const Decoded = struct {
 };
 
 /// Decoded pictures kept at most (the oldest go first).
-const max_kept_bytes = 64 * 1024 * 1024;
+const max_kept_bytes = 24 * 1024 * 1024;
 
 /// Where packed pictures go instead of `pixels`: the GPU's texture, so no
 /// copy of the atlas is kept in memory (a window on Metal).

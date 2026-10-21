@@ -57,7 +57,7 @@ pub fn frame(b: *Browser) void {
         var i: usize = s.picks.ids.items.items.len;
         while (i > 0) {
             i -= 1;
-            if (b.bookmarks.bookmark(s.picks.ids.items.items[i]) == null) _ = s.picks.ids.items.swapRemove(i);
+            if (b.bookmarks.bookmark(s.picks.ids.items.items[i]) == null) s.picks.ids.remove(s.picks.ids.items.items[i]);
         }
     }
 }

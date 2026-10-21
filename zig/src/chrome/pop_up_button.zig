@@ -11,7 +11,7 @@ const Palette = @import("../design/palette.zig").Palette;
 const Picture = struct { bytes: []u8, w: f32, h: f32 };
 
 /// Pictures by hash, for the life of the app (main thread).
-// ponytail: never evicted; a few titles (engines, providers, models) × 2 appearances × 2 presses.
+// ponytail: clear-all at 64 entries, LRU if titles churn.
 var pictures: std.AutoHashMapUnmanaged(u64, Picture) = .empty;
 
 /// The pop-up button showing `title`, named `label` for VoiceOver; where
@@ -45,6 +45,11 @@ fn picture(title: []const u8, dark: bool, scale: f32, held: bool) ?Picture {
     const k = hash(title, dark, scale, held);
     if (pictures.get(k)) |pic| return pic;
     const pic = draw(title, dark, scale, held) orelse return null;
+    if (pictures.count() >= 64) {
+        var it = pictures.valueIterator();
+        while (it.next()) |v| std.heap.c_allocator.free(v.bytes);
+        pictures.clearRetainingCapacity();
+    }
     pictures.put(std.heap.c_allocator, k, pic) catch {
         std.heap.c_allocator.free(pic.bytes);
         return null;

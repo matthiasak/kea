@@ -22,7 +22,9 @@ const Picture = struct {
 /// Pictures by `Picture`'s hash, for the life of the app (main thread).
 // ponytail: never evicted; a handful of sizes × 124 tiny PNGs.
 var pictures: std.AutoHashMapUnmanaged(u64, []u8) = .empty;
-fn png(p: Picture) ?[]const u8 {
+fn png(in: Picture) ?[]const u8 {
+    var p = in;
+    p.size = @round(p.size * 2) / 2;
     var h = std.hash.Wyhash.init(0x7269_6e67);
     inline for (.{ p.size, p.scale, @as(u8, @intFromBool(p.dark)), @backingInt(p.kind), p.step }) |v| h.update(std.mem.asBytes(&v));
     const k = h.final();

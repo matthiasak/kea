@@ -12,20 +12,26 @@ const Uuid = json.Uuid;
 /// A set of ids, in no order (on the window's allocator).
 pub const Ids = struct {
     items: std.ArrayList(Uuid) = .empty,
+    index: std.AutoHashMapUnmanaged(Uuid, void) = .empty,
     gen: u64 = 0,
 
     pub fn has(s: *const Ids, id: Uuid) bool {
-        return bm.has(s.items.items, id);
+        return s.index.contains(id);
     }
 
     pub fn put(s: *Ids, gpa: std.mem.Allocator, id: Uuid) void {
         if (!s.has(id)) {
-            s.items.append(gpa, id) catch {};
+            s.items.append(gpa, id) catch return;
+            s.index.put(gpa, id, {}) catch {
+                _ = s.items.pop();
+                return;
+            };
             s.gen +%= 1;
         }
     }
 
     pub fn remove(s: *Ids, id: Uuid) void {
+        if (!s.index.remove(id)) return;
         for (s.items.items, 0..) |x, i| if (x.eql(id)) {
             _ = s.items.swapRemove(i);
             s.gen +%= 1;
@@ -39,17 +45,20 @@ pub const Ids = struct {
 
     pub fn set(s: *Ids, gpa: std.mem.Allocator, ids: []const Uuid) void {
         s.items.clearRetainingCapacity();
-        s.items.appendSlice(gpa, ids) catch {};
+        s.index.clearRetainingCapacity();
+        for (ids) |id| s.put(gpa, id);
         s.gen +%= 1;
     }
 
     pub fn clear(s: *Ids) void {
         if (s.items.items.len > 0) s.gen +%= 1;
         s.items.clearRetainingCapacity();
+        s.index.clearRetainingCapacity();
     }
 
     pub fn deinit(s: *Ids, gpa: std.mem.Allocator) void {
         s.items.deinit(gpa);
+        s.index.deinit(gpa);
     }
 };
 /// Which list is drawn: each keeps its own open folders.
