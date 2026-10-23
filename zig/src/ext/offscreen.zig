@@ -249,18 +249,18 @@ fn deadline(ctx: ?*anyopaque) callconv(.c) void {
 
 /// `finish(.success)`: the waiting relays go on, the creator is answered.
 pub fn ready(doc: *Document) void {
+    const gpa = doc.gpa;
+    const serial = doc.serial;
     doc.deadline = false;
     var waiting = doc.readiness;
     doc.readiness = .empty;
-    defer waiting.deinit(doc.gpa);
+    defer waiting.deinit(gpa);
     if (doc.loading) |r| {
         doc.loading = null;
         r.ok(null);
     }
-    const serial = doc.serial;
     for (waiting.items) |s| {
-        defer dropSend(doc.gpa, s);
-        // A relay's own reply may close it; the rest are then unheard.
+        defer dropSend(gpa, s);
         const d = alive(serial) orelse {
             unhandled(s.reply);
             continue;

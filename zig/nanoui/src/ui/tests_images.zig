@@ -41,13 +41,13 @@ test "ui.image at 15 pt packs side 30 at scale 2 and side 15 at scale 1" {
 const BudgetState = struct {
     bytes: []const u8,
     fn view(s: *BudgetState, c: *ui.Context) void {
-        for (0..7) |i| {
+        for (0..9) |i| {
             _ = ui.image(c, .{ .key = c.print("icon.{d}", .{i}), .bytes = s.bytes, .max_width = 15, .max_height = 15, .radius = 0, .scale = 0.5 });
         }
     }
 };
 
-test "decode budget limits to 6 decodes per frame and requests next frame" {
+test "decode budget limits to 8 decodes per frame and requests next frame" {
     const gpa = testing.allocator;
     const raw = try gpa.alloc(u8, 16 * 16 * 4);
     defer gpa.free(raw);
@@ -59,10 +59,10 @@ test "decode budget limits to 6 decodes per frame and requests next frame" {
     var t: ui.Tester = undefined;
     try t.init(gpa, ui.View.init(&s, BudgetState.view), .{ .width = 200, .height = 200, .scale = 2 });
     defer t.deinit();
-    try testing.expectEqual(@as(usize, 6), t.ctx.text.images.entries.count());
+    try testing.expectEqual(@as(usize, 8), t.ctx.text.images.entries.count());
     try testing.expect(t.ctx.text.images.wants_frame);
     t.frame();
-    try testing.expectEqual(@as(usize, 7), t.ctx.text.images.entries.count());
+    try testing.expectEqual(@as(usize, 9), t.ctx.text.images.entries.count());
     try testing.expect(!t.ctx.text.images.wants_frame);
 }
 
@@ -77,20 +77,20 @@ test "sink uploads survive render after pre-sink pixels allocation" {
 
     var s: BudgetState = .{ .bytes = png };
     var t: ui.Tester = undefined;
-    // Frame 1 runs with sink == null, allocating im.pixels and decoding 6 of 7 icons.
+    // Frame 1 runs with sink == null, allocating im.pixels and decoding 8 of 9 icons.
     try t.init(gpa, ui.View.init(&s, BudgetState.view), .{ .width = 200, .height = 200, .scale = 2, .dark = true });
     defer t.deinit();
-    // Sync the first 6 icons into images_texture, then attach the direct GPU sink for icon.6.
+    // Sync the first 8 icons into images_texture, then attach the direct GPU sink for icon.8.
     t.renderer.syncImages(&t.text.images);
     t.text.images.sink = .{ .ctx = &t.renderer, .upload = @TypeOf(t.renderer).uploadImage };
     t.frame();
     const px = try t.render(gpa);
     defer px.deinit(gpa);
-    const k6 = images.Images.key("icon.6");
-    const e6 = t.ctx.text.images.entries.get(.{ .key = k6, .side = 30 }).?.entry.?;
+    const k8 = images.Images.key("icon.8");
+    const e6 = t.ctx.text.images.entries.get(.{ .key = k8, .side = 30 }).?.entry.?;
     var r6: ?ui.Rect = null;
     for (t.ctx.nodes.items) |n| switch (n.content) {
-        .image => |im| if (im.key == k6) {
+        .image => |im| if (im.key == k8) {
             r6 = n.rect;
         },
         else => {},

@@ -96,7 +96,6 @@ pub const Renderer = struct {
         objc.msg(void, layer, "setFramebufferOnly:", .{objc.YES});
         // Three drawables managed by CAMetalDisplayLink.
         objc.msg(void, layer, "setMaximumDrawableCount:", .{@as(objc.NSUInteger, 3)});
-        objc.msg(void, layer, "setAllowsNextDrawableTimeout:", .{objc.YES});
         objc.msg(void, layer, "setOpaque:", .{objc.YES});
         // A frame waits for a drawable rather than being dropped: a dropped
         // one in a resize leaves the last, at the old size, stretched.
@@ -201,19 +200,22 @@ pub const Renderer = struct {
                 break;
             };
         }
+        const given = self.given_drawable;
+        self.given_drawable = null;
         const t0 = cf.CACurrentMediaTime();
         if (objc.dispatch_semaphore_wait(self.in_flight, dispatch_time(0, std.time.ns_per_s)) != 0) {
-            self.given_drawable = null;
             return .{ .drawable_wait_ms = (cf.CACurrentMediaTime() - t0) * 1000, .sync = self.live_resize };
         }
-        const drawable = self.given_drawable orelse {
+        const drawable = given orelse {
             _ = objc.dispatch_semaphore_signal(self.in_flight);
             return .{ .drawable_wait_ms = (cf.CACurrentMediaTime() - t0) * 1000, .sync = self.live_resize };
         };
-        self.given_drawable = null;
         const sync = self.live_resize;
         const t1 = cf.CACurrentMediaTime();
-        const texture = objc.msg(objc.Object, drawable, "texture", .{});
+        const texture = objc.msg(?objc.Object, drawable, "texture", .{}) orelse {
+            _ = objc.dispatch_semaphore_signal(self.in_flight);
+            return .{ .drawable_wait_ms = (t1 - t0) * 1000, .sync = sync };
+        };
         // The slot's last frame is done: its pixel buffers can go.
         const held = &self.held[self.next_buffer];
         self.frame_textures.release(held);
@@ -272,15 +274,15 @@ pub const Renderer = struct {
     }
 
     pub fn setInTransaction(self: *Renderer, on: bool) void {
+        if (self.in_transaction == on) return;
         self.in_transaction = on;
-        objc.msg(void, self.layer, "setPresentsWithTransaction:", .{on});
+        objc.msg(void, self.layer, "setPresentsWithTransaction:", .{on or self.live_resize});
     }
 
     pub fn setLiveResize(self: *Renderer, on: bool) void {
         if (self.live_resize == on) return;
         self.live_resize = on;
-        objc.msg(void, self.layer, "setPresentsWithTransaction:", .{on});
-        objc.msg(void, self.layer, "setMaximumDrawableCount:", .{@as(objc.NSUInteger, if (on) 3 else 2)});
+        objc.msg(void, self.layer, "setPresentsWithTransaction:", .{on or self.in_transaction});
     }
 
     pub fn setOpaque(self: *Renderer, on: bool) void {

@@ -443,13 +443,14 @@ fn performDragOperation(obj: objc.Object, _: objc.SEL, info: objc.Object) callco
 
 fn metalDisplayLinkNeedsUpdate(obj: objc.Object, _: objc.SEL, _: objc.Object, update: objc.Object) callconv(.c) void {
     const s = surfaceOf(obj) orelse return;
+    if (s.dead or s.in_frame) return;
     const target = objc.msg(f64, update, "targetPresentationTimestamp", .{});
     const frame_in_due = s.ctx.frame_in != null and target >= s.frame_in_due - 0.001;
     if (!s.full_pending and !frame_in_due and !s.ctx.animating and !s.in_live_resize and !s.geometry_changed and !s.retained_ready and !s.pending_sync and s.ctx.time_driven == .none) {
         s.updatePacing(target, false);
         return;
     }
-    const drawable = objc.msg(objc.Object, update, "drawable", .{});
+    const drawable = objc.msg(?objc.Object, update, "drawable", .{}) orelse return;
     const duration: f64 = if (s.link_fps > 0) 1.0 / @as(f64, s.link_fps) else 1.0 / @as(f64, @max(60.0, s.max_fps));
     s.renderer.given_drawable = drawable;
     defer s.renderer.given_drawable = null;

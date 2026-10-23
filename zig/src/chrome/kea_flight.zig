@@ -301,25 +301,11 @@ const spark_colors = [_]ui.Color{
     ui.Color.hex(0x3EC9B0), // primary-shaft turquoise
 };
 
-fn warmSprites(c: *ui.Context, sp: *const Sprites) bool {
-    const side: u32 = @intFromFloat(@max(1, @ceil(@max(sprite_w, sprite_h) * c.scale)));
-    var all = true;
-    for (0..pose_count) |i| {
-        for ([_][2][]const u8{ .{ keys_left[i], sp.left[i] }, .{ keys_right[i], sp.right[i] } }) |pair| {
-            const k = std.hash.Wyhash.hash(0x1a9e, pair[0]);
-            _ = c.text.images.info(k, pair[1]);
-            if (c.text.images.get(k, pair[1], side) == null) all = false;
-        }
-    }
-    return all;
-}
-
 /// Dynamic pixel-art kea circus flying across a blank New Tab (`area`), behind
 /// the address field at `field_y`.
 pub fn newTabArt(c: *ui.Context, area: ui.Size, field_y: f32) void {
     if (area.w < 240 or area.h < 180) return;
     const sp = loadSprites() orelse return;
-    const warm = warmSprites(c, sp);
     const t: f32 = if (c.reduce_motion) 0 else @floatCast(c.time);
     _ = c.open(.{ .absolute = true, .width = .{ .px = area.w }, .height = .{ .px = area.h }, .clip = true }, "kea.newtab.art");
     defer c.end();
@@ -401,11 +387,7 @@ pub fn newTabArt(c: *ui.Context, area: ui.Size, field_y: f32) void {
         });
         c.end();
     }
-    if (!warm) {
-        c.animating = true;
-    } else if (!c.reduce_motion) {
-        c.frameIn(1.0 / 15.0);
-    }
+    if (!c.reduce_motion) c.frameIn(1.0 / 15.0);
 }
 
 test "kea.gif reads as timed frames that become PNG" {

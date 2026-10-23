@@ -41,7 +41,7 @@ pub fn warmCaches(ts: *TextSystem) void {
     if (ts.wraps.current.capacity() < 4096) ts.wraps.current.ensureTotalCapacity(ts.gpa, 4096) catch {};
     if (ts.atlas.sprites.capacity() < 4096) ts.atlas.sprites.ensureTotalCapacity(ts.gpa, 4096) catch {};
     if (ts.atlas.symbols.capacity() < 512) ts.atlas.symbols.ensureTotalCapacity(ts.gpa, 512) catch {};
-    if (ts.atlas.pixels.capacity < 16384) ts.atlas.pixels.ensureTotalCapacity(ts.gpa, 16384) catch {};
+    if (!portable and ts.atlas.pixels.capacity < 16384) ts.atlas.pixels.ensureTotalCapacity(ts.gpa, 16384) catch {};
 }
 
 /// Retains recently shaped layouts across frames up to `max_layouts` so

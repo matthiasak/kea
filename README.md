@@ -129,7 +129,7 @@ Every shortcut can be customized in **Settings › Shortcuts**.
 
 ## Architecture & Testing
 
-`zig/src/` is ~86,000 lines of Zig 0.17 with no C or Objective-C files: AppKit and WebKit are reached through the Objective-C runtime. The interface is drawn by **nanoui** (`zig/nanoui/`, ~23,000 lines), an immediate-mode UI library with flexbox layout, a glyph atlas, springs and a Metal renderer (plus a CPU rasterizer for tests); pages are real `WKWebView`s showing through holes in it.
+`zig/src/` is ~89,000 lines of Zig 0.17 with no C or Objective-C files: AppKit and WebKit are reached through the Objective-C runtime. The interface is drawn by **nanoui** (`zig/nanoui/`, ~32,000 lines), an immediate-mode UI library with flexbox layout, a glyph atlas, springs, and a 120 Hz `CAMetalDisplayLink` Metal renderer (plus a CPU rasterizer for tests); pages are real `WKWebView`s showing through holes in it.
 
 - `app/`: launch, windows, menus, keys, commands
 - `model/`: a window's tabs, spaces and splits

@@ -239,7 +239,6 @@ pub const Surface = struct {
         return self.theme_override orelse self.cached_theme;
     }
 
-    /// Builds, lays out, paints and draws one frame.
     /// The atlas texture the renderer samples: CoreText's, or the one
     /// nanoui's own text rasterized into memory, uploaded when it changed.
     fn atlasTexture(self: *Surface) objc.Object {
@@ -270,6 +269,8 @@ pub const Surface = struct {
     }
 
     pub fn frame(self: *Surface) void {
+        if (self.in_frame or self.dead) return;
+        self.renderer.given_drawable = null;
         self.full_pending = true;
         const now = @max(cf.CACurrentMediaTime(), self.last_frame_time);
         const fallback_dur = 1.0 / @as(f64, @max(60.0, self.max_fps));
@@ -277,6 +278,7 @@ pub const Surface = struct {
     }
 
     pub fn frameAt(self: *Surface, kind: frame_log_mod.Kind, target_in: f64, duration_in: f64) void {
+        if (self.in_frame or self.dead) return;
         const vis = self.visible();
         self.pending = !vis;
         self.in_frame = true;
@@ -289,12 +291,8 @@ pub const Surface = struct {
         const fallback_dur = 1.0 / @as(f64, @max(60.0, self.max_fps));
         const dur: f64 = if (duration_in > 0) duration_in else fallback_dur;
         if (duration_in > 0) self.link_duration = duration_in;
-        const has_drawable = self.renderer.given_drawable != null;
         const now = if (target_in > 0) @max(target_in, self.last_frame_time) else @max(cf.CACurrentMediaTime(), self.last_frame_time);
-        const dt: f32 = if (self.last_frame_time > 0)
-            @floatCast(std.math.clamp(now - self.last_frame_time, 0, 0.5))
-        else
-            @floatCast(dur);
+        const dt: f32 = if (self.last_frame_time > 0) @floatCast(std.math.clamp(now - self.last_frame_time, 0, 0.5)) else @floatCast(dur);
         self.last_frame_time = now;
         self.frame_kind = kind;
         self.ctx.transparent_root = self.transparent;
@@ -313,7 +311,7 @@ pub const Surface = struct {
         self.geometry_changed = false;
         self.pending_sync = false;
         self.afterFocus();
-        if (!vis or !has_drawable) {
+        if (!vis or self.renderer.given_drawable == null) {
             self.retained_ready = vis and !c.animating and !c.changed and !r.hot_changed;
             self.pending_sync = sync;
             self.updateCursor();
@@ -365,9 +363,7 @@ pub const Surface = struct {
             } else if (c.time_driven != .none) {
                 self.setRate(if (c.time_driven == .fast) null else 1.0 / 24.0);
                 self.setPaced(true);
-            } else {
-                self.setPaced(false);
-            }
+            } else self.setPaced(false);
         } else if (more or c.frame_in != null or c.time_driven != .none) self.scheduleTick();
         if (!c.animating) {
             self.last_frame_time = 0;
@@ -376,7 +372,8 @@ pub const Surface = struct {
     }
 
     pub fn redrawRetained(self: *Surface, target_in: f64, duration_in: f64) void {
-        if (!self.visible()) {
+        if (self.in_frame or self.dead) return;
+        if (!self.visible() or self.renderer.given_drawable == null) {
             self.setPaced(false);
             return;
         }

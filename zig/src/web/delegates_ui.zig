@@ -61,7 +61,10 @@ fn createWebView(self: objc.Object, _: objc.SEL, wv: objc.Object, configuration:
     const flags = objc.msg(objc.NSUInteger, action, "modifierFlags", .{});
     const cmd_behind = (flags & (1 << 20)) != 0 and (flags & (1 << 17)) == 0;
     if (b.prefs.uses_tab_groups and !t.shy) t.group_id = source.group_id;
-    b.tabs.insert(b.gpa, b.placeForNew(), t) catch @panic("OOM");
+    b.tabs.insert(b.gpa, b.placeForNew(), t) catch {
+        t.destroy();
+        return null;
+    };
     b.arrangeGroupedTabs(null);
     b.reindexTabs();
     if (!page_view.takeBehind(wv) and !cmd_behind) {

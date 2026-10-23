@@ -144,6 +144,7 @@ fn consent(job: *Job, then: Consented) void {
 
 fn answered(ctx: *anyopaque, yes: bool) void {
     const job: *Job = @ptrCast(@alignCast(ctx));
+    if (owner_ref != job.owner) return job.consented.?(job, false);
     const id = idOf(job.context);
     if (!yes) {
         if (!refused.contains(id)) if (gpa.dupe(u8, id)) |k| {
@@ -459,7 +460,13 @@ fn record(job: *Job) void {
 const VisibilityBlock = objc.Block(Job, &.{ ?objc.Object, ?objc.Object });
 
 /// Up to 20 looks, 100 ms apart, for the page to be seen.
+fn abort(job: *Job) void {
+    if (job.lend) watch_mod.giveBack(job.web.?);
+    finish(job, failure("AbortError", "No answer"));
+}
+
 fn poll(job: *Job) void {
+    if (owner_ref != job.owner) return abort(job);
     if (job.tries >= 20) return force(job);
     job.tries += 1;
     const pool = objc.Pool.push();
@@ -474,6 +481,7 @@ fn poll(job: *Job) void {
 }
 
 fn visibility(job: *Job, result: ?objc.Object, _: ?objc.Object) void {
+    if (owner_ref != job.owner) return abort(job);
     if (isKind(result, "NSString") and std.mem.eql(u8, objc.fromNSString(result), "visible")) return force(job);
     later(job);
 }
@@ -511,6 +519,7 @@ fn force(job: *Job) void {
 fn forced(job: *Job, result: ?objc.Object, err: ?objc.Object) void {
     const web = job.web.?;
     _ = in_flight.remove(@intFromPtr(web));
+    if (owner_ref != job.owner) return abort(job);
     const pool = objc.Pool.push();
     defer pool.pop();
     var ok = false;
