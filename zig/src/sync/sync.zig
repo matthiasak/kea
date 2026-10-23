@@ -219,8 +219,9 @@ pub const Sync = struct {
         self.kea.store.setString("sync.bucket", bk);
         replace(self.gpa, &self.access, ac);
         self.kea.store.setString("sync.access", ac);
+        const copy = dupe(self.gpa, sc);
         if (self.secret) |old| self.gpa.free(old);
-        self.secret = dupe(self.gpa, sc);
+        self.secret = copy;
         if (!self.testing()) saveKeychain("secret", sc);
         self.setPlace(.bucket);
         self.forgetKey();

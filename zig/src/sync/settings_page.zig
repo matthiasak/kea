@@ -161,10 +161,18 @@ fn homeShort(c: *ui.Context, path: []const u8) []const u8 {
 }
 
 fn keepBucket(b: *Browser, s: *State, sync: *Sync) void {
-    if (sync.useBucket(s.endpoint.text(), s.bucket.text(), s.access.text(), s.secret.text())) |err| b.announce(err) else s.secret.clear();
+    const sec = if (s.secret.text().len > 0) s.secret.text() else (sync.secret orelse "");
+    if (sync.useBucket(s.endpoint.text(), s.bucket.text(), s.access.text(), sec)) |err| b.announce(err) else s.secret.clear();
 }
 
 fn applyPassphrase(b: *Browser, s: *State, sync: *Sync) void {
+    if (sync.place == .bucket) {
+        const sec = if (s.secret.text().len > 0) s.secret.text() else (sync.secret orelse "");
+        if (s.secret.text().len > 0 or !std.mem.eql(u8, s.endpoint.text(), sync.endpoint) or !std.mem.eql(u8, s.bucket.text(), sync.bucket) or !std.mem.eql(u8, s.access.text(), sync.access)) {
+            if (sync.useBucket(s.endpoint.text(), s.bucket.text(), s.access.text(), sec)) |err| return b.announce(err);
+            s.secret.clear();
+        }
+    }
     // `use` keeps its own copy; the field empties at once.
     const said = sync.use(s.passphrase.text(), b);
     s.passphrase.clear();
@@ -187,11 +195,19 @@ fn chooseLater(ctx: ?*anyopaque) callconv(.c) void {
     objc.msg(void, panel, "setCanChooseFiles:", .{objc.NO});
     objc.msg(void, panel, "setCanCreateDirectories:", .{objc.YES});
     const home = NSHomeDirectory();
+    const cloud_storage = objc.msg(objc.Object, home, "stringByAppendingPathComponent:", .{objc.nsString("Library/CloudStorage")});
     const icloud = objc.msg(objc.Object, home, "stringByAppendingPathComponent:", .{objc.nsString("Library/Mobile Documents/com~apple~CloudDocs")});
     var is_dir: objc.BOOL = objc.NO;
     const fm = objc.msg(objc.Object, objc.class("NSFileManager"), "defaultManager", .{});
-    const there = objc.msg(objc.BOOL, fm, "fileExistsAtPath:isDirectory:", .{ icloud, &is_dir }) and is_dir;
-    objc.msg(void, panel, "setDirectoryURL:", .{objc.msg(objc.Object, objc.class("NSURL"), "fileURLWithPath:", .{if (there) icloud else home})});
+    const start = if (kea.sync.folder.len > 0 and objc.msg(objc.BOOL, fm, "fileExistsAtPath:isDirectory:", .{ objc.nsString(kea.sync.folder), &is_dir }) and is_dir)
+        objc.nsString(kea.sync.folder)
+    else if (objc.msg(objc.BOOL, fm, "fileExistsAtPath:isDirectory:", .{ cloud_storage, &is_dir }) and is_dir)
+        cloud_storage
+    else if (objc.msg(objc.BOOL, fm, "fileExistsAtPath:isDirectory:", .{ icloud, &is_dir }) and is_dir)
+        icloud
+    else
+        home;
+    objc.msg(void, panel, "setDirectoryURL:", .{objc.msg(objc.Object, objc.class("NSURL"), "fileURLWithPath:", .{start})});
     objc.msg(void, panel, "setPrompt:", .{objc.nsString("Sync here")});
     // NSModalResponseOK
     if (objc.msg(objc.NSInteger, panel, "runModal", .{}) != 1) return;

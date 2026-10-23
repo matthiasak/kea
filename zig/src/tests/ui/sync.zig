@@ -115,6 +115,28 @@ test "sync page turns on with a folder and lists the other Mac" {
     try t.expect(!a.tester.hasText("Passphrase"));
 }
 
+test "sync page bucket mode commits fields when Use is clicked" {
+    var a: Fixture = undefined;
+    try a.init(gpa, .{ .sidebar = true });
+    defer a.deinit();
+    app.settings.open(a.browser, .sync);
+    a.tester.settle(1);
+    try clickControl(&a, .radio_button, "Bucket");
+    a.tester.settle(1);
+    try t.expectEqual(.bucket, a.kea.sync.place);
+    const s = &a.browser.settings.sync;
+    s.endpoint.set("http://127.0.0.1:9");
+    s.bucket.set("my-kea-bucket");
+    s.access.set("GOOG1EACCESS");
+    s.secret.set("my-secret");
+    try clickControl(&a, .text_field, "Passphrase");
+    a.tester.typeText("correct horse");
+    a.tester.textOps(&.{.{ .command = .insert_newline }});
+    try t.expectEqualStrings("my-kea-bucket", a.kea.sync.bucket);
+    try t.expectEqualStrings("GOOG1EACCESS", a.kea.sync.access);
+    try t.expectEqualStrings("", s.secret.text());
+}
+
 test "send to device reaches the other Mac and its tabs show in History" {
     var a: Fixture = undefined;
     try a.init(gpa, .{ .sidebar = true });
