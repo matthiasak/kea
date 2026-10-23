@@ -38,43 +38,67 @@ fn paramSchema(a: A, param: []const u8, desc: []const u8) !Value {
 }
 
 pub fn toolsFor(a: A, wire: ai.Wire) !Value {
+    return (try toolsForWithPlugins(a, wire, true, false)).?;
+}
+
+pub fn toolsForWithPlugins(a: A, wire: ai.Wire, browser_tools: bool, web_search: bool) !?Value {
+    if (!browser_tools and !web_search) return null;
     var list = Array.init(a);
-    for (tools.specs) |s| {
-        const schema = try paramSchema(a, s.param, s.param_description);
-        switch (wire) {
-            .openAI => {
-                var fn_obj: ObjectMap = .empty;
-                try fn_obj.put(a, "name", str(s.name));
-                try fn_obj.put(a, "description", str(s.description));
-                try fn_obj.put(a, "parameters", schema);
-                var item: ObjectMap = .empty;
-                try item.put(a, "type", str("function"));
-                try item.put(a, "function", .{ .object = fn_obj });
-                try list.append(.{ .object = item });
-            },
-            .anthropic => {
-                var item: ObjectMap = .empty;
-                try item.put(a, "name", str(s.name));
-                try item.put(a, "description", str(s.description));
-                try item.put(a, "input_schema", schema);
-                try list.append(.{ .object = item });
-            },
-            .gemini => {
-                var item: ObjectMap = .empty;
-                try item.put(a, "name", str(s.name));
-                try item.put(a, "description", str(s.description));
-                try item.put(a, "parameters", schema);
-                try list.append(.{ .object = item });
-            },
+    if (browser_tools) {
+        for (tools.specs) |s| {
+            const schema = try paramSchema(a, s.param, s.param_description);
+            switch (wire) {
+                .openAI => {
+                    var fn_obj: ObjectMap = .empty;
+                    try fn_obj.put(a, "name", str(s.name));
+                    try fn_obj.put(a, "description", str(s.description));
+                    try fn_obj.put(a, "parameters", schema);
+                    var item: ObjectMap = .empty;
+                    try item.put(a, "type", str("function"));
+                    try item.put(a, "function", .{ .object = fn_obj });
+                    try list.append(.{ .object = item });
+                },
+                .anthropic => {
+                    var item: ObjectMap = .empty;
+                    try item.put(a, "name", str(s.name));
+                    try item.put(a, "description", str(s.description));
+                    try item.put(a, "input_schema", schema);
+                    try list.append(.{ .object = item });
+                },
+                .gemini => {
+                    var item: ObjectMap = .empty;
+                    try item.put(a, "name", str(s.name));
+                    try item.put(a, "description", str(s.description));
+                    try item.put(a, "parameters", schema);
+                    try list.append(.{ .object = item });
+                },
+            }
         }
     }
     if (wire == .gemini) {
         var wrap = Array.init(a);
-        var decls: ObjectMap = .empty;
-        try decls.put(a, "functionDeclarations", .{ .array = list });
-        try wrap.append(.{ .object = decls });
+        if (browser_tools) {
+            var decls: ObjectMap = .empty;
+            try decls.put(a, "functionDeclarations", .{ .array = list });
+            try wrap.append(.{ .object = decls });
+        }
+        if (web_search) {
+            var gs: ObjectMap = .empty;
+            try gs.put(a, "googleSearch", .{ .object = .empty });
+            try wrap.append(.{ .object = gs });
+            var uc: ObjectMap = .empty;
+            try uc.put(a, "urlContext", .{ .object = .empty });
+            try wrap.append(.{ .object = uc });
+        }
         return .{ .array = wrap };
     }
+    if (wire == .anthropic and web_search) {
+        var ws: ObjectMap = .empty;
+        try ws.put(a, "type", str("web_search_20250305"));
+        try ws.put(a, "name", str("web_search"));
+        try list.append(.{ .object = ws });
+    }
+    if (list.items.len == 0) return null;
     return .{ .array = list };
 }
 

@@ -154,6 +154,10 @@ test "Apple Passwords extension enabled steps Kea's sign-in list aside" {
         .fromStore = true,
         .permissions = try e.gpa.alloc([]const u8, 0),
     });
+    // Unentitled, the helper is killed by macOS: Kea's list keeps filling.
+    try t.expect(!e.usesApple());
+    try t.expect(app.form_relay.fills(tab));
+    b.kea.prefs.passkeys_possible = true;
     try t.expect(e.usesApple());
     try t.expect(!app.form_relay.fills(tab));
     if (tab.address) |old| b.gpa.free(old);

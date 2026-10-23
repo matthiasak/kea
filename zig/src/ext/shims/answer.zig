@@ -134,6 +134,10 @@ pub const Pending = struct {
         p.reply.ok(dict("error", objc.nsString(why)));
     }
 
+    pub fn drop(p: *Pending) void {
+        p.free();
+    }
+
     fn free(p: *Pending) void {
         const gpa = p.arena.child_allocator;
         p.arena.deinit();

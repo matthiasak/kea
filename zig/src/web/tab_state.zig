@@ -154,6 +154,7 @@ fn verify(t: *Tab, _: usize) void {
     const pool = objc.Pool.push();
     defer pool.pop();
     if (tab_mod.currentUrl(wv)) |u| if (std.mem.eql(u8, u, "about:blank")) return tab_mod.open(wv, address);
+    if (t.committed != null and !t.stale) return;
     t.evaluate("document.readyState", .page, reopenIfDead, 0);
 }
 
@@ -299,6 +300,7 @@ const Snap = struct {
     serial: u64,
     done: Done,
     arg: usize,
+    drop: ?*const fn (usize) void = null,
     cgimage: ?cg.Image = null,
     bytes: ?[]u8 = null,
 };
@@ -337,13 +339,19 @@ fn encodeFg(p: ?*anyopaque) callconv(.c) void {
         if (s.bytes) |b| std.heap.c_allocator.free(b);
         std.heap.c_allocator.destroy(s);
     }
-    const t = Tab.alive(s.serial) orelse return;
+    const t = Tab.alive(s.serial) orelse {
+        if (s.drop) |d| d(s.arg);
+        return;
+    };
     const picture = if (s.bytes) |b| t.gpa.dupe(u8, b) catch null else null;
     s.done(t, picture != null, picture, s.arg);
 }
 
 fn snapped(s: *Snap, image: ?objc.Object, _: ?objc.Object) void {
-    if (Tab.alive(s.serial) == null) return std.heap.c_allocator.destroy(s);
+    if (Tab.alive(s.serial) == null) {
+        if (s.drop) |d| d(s.arg);
+        return std.heap.c_allocator.destroy(s);
+    }
     if (image) |img| {
         const pool = objc.Pool.push();
         defer pool.pop();
@@ -353,7 +361,7 @@ fn snapped(s: *Snap, image: ?objc.Object, _: ?objc.Object) void {
         }
     }
     defer std.heap.c_allocator.destroy(s);
-    if (Tab.alive(s.serial)) |t| s.done(t, false, null, s.arg);
+    if (Tab.alive(s.serial)) |t| s.done(t, false, null, s.arg) else if (s.drop) |d| d(s.arg);
 }
 /// `snapshot`: drawn by the page's own process, so a view off screen can
 /// still be pictured; null when there is nothing to draw.
@@ -362,9 +370,13 @@ pub fn snapshot(t: *Tab, done: Done, arg: usize) void {
 }
 
 pub fn snapshotWidth(t: *Tab, width: f64, done: Done, arg: usize) void {
+    snapshotWidthOwned(t, width, done, arg, null);
+}
+
+pub fn snapshotWidthOwned(t: *Tab, width: f64, done: Done, arg: usize, drop: ?*const fn (usize) void) void {
     const wv = t.web orelse return done(t, false, null, arg);
     const s = std.heap.c_allocator.create(Snap) catch return done(t, false, null, arg);
-    s.* = .{ .serial = t.serial, .done = done, .arg = arg };
+    s.* = .{ .serial = t.serial, .done = done, .arg = arg, .drop = drop };
     const pool = objc.Pool.push();
     defer pool.pop();
     var cfg: ?objc.Object = null;
@@ -378,7 +390,13 @@ pub fn snapshotWidth(t: *Tab, width: f64, done: Done, arg: usize) void {
     objc.msg(void, wv, "takeSnapshotWithConfiguration:completionHandler:", .{ cfg, @as(*anyopaque, @ptrCast(&block)) });
 }
 
-const Typed = struct { done: Done, arg: usize };
+const Typed = struct { done: Done, arg: usize, drop: ?*const fn (usize) void = null };
+
+fn dropTyped(arg: usize) void {
+    const ty: *Typed = @ptrFromInt(arg);
+    if (ty.drop) |d| d(ty.arg);
+    std.heap.c_allocator.destroy(ty);
+}
 
 fn answeredUnsaved(t: *Tab, value: ?objc.Object, _: ?objc.Object, arg: usize) void {
     const ty: *Typed = @ptrFromInt(arg);
@@ -390,8 +408,12 @@ fn answeredUnsaved(t: *Tab, value: ?objc.Object, _: ?objc.Object, arg: usize) vo
 /// `unsaved`: whether the page holds something typed and not sent. A page
 /// that can't answer holds nothing.
 pub fn unsaved(t: *Tab, done: Done, arg: usize) void {
+    unsavedOwned(t, done, arg, null);
+}
+
+pub fn unsavedOwned(t: *Tab, done: Done, arg: usize, drop: ?*const fn (usize) void) void {
     if (t.web == null) return done(t, false, null, arg);
     const ty = std.heap.c_allocator.create(Typed) catch return done(t, false, null, arg);
-    ty.* = .{ .done = done, .arg = arg };
-    t.evaluate("!!(window.__keaForms && window.__keaForms.unsaved && window.__keaForms.unsaved())", .kea, answeredUnsaved, @intFromPtr(ty));
+    ty.* = .{ .done = done, .arg = arg, .drop = drop };
+    t.evaluateOwned("!!(window.__keaForms && window.__keaForms.unsaved && window.__keaForms.unsaved())", .kea, answeredUnsaved, @intFromPtr(ty), dropTyped);
 }

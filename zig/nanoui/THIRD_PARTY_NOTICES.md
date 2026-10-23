@@ -34,6 +34,39 @@ Zed, Copyright 2022–2025 Zed Industries, Inc.:
 GPUI is licensed under the Apache License 2.0, whose text is kept verbatim in
 [`third_party/licenses/GPUI-Apache-2.0.txt`](third_party/licenses/GPUI-Apache-2.0.txt).
 
+## gpui-motion
+
+`ui.motion` (`src/ui/motion/`) follows
+[gpui-motion](https://github.com/1bye/gpui-motion), Copyright (c) 2026 1keep
+contributors, as of
+[`fd9baf9`](https://github.com/1bye/gpui-motion/tree/fd9baf910ba0e88b06967bfb322d6be4b2d39723). That covers its
+model (targets set every frame, interruptible transitions, presence with
+exits, keyframes, stagger, layout animation), the exact spring solution and
+its visual timing, and the easing curves with their derivatives.
+gpui-motion is dual licensed under MIT or Apache 2.0. nanoui takes it under
+MIT, whose text is kept verbatim in
+[`third_party/licenses/gpui-motion-MIT.txt`](third_party/licenses/gpui-motion-MIT.txt).
+
+## GPUI Kit
+
+`nanoui.kit` (`src/kit/`) follows the components of
+[GPUI Kit](https://github.com/longbridge/gpui-component) (gpui-component),
+Copyright 2024–2026 Longbridge, as of
+[`6c13c1f`](https://github.com/longbridge/gpui-component/tree/6c13c1fcd73fa4b2b67e6c6ceaec3ab608e65501). It
+takes their set and names, the button variants and sizes, the tab styles,
+and the shape of dialogs, popovers, menus, notifications, alerts, tags,
+avatars and form fields, rewritten for nanoui. GPUI Kit is licensed under
+the Apache License 2.0, kept verbatim with its copyright line in
+[`third_party/licenses/GPUI-Kit-Apache-2.0.txt`](third_party/licenses/GPUI-Kit-Apache-2.0.txt).
+
+## http-zig
+
+On Linux and Windows, `nanoui.http` uses
+[http-zig](https://github.com/justrach/http-zig), Copyright (c) 2026 Rach
+Pradhan, under the MIT License; its `src/tls_client.zig` is derived from Zig's
+standard library TLS client (MIT, Zig contributors). It is a dependency
+(`build.zig.zon`), fetched only for those targets, not copied here.
+
 ## Apps
 
 [nanoterm](https://github.com/justrach/nanoterm) and

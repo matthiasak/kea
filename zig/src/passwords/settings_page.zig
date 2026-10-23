@@ -27,6 +27,11 @@ fn appleCard(b: *Browser, c: *ui.Context, p: *const Palette) void {
         ui.end(c);
         return;
     }
+    if (!b.prefs.passkeys_possible) {
+        plate.line(c, p, "Apple Passwords", "Needs an Apple entitlement this build doesn't have: macOS won't start Apple's helper for it");
+        ui.end(c);
+        return;
+    }
     const row = e.row(id);
     const busy = if (e.busy) |bid| std.mem.eql(u8, bid, id) else false;
     const detail = if (row == null)

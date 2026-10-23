@@ -83,6 +83,11 @@ fn popupUp(_: *const u8) bool {
     return std.mem.endsWith(u8, objc.fromNSString(objc.msg(objc.Object, u, "absoluteString", .{})), "/popup.html");
 }
 
+fn popupShown(_: *const u8) bool {
+    const p = app.ext_popup.up() orelse return false;
+    return p.shown;
+}
+
 fn popupOpens(h: *Harness) !void {
     if (!app.ext.available()) return error.Skipped;
     const b = try h.start();
@@ -116,6 +121,9 @@ fn popupOpens(h: *Harness) !void {
     try h.expect(std.mem.eql(u8, p.id, id), "the popup is another extension's", .{});
     const frame = objc.msg(objc.CGRect, p.window.nswindow, "frame", .{});
     try h.expect(!p.window.isVisible() and frame.origin.x <= -10000, "the popup window is on screen at {d},{d}", .{ frame.origin.x, frame.origin.y });
+    // Measured and revealed: the page goes on the popup's stage.
+    try h.waitFor(&dummy, popupShown, 10, "the popup to be revealed");
+    try h.expect(p.host != null and p.host.?.holds(p.web), "the popup's page never went on its stage", .{});
     // Pressed again, its button closes it.
     app.ext_buttons.press(e, id);
     try h.expect(app.ext_popup.up() == null, "a second press left the popup up", .{});

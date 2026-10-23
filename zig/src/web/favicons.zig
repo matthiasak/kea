@@ -28,7 +28,7 @@ const Set = std.StringHashMapUnmanaged(void);
 
 /// An icon in memory: `name` is its `ui.image` key, new for each picture
 /// so a changed icon is decoded again.
-pub const Kept = struct { png: []u8, name: []u8, mono: Mono = .none };
+pub const Kept = struct { png: []u8, name: []u8, mono: Mono = .none, fresh: bool = false };
 
 pub const Favicons = struct {
     pub const square = decode.square;
@@ -125,10 +125,12 @@ pub const Favicons = struct {
         if (self.memory.getPtr(key)) |old| {
             if (std.mem.eql(u8, old.png, png)) {
                 a.free(png);
+                old.fresh = true;
                 if (self.absent.fetchRemove(key)) |kv| a.free(kv.key);
                 return old.*;
             }
         }
+        if (self.memory.count() > 512) self.trimMemory(self.kea);
         const mono = decode.analyzeMono(png);
         const suffix = switch (mono) {
             .none => "",
@@ -149,7 +151,7 @@ pub const Favicons = struct {
             a.free(name);
             return null;
         };
-        gop.value_ptr.* = .{ .png = png, .name = name, .mono = mono };
+        gop.value_ptr.* = .{ .png = png, .name = name, .mono = mono, .fresh = true };
         if (self.absent.fetchRemove(key)) |kv| a.free(kv.key);
         return gop.value_ptr.*;
     }
@@ -223,7 +225,7 @@ pub const Favicons = struct {
         const is_dark = self.dark();
         var kbuf: [310]u8 = undefined;
         const key = keyFor(&kbuf, host, is_dark);
-        if (!changed and self.fresh(key) and self.known(key) != null) return;
+        if (!changed and ((if (self.memory.get(key)) |k| k.fresh else false) or (self.fresh(key) and self.known(key) != null))) return;
         if (self.busy.contains(host) or (!changed and self.missing.contains(host))) return;
         const job = Job.create(self, page, host, key, tab.shy, is_dark) catch return;
         putSet(&self.busy, host);
@@ -266,8 +268,36 @@ pub const Favicons = struct {
             freeSet(s);
             s.* = .empty;
         }
+        self.trimMemory(kea);
         // Extensions' favIconUrl data: URLs go with them (Icons.swift:35).
         if (kea.ext) |e| @import("../ext/shims/answer.zig").forgetIcons(e);
+    }
+
+    pub fn trimMemory(self: *Favicons, kea: ?*Kea) void {
+        var drop: std.ArrayList([]const u8) = .empty;
+        defer drop.deinit(a);
+        var it = self.memory.keyIterator();
+        while (it.next()) |k| if (!hostInUse(kea, baseHost(k.*))) drop.append(a, k.*) catch break;
+        for (drop.items) |k| if (self.memory.fetchRemove(k)) |kv| {
+            a.free(kv.key);
+            a.free(kv.value.png);
+            a.free(kv.value.name);
+        };
+    }
+
+    fn baseHost(s: []const u8) []const u8 {
+        const h = if (std.mem.endsWith(u8, s, "@dark")) s[0 .. s.len - 5] else s;
+        return if (std.mem.startsWith(u8, h, "www.")) h[4..] else h;
+    }
+
+    fn hostInUse(kea: ?*Kea, want: []const u8) bool {
+        const k = kea orelse return false;
+        var buf: [300]u8 = undefined;
+        for (k.browsers.items) |b| {
+            for (b.tabs.items) |t| if (site(&buf, t.url())) |s| if (std.mem.eql(u8, baseHost(s), want)) return true;
+            for (b.parked.values()) |row| for (row.tabs.items) |t| if (site(&buf, t.url())) |s| if (std.mem.eql(u8, baseHost(s), want)) return true;
+        }
+        return false;
     }
 };
 
@@ -389,24 +419,13 @@ pub fn freeList(gpa: std.mem.Allocator, list: [][]u8) void {
 
 // MARK: the relay
 
-/// `Web.world`: Kea's own content world, apart from the page's scripts.
-fn world() objc.Object {
-    return objc.msg(objc.Object, objc.class("WKContentWorld"), "worldWithName:", .{objc.nsString("Kea")});
-}
-
-/// Puts `IconRelay` on a tab's controller (at document end, in Kea's world)
-/// with `handler` taking its messages.
+/// Registers `keaIcon` on a tab's controller (`tab_scripts.arm` injects `relay_script`).
 pub fn install(ucc: objc.Object, handler: objc.Object) void {
-    const script = objc.msg(objc.Object, objc.alloc("WKUserScript"), "initWithSource:injectionTime:forMainFrameOnly:inContentWorld:", .{
-        objc.nsString(relay_script), @as(objc.NSInteger, 1), objc.YES, world(),
-    });
-    defer objc.release(script);
-    objc.msg(void, ucc, "addUserScript:", .{script});
-    objc.msg(void, ucc, "addScriptMessageHandler:contentWorld:name:", .{ handler, world(), objc.nsString(relay_name) });
+    objc.msg(void, ucc, "addScriptMessageHandler:contentWorld:name:", .{ handler, @import("config.zig").world(), objc.nsString(relay_name) });
 }
 
 pub fn uninstall(ucc: objc.Object) void {
-    objc.msg(void, ucc, "removeScriptMessageHandlerForName:contentWorld:", .{ objc.nsString(relay_name), world() });
+    objc.msg(void, ucc, "removeScriptMessageHandlerForName:contentWorld:", .{ objc.nsString(relay_name), @import("config.zig").world() });
 }
 
 /// Whether `message` is the relay's; if so the icon is asked for again,

@@ -6,6 +6,12 @@
 //! functions, routed back to Zig objects through one pointer ivar.
 const std = @import("std");
 
+/// UIKit (iOS), not AppKit: the few classes the shared Apple code names
+/// differ (`UIFont` for `NSFont`, `UIImage` for `NSImage`).
+pub const uikit = @import("builtin").os.tag == .ios;
+/// The system font class, toll-free bridged with CTFont on both.
+pub const font_class: [:0]const u8 = if (uikit) "UIFont" else "NSFont";
+
 pub const Object = *opaque {};
 pub const SEL = *opaque {};
 pub const Class = *opaque {};
@@ -115,7 +121,9 @@ pub const Pool = struct {
 
 /// An autoreleased NSString copied from `s`.
 pub fn nsString(s: []const u8) Object {
-    const str = msg(Object, alloc("NSString"), "initWithBytes:length:encoding:", .{ s.ptr, s.len, @as(NSUInteger, 4) });
+    const str = msg(?Object, alloc("NSString"), "initWithBytes:length:encoding:", .{ s.ptr, s.len, @as(NSUInteger, 4) }) orelse
+        msg(?Object, alloc("NSString"), "initWithBytes:length:encoding:", .{ s.ptr, s.len, @as(NSUInteger, 5) }) orelse
+        return msg(Object, class("NSString"), "string", .{});
     autorelease(str);
     return str;
 }
@@ -162,19 +170,20 @@ fn class_by_name(name: [:0]const u8) Class {
     return objc_getClass(name) orelse std.debug.panic("objc: no class {s}", .{name});
 }
 
-fn ivarSlot(obj: Object) *?*anyopaque {
-    const iv = class_getInstanceVariable(object_getClass(obj), zig_ivar) orelse
-        @panic("objc: object has no zig ivar");
+fn ivarSlot(obj: Object) ?*?*anyopaque {
+    const iv = class_getInstanceVariable(object_getClass(obj), zig_ivar) orelse return null;
     const base: [*]u8 = @ptrCast(obj);
     return @ptrCast(@alignCast(base + @as(usize, @intCast(ivar_getOffset(iv)))));
 }
 
 pub fn setZig(obj: Object, ptr: ?*anyopaque) void {
-    ivarSlot(obj).* = ptr;
+    (ivarSlot(obj) orelse @panic("objc: object has no zig ivar")).* = ptr;
 }
 
+/// Null too for an object of a class `defineClass` didn't make (a plain `WKWebView`).
 pub fn getZig(comptime T: type, obj: Object) ?*T {
-    return @ptrCast(@alignCast(ivarSlot(obj).*));
+    const slot = ivarSlot(obj) orelse return null;
+    return @ptrCast(@alignCast(slot.*));
 }
 
 // libdispatch: work posted to the main thread, without blocks.

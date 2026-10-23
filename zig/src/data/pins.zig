@@ -53,7 +53,7 @@ pub const Pins = struct {
     /// from what was there, so the caller tells the other windows.
     pub fn set(self: *Pins, space: Uuid, list: []const PinDef) bool {
         self.load();
-        if (same(self.gpa, self.defs(space), list)) return false;
+        if (same(self.defs(space), list)) return false;
         self.put(space, list);
         self.save();
         return true;
@@ -159,12 +159,15 @@ pub const Pins = struct {
     }
 };
 
-fn same(gpa: std.mem.Allocator, a: []const PinDef, b: []const PinDef) bool {
-    const x = json.encode(gpa, a) catch return false;
-    defer gpa.free(x);
-    const y = json.encode(gpa, b) catch return false;
-    defer gpa.free(y);
-    return std.mem.eql(u8, x, y);
+pub fn same(a: []const PinDef, b: []const PinDef) bool {
+    if (a.len != b.len) return false;
+    for (a, b) |x, y| {
+        if (!x.id.eql(y.id) or !std.mem.eql(u8, x.letter, y.letter) or !std.mem.eql(u8, x.home, y.home) or
+            !std.mem.eql(u8, x.title, y.title) or x.listed != y.listed) return false;
+        if ((x.name == null) != (y.name == null)) return false;
+        if (x.name) |xn| if (!std.mem.eql(u8, xn, y.name.?)) return false;
+    }
+    return true;
 }
 
 // MARK: tests
@@ -221,4 +224,9 @@ test "pins come from session files before pins.json" {
     const d = pins.defs(Uuid.first);
     try testing.expectEqual(@as(usize, 1), d.len);
     try testing.expectEqualStrings("https://a.com/", d[0].home);
+    const p1 = PinDef{ .id = Uuid.first, .letter = "A", .home = "https://a.com/", .title = "A", .name = "Custom", .listed = true };
+    var p2 = p1;
+    try testing.expect(same(&.{p1}, &.{p2}));
+    p2.name = null;
+    try testing.expect(!same(&.{p1}, &.{p2}));
 }

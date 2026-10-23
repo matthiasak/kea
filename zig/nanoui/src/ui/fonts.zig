@@ -27,7 +27,7 @@ const kCFNumberSInt32Type: cf.CFIndex = 3;
 /// The slant of synthesized italics (about 11°).
 const slant: Transform = .{ .a = 1, .b = 0, .c = 0.2, .d = 1, .tx = 0, .ty = 0 };
 
-/// CoreText's weights, as AppKit's NSFontWeight values.
+/// CoreText's weights, as NSFontWeight (and UIFontWeight) values.
 pub fn weightValue(w: types.Weight) f64 {
     return switch (w) {
         .regular => 0,
@@ -41,8 +41,8 @@ pub fn weightValue(w: types.Weight) f64 {
 pub fn create(family: ?[]const u8, size: f32, weight: types.Weight, italic: bool, mono: bool) cf.CTFontRef {
     if (family) |name| if (named(name, size, weight, italic)) |f| return f;
     const ctor: [:0]const u8 = if (mono) "monospacedSystemFontOfSize:weight:" else "systemFontOfSize:weight:";
-    const nsfont = objc.msg(objc.Object, objc.class("NSFont"), ctor, .{ @as(f64, size), weightValue(weight) });
-    // NSFont is toll-free bridged with CTFont.
+    const nsfont = objc.msg(objc.Object, objc.class(objc.font_class), ctor, .{ @as(f64, size), weightValue(weight) });
+    // NSFont and UIFont are toll-free bridged with CTFont.
     const base: cf.CTFontRef = @ptrCast(objc.retain(nsfont));
     return if (italic) italicOf(base, size) else base;
 }

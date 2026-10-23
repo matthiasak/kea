@@ -84,6 +84,7 @@ pub const Tab = struct {
     zoom: f64 = 1,
     mem_mb: f32 = 0,
     mem_at: f64 = 0,
+    mem_shared: u16 = 0,
     /// Its process went away out of sight (`stale`).
     stale: bool = false,
     /// When its process went away lately (`crashes`), SwiftDates.
@@ -230,7 +231,6 @@ pub const Tab = struct {
         swipe.calm(view);
         if (objc.msg(objc.BOOL, view, "respondsToSelector:", .{objc.sel("setInspectable:")}))
             objc.msg(void, view, "setInspectable:", .{objc.YES});
-        config.inspector(objc.msg(objc.Object, objc.msg(objc.Object, view, "configuration", .{}), "preferences", .{}), true);
         const delegate = delegates.makeDelegate(self);
         objc.msg(void, view, "setNavigationDelegate:", .{delegate});
         const capture = @import("../ext/capture.zig");
@@ -254,16 +254,14 @@ pub const Tab = struct {
         self.observes_capture = false;
         self.observer = null;
         if (self.web) |wv| {
-            // Its page out in the floating window: that window goes first.
             if (self.floating) @import("float.zig").dropped(self);
+            if (self.browser) |b| if (b.stage_host) |sh| sh.forget(wv);
             const pool = objc.Pool.push();
             defer pool.pop();
+            @import("../ext/capture_watch.zig").unwatch(wv);
             self.kea.passkeys.forget(wv);
             scripts.uninstall(self, wv);
-            objc.msg(void, wv, "stopLoading", .{});
-            objc.msg(void, wv, "setNavigationDelegate:", .{@as(?objc.Object, null)});
-            objc.msg(void, wv, "setUIDelegate:", .{@as(?objc.Object, null)});
-            objc.msg(void, wv, "removeFromSuperview", .{});
+            config.teardownWebView(wv);
             page_view.forget(self, wv);
             objc.release(wv);
         }
@@ -330,6 +328,8 @@ pub const Tab = struct {
 
     /// Replaces an owned optional string with a copy of `s`.
     pub fn own(self: *Tab, field: *?[]u8, s: ?[]const u8) void {
+        if (field.* != null and s != null and std.mem.eql(u8, field.*.?, s.?)) return;
+        if (field.* == null and s == null) return;
         const copy = if (s) |v| self.gpa.dupe(u8, v) catch return else null;
         if (field.*) |old| self.gpa.free(old);
         field.* = copy;
@@ -341,6 +341,7 @@ pub const Tab = struct {
 
     /// The page's own title (KVO, and `restore`).
     pub fn setTitle(self: *Tab, s: []const u8) void {
+        if (std.mem.eql(u8, self.page_title, s)) return;
         const copy = self.gpa.dupe(u8, s) catch return;
         self.gpa.free(self.page_title);
         self.page_title = copy;
@@ -468,13 +469,14 @@ pub const Tab = struct {
 
     pub const Then = *const fn (tab: *Tab, value: ?objc.Object, err: ?objc.Object, arg: usize) void;
 
-    const Eval = struct { serial: u64, then: ?Then, arg: usize };
+    const Eval = struct { serial: u64, then: ?Then, arg: usize, drop: ?*const fn (usize) void = null };
     const EvalBlock = objc.Block(Eval, &.{ ?objc.Object, ?objc.Object });
 
     fn evaluated(e: *Eval, value: ?objc.Object, err: ?objc.Object) void {
         defer std.heap.c_allocator.destroy(e);
-        const then = e.then orelse return;
-        if (alive(e.serial)) |t| then(t, value, err, e.arg);
+        if (alive(e.serial)) |t| {
+            if (e.then) |then| then(t, value, err, e.arg);
+        } else if (e.drop) |d| d(e.arg);
     }
 
     /// Where JavaScript runs: the page's own world (`evaluateJavaScript`),
@@ -483,19 +485,26 @@ pub const Tab = struct {
 
     /// Runs `js`, answered on the main thread while the tab still lives.
     pub fn evaluate(self: *Tab, js: []const u8, in: World, then: ?Then, arg: usize) void {
+        self.evaluateOwned(js, in, then, arg, null);
+    }
+
+    pub fn evaluateOwned(self: *Tab, js: []const u8, in: World, then: ?Then, arg: usize, drop: ?*const fn (usize) void) void {
         const wv = self.web orelse {
             if (then) |f| f(self, null, null, arg);
             return;
         };
-        const e = std.heap.c_allocator.create(Eval) catch return;
-        e.* = .{ .serial = self.serial, .then = then, .arg = arg };
+        const e = std.heap.c_allocator.create(Eval) catch {
+            if (drop) |d| d(arg);
+            return;
+        };
+        e.* = .{ .serial = self.serial, .then = then, .arg = arg, .drop = drop };
         const pool = objc.Pool.push();
         defer pool.pop();
         var block = EvalBlock.init(e, evaluated);
         const world = switch (in) {
             .page => config.pageWorld(),
             .kea => config.world(),
-            .client => objc.msg(objc.Object, objc.class("WKContentWorld"), "defaultClientWorld", .{}),
+            .client => config.clientWorld(),
         };
         objc.msg(void, wv, "evaluateJavaScript:inFrame:inContentWorld:completionHandler:", .{ objc.nsString(js), @as(?objc.Object, null), world, @as(*anyopaque, @ptrCast(&block)) });
     }

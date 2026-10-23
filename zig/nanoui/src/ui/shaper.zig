@@ -20,6 +20,10 @@ extern "c" fn CFDictionaryGetValue(dict: *anyopaque, key: *const anyopaque) ?*an
 const first: u8 = 0x20;
 const count = 0x7f - 0x20;
 
+pub fn isSimpleAscii(s: []const u8) bool {
+    for (s) |c| if (c < first or c >= 0x7f) return false;
+    return true;
+}
 /// What CoreText makes of a short string: its glyphs and their x positions.
 const Shaped = struct {
     n: usize = 0,
@@ -128,7 +132,7 @@ pub const Table = struct {
 
 test "the fast path places glyphs as CoreText does" {
     const gpa = std.testing.allocator;
-    const nsfont = objc.msg(objc.Object, objc.class("NSFont"), "systemFontOfSize:weight:", .{ @as(f64, 13), @as(f64, 0) });
+    const nsfont = objc.msg(objc.Object, objc.class(objc.font_class), "systemFontOfSize:weight:", .{ @as(f64, 13), @as(f64, 0) });
     var t: Table = .{ .font = @ptrCast(nsfont) };
     defer t.deinit(gpa);
     const samples = [_][]const u8{ "1234", "9876", "Hello, World!", "AVATAR To Ty", "fi fl ffi", "Row 42 - a line", "(x) = [y]", "WAVE", "Typography" };

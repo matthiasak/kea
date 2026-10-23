@@ -102,8 +102,10 @@ fn insertText(obj: objc.Object, _: objc.SEL, str: objc.Object, _: NSRange) callc
 fn setMarkedText(obj: objc.Object, _: objc.SEL, str: objc.Object, sel: NSRange, _: NSRange) callconv(.c) void {
     const s = objc.getZig(Surface, obj) orelse return;
     const t = dupe(s, stringOf(str));
-    const start = cf.byteOffset(t, @intCast(sel.location));
-    const end = cf.byteOffset(t, @intCast(sel.location + sel.length));
+    const loc: cf.CFIndex = if (sel.location == not_found) 0 else @intCast(@min(sel.location, t.len * 2));
+    const len: cf.CFIndex = if (sel.location == not_found) 0 else @intCast(@min(sel.length, t.len * 2));
+    const start = cf.byteOffset(t, loc);
+    const end = cf.byteOffset(t, loc + len);
     push(s, .{ .set_marked = .{ .text = t, .sel_start = start, .sel_len = end - start } });
 }
 
@@ -196,8 +198,8 @@ const commands = .{
     .{ "moveDownAndModifySelection:", .select_down },
     .{ "selectAll:", .select_all },
     .{ "insertNewline:", .insert_newline },
-    .{ "insertLineBreak:", .insert_newline },
-    .{ "insertNewlineIgnoringFieldEditor:", .insert_newline },
+    .{ "insertLineBreak:", .insert_line_break },
+    .{ "insertNewlineIgnoringFieldEditor:", .insert_line_break },
     .{ "insertTab:", .insert_tab },
     .{ "insertBacktab:", .insert_tab },
     .{ "cancelOperation:", .cancel },
@@ -227,15 +229,26 @@ fn redoAction(obj: objc.Object, _: objc.SEL, _: ?objc.Object) callconv(.c) void 
     if (!s.text_queue.collecting) flush(s);
 }
 
+pub fn copy(s: *Surface) void {
+    push(s, .{ .command = .copy });
+}
+
+pub fn cut(s: *Surface) void {
+    if (s.ctx.focused_text != null) push(s, .{ .command = .cut });
+}
+
+pub fn selectAll(s: *Surface) void {
+    if (s.ctx.focused_text != null) push(s, .{ .command = .select_all });
+}
+
 fn copyAction(obj: objc.Object, _: objc.SEL, _: ?objc.Object) callconv(.c) void {
     const s = objc.getZig(Surface, obj) orelse return;
-    // A page's selection may take it where no field does.
-    push(s, .{ .command = .copy });
+    copy(s);
 }
 
 fn cutAction(obj: objc.Object, _: objc.SEL, _: ?objc.Object) callconv(.c) void {
     const s = objc.getZig(Surface, obj) orelse return;
-    if (s.ctx.focused_text != null) push(s, .{ .command = .cut });
+    cut(s);
 }
 
 fn deleteAction(obj: objc.Object, _: objc.SEL, _: ?objc.Object) callconv(.c) void {
@@ -245,20 +258,23 @@ fn deleteAction(obj: objc.Object, _: objc.SEL, _: ?objc.Object) callconv(.c) voi
 
 fn selectAllAction(obj: objc.Object, _: objc.SEL, _: ?objc.Object) callconv(.c) void {
     const s = objc.getZig(Surface, obj) orelse return;
-    if (s.ctx.focused_text != null) push(s, .{ .command = .select_all });
+    selectAll(s);
 }
 
-fn validateMenuItem(obj: objc.Object, _: objc.SEL, item: objc.Object) callconv(.c) objc.BOOL {
+pub fn validateMenuItem(obj: objc.Object, _: objc.SEL, item: objc.Object) callconv(.c) objc.BOOL {
     const s = objc.getZig(Surface, obj) orelse return objc.NO;
     const action = objc.msg(?objc.SEL, item, "action", .{}) orelse return objc.YES;
     const name = std.mem.span(sel_getName(action));
     const f = s.ctx.focused_text;
     if (std.mem.eql(u8, name, "cut:") or std.mem.eql(u8, name, "copy:")) {
-        if (f) |ft| return if (ft.caret != ft.anchor and !s.ctx.focused_password) objc.YES else objc.NO;
+        if (f) |ft| if (ft.caret != ft.anchor and !s.ctx.focused_password) return objc.YES;
         if (std.mem.eql(u8, name, "copy:")) return if (s.ctx.selection.text.items.len > 0) objc.YES else objc.NO;
         return objc.NO;
     }
-    if (std.mem.eql(u8, name, "paste:") or std.mem.eql(u8, name, "selectAll:") or std.mem.eql(u8, name, "delete:")) {
+    if (std.mem.eql(u8, name, "paste:")) {
+        return objc.YES;
+    }
+    if (std.mem.eql(u8, name, "selectAll:") or std.mem.eql(u8, name, "delete:")) {
         return if (f != null) objc.YES else objc.NO;
     }
     if (std.mem.eql(u8, name, "undo:")) {

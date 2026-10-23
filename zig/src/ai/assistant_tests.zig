@@ -242,3 +242,22 @@ test "slash commands and their suggestions" {
     a.run("/help");
     try t.expect(a.help_shown);
 }
+
+test "attachments encode images as base64 and buffers as XML tags" {
+    var rig: Rig = undefined;
+    try rig.init(t.allocator);
+    defer rig.deinit();
+    var stub: Stub = .{ .replies = &.{ "Described.", "\"Attachment chat\"" } };
+    defer stub.deinit();
+    stub.use(rig.ai);
+    const a = try Assistant.create(rig.ai, null, false);
+    defer a.destroy();
+    a.addAttachment("diagram.png", "image/png", "\x89PNG\r\n\x1a\n", true);
+    a.addAttachment("notes.txt", "text/plain", "hello from buffer", false);
+    try t.expectEqual(@as(usize, 2), a.attachments.items.len);
+    a.send("Check this", ai.ollama, "m");
+    try t.expectEqual(@as(usize, 0), a.attachments.items.len);
+    try t.expectEqual(@as(usize, 1), a.chat.turns.len);
+    try t.expect(a.chat.turns[0].shot);
+    try t.expect(std.mem.indexOf(u8, stub.asked.items[0], "<attachment name=\"notes.txt\">\nhello from buffer\n</attachment>") != null);
+}

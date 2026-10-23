@@ -191,6 +191,11 @@ pub const Window = struct {
         if (self.hwnd) |h| _ = w.ShowWindow(h, 0);
     }
 
+    /// Popovers are macOS's: none hides itself here.
+    pub fn justHidden(_: *Window) bool {
+        return false;
+    }
+
     pub fn isVisible(self: *Window) bool {
         const h = self.hwnd orelse return false;
         return w.IsWindowVisible(h) != 0;

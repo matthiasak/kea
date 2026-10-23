@@ -220,9 +220,11 @@ fn tick(ctx: ?*anyopaque) callconv(.c) void {
 /// What `where_` found.
 pub fn progressed(through: f64, playing: bool) void {
     const p = current orelse return;
-    p.progress = std.math.clamp(through, 0, 1);
+    const clamped = std.math.clamp(through, 0, 1);
+    const changed = p.playing != playing or @abs(p.progress - clamped) >= 0.002;
+    p.progress = clamped;
     p.playing = playing;
-    p.window.redraw();
+    if (changed) p.window.redraw();
 }
 
 /// What play/pause left it as.

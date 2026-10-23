@@ -132,3 +132,43 @@ pub fn caretVisible(c: *Context) bool {
     c.frameIn(@max(0.01, rem));
     return elapsed < 0.5 or @mod(elapsed, 1.0) < 0.5;
 }
+
+pub fn rehome(c: *Context, buffer: *tf.TextBuffer, id: u64) void {
+    if (buffer.last_id != 0 and buffer.last_id != id and c.focus == buffer.last_id) {
+        c.focus = id;
+        if (c.edits.fetchRemove(buffer.last_id)) |kv| c.edits.put(c.gpa, id, kv.value) catch {};
+    }
+    buffer.last_id = id;
+}
+
+pub fn editState(c: *Context, id: u64, buffer: *tf.TextBuffer) ?*EditState {
+    const len = buffer.text().len;
+    const entry = c.edits.getOrPut(c.gpa, id) catch return null;
+    if (!entry.found_existing) entry.value_ptr.* = .{ .caret = len, .anchor = len };
+    const e = entry.value_ptr;
+    if (buffer.want_caret) |at| {
+        e.caret = at;
+        e.anchor = at;
+        e.marked = null;
+        buffer.want_caret = null;
+    }
+    if (buffer.want_selection) |sel| {
+        e.anchor = sel[0];
+        e.caret = sel[1];
+        e.marked = null;
+        buffer.want_selection = null;
+    }
+    e.caret = @min(e.caret, len);
+    e.anchor = @min(e.anchor, len);
+    return e;
+}
+
+pub fn focusSelect(c: *Context, e: *EditState, on_focus: bool, len: usize) void {
+    if ((on_focus and !e.had_focus) or c.focus_select_all) {
+        e.anchor = 0;
+        e.caret = len;
+        e.selecting = false;
+        c.focus_select_all = false;
+    }
+    e.had_focus = true;
+}

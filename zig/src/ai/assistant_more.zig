@@ -1,6 +1,8 @@
 //! The rest of `Assistant` (AIAssist.swift): what the composer suggests,
 //! the slash commands, compacting a long chat, cleaning up, and stopping.
 const std = @import("std");
+const nanoui = @import("nanoui");
+const objc = nanoui.objc;
 const json = @import("../data/json.zig");
 const cs = @import("../data/chats_store.zig");
 const ai = @import("ai.zig");
@@ -188,4 +190,131 @@ pub fn stop(self: *Assistant) void {
     if (self.compactor) |c| c.cancel();
     self.compactor = null;
     self.compacting = false;
+}
+
+pub fn addAttachment(self: *Assistant, name: []const u8, media_type: []const u8, data: []const u8, is_image: bool) void {
+    const n = self.gpa.dupe(u8, name) catch return;
+    const m = self.gpa.dupe(u8, media_type) catch return self.gpa.free(n);
+    const d = self.gpa.dupe(u8, data) catch {
+        self.gpa.free(n);
+        self.gpa.free(m);
+        return;
+    };
+    const id = self.next_attachment_id;
+    self.next_attachment_id += 1;
+    self.attachments.append(self.gpa, .{ .id = id, .name = n, .media_type = m, .data = d, .is_image = is_image }) catch {
+        self.gpa.free(n);
+        self.gpa.free(m);
+        self.gpa.free(d);
+        return;
+    };
+    self.changed();
+}
+
+pub fn removeAttachment(self: *Assistant, id: u64) void {
+    for (self.attachments.items, 0..) |att, i| if (att.id == id) {
+        self.gpa.free(att.name);
+        self.gpa.free(att.media_type);
+        self.gpa.free(att.data);
+        _ = self.attachments.orderedRemove(i);
+        self.changed();
+        return;
+    };
+}
+
+pub fn clearAttachments(self: *Assistant) void {
+    for (self.attachments.items) |att| {
+        self.gpa.free(att.name);
+        self.gpa.free(att.media_type);
+        self.gpa.free(att.data);
+    }
+    self.attachments.clearRetainingCapacity();
+}
+
+pub fn attachFilePath(self: *Assistant, path: []const u8) bool {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const bytes = std.Io.Dir.cwd().readFileAlloc(io, path, self.gpa, .limited(10 * 1024 * 1024)) catch return false;
+    defer self.gpa.free(bytes);
+    if (bytes.len == 0) return false;
+    const base = std.fs.path.basename(path);
+    const ext = std.fs.path.extension(base);
+    if (std.ascii.eqlIgnoreCase(ext, ".png")) {
+        self.addAttachment(base, "image/png", bytes, true);
+        return true;
+    }
+    if (std.ascii.eqlIgnoreCase(ext, ".jpg") or std.ascii.eqlIgnoreCase(ext, ".jpeg")) {
+        self.addAttachment(base, "image/jpeg", bytes, true);
+        return true;
+    }
+    if (std.ascii.eqlIgnoreCase(ext, ".gif")) {
+        self.addAttachment(base, "image/gif", bytes, true);
+        return true;
+    }
+    if (std.ascii.eqlIgnoreCase(ext, ".webp")) {
+        self.addAttachment(base, "image/webp", bytes, true);
+        return true;
+    }
+    self.addAttachment(base, "text/plain", bytes, false);
+    return true;
+}
+
+pub fn pasteFromClipboard(self: *Assistant) bool {
+    if (nanoui.clipboard.readFiles(self.gpa) catch null) |paths| {
+        defer nanoui.dialog.freePaths(self.gpa, paths);
+        var any = false;
+        for (paths) |p| if (self.attachFilePath(p)) {
+            any = true;
+        };
+        if (any) return true;
+    }
+    if (nanoui.clipboard.readImage(self.gpa) catch null) |png| {
+        defer self.gpa.free(png);
+        if (png.len > 0) {
+            self.addAttachment("Clipboard Image.png", "image/png", png, true);
+            return true;
+        }
+    }
+    if (nanoui.clipboard.readText(self.gpa) catch null) |txt| {
+        defer self.gpa.free(txt);
+        if (txt.len > 0) return false;
+    }
+    const pool = objc.Pool.push();
+    defer pool.pop();
+    const pb = objc.msg(objc.Object, objc.class("NSPasteboard"), "generalPasteboard", .{});
+    if (objc.msg(?objc.Object, pb, "dataForType:", .{objc.nsString("public.data")})) |nsdata| {
+        const n = objc.msg(objc.NSUInteger, nsdata, "length", .{});
+        if (n > 0 and n <= 10 * 1024 * 1024) {
+            const ptr = objc.msg([*]const u8, nsdata, "bytes", .{});
+            self.addAttachment("Clipboard Buffer", "text/plain", ptr[0..n], false);
+            return true;
+        }
+    }
+    return false;
+}
+
+pub fn takeAttachments(self: *Assistant, a: A, images: *std.ArrayList(@import("client.zig").Image), extra_text: *std.ArrayList(u8)) !void {
+    if (self.shot) |jpeg| {
+        defer {
+            self.gpa.free(jpeg);
+            self.shot = null;
+        }
+        const enc = std.base64.standard.Encoder;
+        const dst = try a.alloc(u8, enc.calcSize(jpeg.len));
+        try images.append(a, .{ .media_type = "image/jpeg", .b64 = enc.encode(dst, jpeg) });
+    }
+    defer self.clearAttachments();
+    for (self.attachments.items) |att| {
+        if (att.is_image) {
+            const enc = std.base64.standard.Encoder;
+            const dst = try a.alloc(u8, enc.calcSize(att.data.len));
+            try images.append(a, .{
+                .media_type = try a.dupe(u8, att.media_type),
+                .b64 = enc.encode(dst, att.data),
+            });
+        } else {
+            var aw: std.Io.Writer.Allocating = .fromArrayList(a, extra_text);
+            try aw.writer.print("\n\n<attachment name=\"{s}\">\n{s}\n</attachment>", .{ att.name, att.data });
+            extra_text.* = aw.toArrayList();
+        }
+    }
 }

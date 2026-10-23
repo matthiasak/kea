@@ -189,6 +189,22 @@ fn forgetEntry(e: Watched) void {
     if (e.extension_id) |i| gpa.free(i);
 }
 
+pub fn unwatch(web: objc.Object) void {
+    const key = @intFromPtr(web);
+    const kv = watched.fetchSwapRemove(key) orelse return;
+    const pool = objc.Pool.push();
+    defer pool.pop();
+    if (kv.value.web.get() == web) {
+        const observer = capture.instance();
+        for (keys) |k| {
+            if (std.mem.eql(u8, k, "_displayCaptureState") and !responds(web, "_displayCaptureState")) continue;
+            objc.msg(void, web, "removeObserver:forKeyPath:", .{ observer, objc.nsString(k) });
+        }
+    }
+    forgetEntry(kv.value);
+    if (kv.value.capturing) changed();
+}
+
 /// KVO fires off the main thread too: the change is looked at on it.
 pub fn observed() void {
     objc.dispatchMain(null, struct {

@@ -7,15 +7,28 @@ const objc = nanoui.objc;
 const Kea = @import("../app/kea.zig").Kea;
 const Store = @import("../data/store.zig").Store;
 
+var kea_world: ?objc.Object = null;
+var page_world: ?objc.Object = null;
+var client_world: ?objc.Object = null;
+
 /// `Web.world`: where Kea's page scripts run, apart from the page's own.
 pub fn world() objc.Object {
-    return objc.msg(objc.Object, objc.class("WKContentWorld"), "worldWithName:", .{objc.nsString("Kea")});
+    if (kea_world) |w| return w;
+    kea_world = objc.retain(objc.msg(objc.Object, objc.class("WKContentWorld"), "worldWithName:", .{objc.nsString("Kea")}));
+    return kea_world.?;
 }
 
 pub fn pageWorld() objc.Object {
-    return objc.msg(objc.Object, objc.class("WKContentWorld"), "pageWorld", .{});
+    if (page_world) |w| return w;
+    page_world = objc.retain(objc.msg(objc.Object, objc.class("WKContentWorld"), "pageWorld", .{}));
+    return page_world.?;
 }
 
+pub fn clientWorld() objc.Object {
+    if (client_world) |w| return w;
+    client_world = objc.retain(objc.msg(objc.Object, objc.class("WKContentWorld"), "defaultClientWorld", .{}));
+    return client_world.?;
+}
 /// Every relay name Kea registers (`Web.release`).
 pub const relay_names = [_][]const u8{ "keaScroll", "keaVeil", "keaForms", "keaImages", "keaStore", "keaPasskeys", "keaMiddle", "keaIcon" };
 /// `HoveredLink.name`, in Kea's world only.
@@ -78,7 +91,7 @@ pub fn processPool() objc.Object {
         if (objc.msg(objc.BOOL, cfg, "respondsToSelector:", .{objc.sel("setPrewarmsProcessesAutomatically:")}))
             objc.msg(void, cfg, "setPrewarmsProcessesAutomatically:", .{objc.YES});
         if (objc.msg(objc.BOOL, cfg, "respondsToSelector:", .{objc.sel("setUsesWebProcessCache:")}))
-            objc.msg(void, cfg, "setUsesWebProcessCache:", .{objc.YES});
+            objc.msg(void, cfg, "setUsesWebProcessCache:", .{objc.NO});
         const raw = objc.alloc("WKProcessPool");
         if (objc.msg(objc.BOOL, raw, "respondsToSelector:", .{objc.sel("_initWithConfiguration:")})) {
             shared_pool = objc.msg(objc.Object, raw, "_initWithConfiguration:", .{cfg});
@@ -168,6 +181,28 @@ pub fn setMuted(muted: bool, web: objc.Object) void {
     if (!objc.msg(objc.BOOL, web, "respondsToSelector:", .{objc.sel("_setPageMuted:")})) return;
     const state = objc.msg(objc.NSUInteger, web, "_mediaMutedState", .{});
     objc.msg(void, web, "_setPageMuted:", .{if (muted) state | 1 else state & ~@as(objc.NSUInteger, 1)});
+}
+
+/// Stops all media, capture, loading, delegates, and closes the WebPageProxy immediately.
+pub fn teardownWebView(wv: objc.Object) void {
+    setMuted(true, wv);
+    if (objc.msg(objc.BOOL, wv, "respondsToSelector:", .{objc.sel("pauseAllMediaPlaybackWithCompletionHandler:")}))
+        objc.msg(void, wv, "pauseAllMediaPlaybackWithCompletionHandler:", .{@as(?*anyopaque, null)});
+    if (objc.msg(objc.BOOL, wv, "respondsToSelector:", .{objc.sel("setAllMediaPlaybackSuspended:completionHandler:")}))
+        objc.msg(void, wv, "setAllMediaPlaybackSuspended:completionHandler:", .{ objc.YES, @as(?*anyopaque, null) });
+    if (objc.msg(objc.BOOL, wv, "respondsToSelector:", .{objc.sel("closeAllMediaPresentationsWithCompletionHandler:")}))
+        objc.msg(void, wv, "closeAllMediaPresentationsWithCompletionHandler:", .{@as(?*anyopaque, null)});
+    if (objc.msg(objc.BOOL, wv, "respondsToSelector:", .{objc.sel("setCameraCaptureState:completionHandler:")}))
+        objc.msg(void, wv, "setCameraCaptureState:completionHandler:", .{ @as(objc.NSInteger, 0), @as(?*anyopaque, null) });
+    if (objc.msg(objc.BOOL, wv, "respondsToSelector:", .{objc.sel("setMicrophoneCaptureState:completionHandler:")}))
+        objc.msg(void, wv, "setMicrophoneCaptureState:completionHandler:", .{ @as(objc.NSInteger, 0), @as(?*anyopaque, null) });
+    objc.msg(void, wv, "stopLoading", .{});
+    objc.msg(void, wv, "setNavigationDelegate:", .{@as(?objc.Object, null)});
+    objc.msg(void, wv, "setUIDelegate:", .{@as(?objc.Object, null)});
+    if (objc.msg(?objc.Object, wv, "layer", .{})) |layer| objc.msg(void, layer, "removeAllAnimations", .{});
+    objc.msg(void, wv, "removeFromSuperview", .{});
+    if (objc.msg(objc.BOOL, wv, "respondsToSelector:", .{objc.sel("_close")}))
+        objc.msg(void, wv, "_close", .{});
 }
 
 // MARK: Autoplay

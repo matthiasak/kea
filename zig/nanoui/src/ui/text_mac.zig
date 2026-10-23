@@ -74,9 +74,11 @@ pub const TextSystem = struct {
     tables: std.AutoHashMapUnmanaged(FontKey, *shaper.Table) = .empty,
     layouts: std.AutoHashMapUnmanaged(u64, Layout) = .empty,
     previous: std.AutoHashMapUnmanaged(u64, Layout) = .empty,
-    wraps: std.AutoHashMapUnmanaged(u64, []Line) = .empty,
+    wraps: @import("wrap_cache.zig").WrapCache(Line) = .{},
     scratch_glyphs: std.ArrayList(u16) = .empty,
     scratch_points: std.ArrayList(objc.CGPoint) = .empty,
+    scratch_bytes_of: std.ArrayList(u32) = .empty,
+    scratch_indices: std.ArrayList(cf.CFIndex) = .empty,
     /// The theme's font families (null: the system's).
     family: ?[]const u8 = null,
     mono_family: ?[]const u8 = null,
@@ -104,10 +106,11 @@ pub const TextSystem = struct {
         freeLayouts(self.gpa, &self.previous);
         self.layouts.deinit(self.gpa);
         self.previous.deinit(self.gpa);
-        self.clearWraps();
         self.wraps.deinit(self.gpa);
         self.scratch_glyphs.deinit(self.gpa);
         self.scratch_points.deinit(self.gpa);
+        self.scratch_bytes_of.deinit(self.gpa);
+        self.scratch_indices.deinit(self.gpa);
         self.atlas.deinit();
     }
 
@@ -146,9 +149,12 @@ pub const TextSystem = struct {
             self.gpa.destroy(t.*);
         }
         self.tables.clearRetainingCapacity();
+        for (self.run_fonts.items) |f| cf.CFRelease(f);
+        self.run_fonts.clearRetainingCapacity();
         freeLayouts(self.gpa, &self.layouts);
         freeLayouts(self.gpa, &self.previous);
-        self.clearWraps();
+        self.wraps.clear(self.gpa);
+        self.atlas.reset();
     }
 
     /// Scales every text by `z`: a change drops every cached font, shaping and wrap.
@@ -167,8 +173,11 @@ pub const TextSystem = struct {
     /// Called at the start of every frame: layouts unused for two frames go.
     pub fn beginFrame(self: *TextSystem) void {
         self.atlas.reset_during_frame = false;
-        freeLayouts(self.gpa, &self.previous);
-        std.mem.swap(std.AutoHashMapUnmanaged(u64, Layout), &self.layouts, &self.previous);
+        if (self.layouts.count() >= 4096) {
+            freeLayouts(self.gpa, &self.previous);
+            std.mem.swap(std.AutoHashMapUnmanaged(u64, Layout), &self.layouts, &self.previous);
+        }
+        self.wraps.beginFrame(self.gpa);
     }
 
     fn freeLayouts(gpa: std.mem.Allocator, map: *std.AutoHashMapUnmanaged(u64, Layout)) void {
@@ -214,7 +223,8 @@ pub const TextSystem = struct {
         for (self.run_fonts.items, 0..) |known, i| {
             if (known == f or (CFHash(known) == h and CFEqual(known, f))) return @intCast(i);
         }
-        self.run_fonts.append(self.gpa, @ptrCast(cf.CFRetain(f))) catch return 0;
+        self.run_fonts.ensureUnusedCapacity(self.gpa, 1) catch return 0;
+        self.run_fonts.appendAssumeCapacity(@ptrCast(cf.CFRetain(f)));
         return @intCast(self.run_fonts.items.len - 1);
     }
 
@@ -260,20 +270,19 @@ pub const TextSystem = struct {
         const w: f32 = @floatCast(cf.CTLineGetTypographicBounds(ln, null, null, null));
         var glyphs: std.ArrayList(Glyph) = .empty;
         errdefer glyphs.deinit(self.gpa);
-        // UTF-16 offsets (CoreText's) to byte offsets (ours).
-        var bytes_of: std.ArrayList(u32) = .empty;
-        defer bytes_of.deinit(self.gpa);
+        const bytes_of = &self.scratch_bytes_of;
+        bytes_of.clearRetainingCapacity();
         {
             var i: usize = 0;
             while (i < s.len) {
-                const n = cf.seqLen(s[i]);
+                const n = @min(cf.seqLen(s[i]), s.len - i);
                 try bytes_of.append(self.gpa, @intCast(i));
                 if (n == 4) try bytes_of.append(self.gpa, @intCast(i));
                 i += n;
             }
         }
-        var indices: std.ArrayList(cf.CFIndex) = .empty;
-        defer indices.deinit(self.gpa);
+        const indices = &self.scratch_indices;
+        indices.clearRetainingCapacity();
         const runs = CTLineGetGlyphRuns(ln);
         const n_runs = CFArrayGetCount(runs);
         var r: cf.CFIndex = 0;
@@ -341,14 +350,40 @@ pub const TextSystem = struct {
     pub fn wrapAttributed(self: *TextSystem, s: []const u8, style: types.TextStyle, spans: []const types.Span, max_width: f32) []const Line {
         const styled = rich.styled(spans);
         const k = key(s, style, (@as(u64, @intFromFloat(@max(0, @min(max_width, 1e6)))) + 2) ^ (if (styled) rich.spansHash(spans, 0, s.len) else 0));
-        if (self.wraps.get(k)) |lines| return lines;
+        if (self.wraps.get(self.gpa, k)) |lines| return lines;
+        if (self.oneLine(s, style, spans, max_width)) |line_| {
+            const one = self.gpa.alloc(Line, 1) catch return &.{};
+            one[0] = line_;
+            return self.wraps.put(self.gpa, k, one);
+        }
+        return self.wraps.put(self.gpa, k, self.breakLines(s, style, spans, max_width) catch return &.{});
+    }
+
+    /// `s` as one line, when it has no line breaks and fits: what CoreText
+    /// would answer, without a typesetter (a resize asks for every line of
+    /// a window at each new width). Null when it must break.
+    pub fn oneLine(self: *TextSystem, s: []const u8, style: types.TextStyle, spans: []const types.Span, max_width: f32) ?Line {
+        if (std.mem.indexOfAny(u8, s, "\n\r\x0b\x0c") != null) return null;
+        // NEL, and the line and paragraph separators.
+        if (std.mem.indexOf(u8, s, "\u{85}") != null or std.mem.indexOf(u8, s, "\u{2028}") != null or std.mem.indexOf(u8, s, "\u{2029}") != null) return null;
+        const styled = rich.styled(spans);
+        const full = if (styled) rich.layout(self, s, style, spans, 0).width else self.width(s, style);
+        if (full > @max(1, max_width)) return null;
+        const trimmed = std.mem.trimEnd(u8, s, " \t");
+        const w = if (styled) rich.layout(self, trimmed, style, spans, 0).width else self.width(trimmed, style);
+        return .{ .start = 0, .end = trimmed.len, .width = w };
+    }
+
+    /// `s` broken where CoreText's typesetter suggests.
+    pub fn breakLines(self: *TextSystem, s: []const u8, style: types.TextStyle, spans: []const types.Span, max_width: f32) ![]Line {
+        const styled = rich.styled(spans);
         var lines: std.ArrayList(Line) = .empty;
         defer lines.deinit(self.gpa);
         const attr = if (styled) rich.attributed(self, s, style, spans, 0) else cf.attributed(s, self.font(style).ref);
         defer cf.CFRelease(attr);
         const ts = cf.CTTypesetterCreateWithAttributedString(attr).?;
         defer cf.CFRelease(ts);
-        const total = cf.utf16Offset(s, s.len);
+        const total = @min(cf.utf16Offset(s, s.len), cf.CFAttributedStringGetLength(attr));
         var start16: cf.CFIndex = 0;
         while (start16 < total) {
             var n = cf.CTTypesetterSuggestLineBreak(ts, start16, @max(1, max_width));
@@ -361,27 +396,17 @@ pub const TextSystem = struct {
             start16 += n;
         }
         if (lines.items.len == 0) lines.append(self.gpa, .{ .start = 0, .end = 0, .width = 0 }) catch {};
-        if (self.wraps.count() > 2048) self.clearWraps();
-        const owned = lines.toOwnedSlice(self.gpa) catch return &.{};
-        self.wraps.put(self.gpa, k, owned) catch {
-            self.gpa.free(owned);
-            return &.{};
-        };
-        return owned;
-    }
-
-    fn clearWraps(self: *TextSystem) void {
-        var it = self.wraps.valueIterator();
-        while (it.next()) |v| self.gpa.free(v.*);
-        self.wraps.clearRetainingCapacity();
+        return lines.toOwnedSlice(self.gpa);
     }
 
     /// The x offset of the caret before byte `index` of `s`.
     pub fn caretX(self: *TextSystem, s: []const u8, style: types.TextStyle, index: usize) f32 {
-        if (s.len == 0 or index == 0) return 0;
+        const to = @min(index, s.len);
+        if (to == 0) return 0;
+        if (shaper.isSimpleAscii(s[0..to])) return self.layout(s[0..to], style).width;
         const l = self.line(s, style);
         defer cf.CFRelease(l);
-        return @floatCast(cf.CTLineGetOffsetForStringIndex(l, cf.utf16Offset(s, index), null));
+        return @floatCast(cf.CTLineGetOffsetForStringIndex(l, cf.utf16Offset(s, to), null));
     }
 
     /// The byte index of the caret position nearest to `x`.

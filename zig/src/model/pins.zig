@@ -51,7 +51,7 @@ pub fn pin(self: *Browser, tab: *Tab, listed: bool) void {
         tab.listed = listed;
         settlePin(self, tab, false);
     }
-    self.writeSession(true);
+    self.writeSession(false);
 }
 
 /// A square made a row, or a row a square: to the nearer end of its new kind.
@@ -60,7 +60,7 @@ pub fn setListed(self: *Browser, tab: *Tab, listed: bool) void {
     if (self.editing_pin == tab.id) self.editing_pin = null;
     tab.listed = listed;
     settlePin(self, tab, listed);
-    self.writeSession(true);
+    self.writeSession(false);
     self.redraw();
 }
 
@@ -120,7 +120,7 @@ pub fn letter(self: *Browser, typed: []const u8, tab: *Tab) void {
 pub fn endPinEdit(self: *Browser) void {
     if (self.editing_pin == null) return;
     self.editing_pin = null;
-    self.writeSession(true);
+    self.writeSession(false);
     self.redraw();
 }
 
@@ -139,8 +139,7 @@ pub fn unpin(self: *Browser, tab: *Tab) void {
         }
     }
     self.arrangeGroupedTabs(null);
-    self.writeSession(true);
-    self.rememberSession();
+    self.writeSession(false);
     self.redraw();
 }
 

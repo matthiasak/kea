@@ -56,27 +56,37 @@ pub const Reader = struct {
     after_cr: bool = false,
     on_tool: ?*const fn (*anyopaque, ToolEvent) void = null,
     tool_calls: usize = 0,
+    scratch: ?std.heap.ArenaAllocator = null,
 
     pub fn deinit(r: *Reader) void {
+        if (r.scratch) |*sc| sc.deinit();
         r.line.deinit(r.a);
         r.event.deinit(r.a);
     }
 
     /// `bytes` read; each piece of text to `piece(ctx, text)`.
     pub fn feed(r: *Reader, bytes: []const u8, ctx: *anyopaque, piece: *const fn (*anyopaque, []const u8) void) Said {
-        for (bytes) |ch| {
-            if (r.after_cr) {
-                r.after_cr = false;
-                if (ch == '\n') continue;
+        var pos: usize = 0;
+        if (r.after_cr and pos < bytes.len) {
+            r.after_cr = false;
+            if (bytes[pos] == '\n') pos += 1;
+        }
+        while (pos < bytes.len) {
+            const nl = std.mem.indexOfAnyPos(u8, bytes, pos, "\n\r") orelse {
+                r.line.appendSlice(r.a, bytes[pos..]) catch return .{ .failed = .unreadable };
+                break;
+            };
+            if (nl > pos) r.line.appendSlice(r.a, bytes[pos..nl]) catch return .{ .failed = .unreadable };
+            const ch = bytes[nl];
+            pos = nl + 1;
+            if (ch == '\r') {
+                if (pos < bytes.len) {
+                    if (bytes[pos] == '\n') pos += 1;
+                } else r.after_cr = true;
             }
-            if (ch == '\n' or ch == '\r') {
-                r.after_cr = ch == '\r';
-                const out = r.take(ctx, piece);
-                r.line.clearRetainingCapacity();
-                if (out != .more) return out;
-                continue;
-            }
-            r.line.append(r.a, ch) catch return .{ .failed = .unreadable };
+            const out = r.take(ctx, piece);
+            r.line.clearRetainingCapacity();
+            if (out != .more) return out;
         }
         return .more;
     }
@@ -99,13 +109,13 @@ pub const Reader = struct {
         if (!std.mem.startsWith(u8, line, "data:")) return .more;
         const data = std.mem.trim(u8, line[5..], " \t");
         if (std.mem.eql(u8, data, "[DONE]")) return .done;
-        var arena: std.heap.ArenaAllocator = .init(r.a);
-        defer arena.deinit();
-        const value = std.json.parseFromSliceLeaky(std.json.Value, arena.allocator(), data, .{}) catch return .more;
+        if (r.scratch == null) r.scratch = .init(r.a) else _ = r.scratch.?.reset(.{ .retain_with_limit = 16 * 1024 });
+        const sa = r.scratch.?.allocator();
+        const value = std.json.parseFromSliceLeaky(std.json.Value, sa, data, .{}) catch return .more;
         if (value != .object) return .more;
         if (failure(r.keep, value, r.event.items, r.key)) |f| return .{ .failed = f };
-        if (r.on_tool) |on_tool| emitTools(arena.allocator(), r, value, ctx, on_tool);
-        if (pieceOf(arena.allocator(), r.wire, value)) |text| if (text.len > 0) piece(ctx, text);
+        if (r.on_tool) |on_tool| emitTools(sa, r, value, ctx, on_tool);
+        if (pieceOf(sa, r.wire, value)) |text| if (text.len > 0) piece(ctx, text);
         return .more;
     }
 };

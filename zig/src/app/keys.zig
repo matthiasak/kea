@@ -354,8 +354,7 @@ pub fn escape(b: *Browser) bool {
     // The same panels in the same order as ⌘W (`closeFront`).
     if (sheet.closePanel(b)) return true;
     if (b.passwords.accounts.suggesting != null) return done(@import("../passwords/browser_passwords.zig").dropChoice(b));
-    if (side_panels.collapse(b)) return true;
-    if (b.assisting != null) return done(b.closeAssistant());
+    if (b.expanded_panel != null and b.expanded_panel.? != .chat and side_panels.collapse(b)) return true;
     if (b.veiling) return done(curtain_js.toggleHiding(b));
     if (b.reviewing) return done(hidden_panel.setReviewing(b, false));
     if (b.finder.finding) return done(page_find.closeFind(b));

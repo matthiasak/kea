@@ -215,7 +215,7 @@ pub fn begin(c: *ui.Context, p: *const Palette, panel: SidePanel, width: ?f32, e
     }, if (panel == .chat) "kea.panel.chat" else "kea.panel.marks");
     // Clicks on the panel are its own, not the page's under a let-out one.
     _ = c.interact(outer, .{});
-    ui.column(c, .{ .width = .fill, .height = .fill, .max_width = if (expanded) 760 else std.math.inf(f32) });
+    ui.column(c, .{ .width = .fill, .height = .fill, .max_width = if (expanded and panel == .bookmarks) 760 else std.math.inf(f32) });
 }
 
 /// Ends `begin`'s box: in a column, the hairline and the edge on the page's side.
@@ -224,7 +224,7 @@ pub fn end(b: *Browser, c: *ui.Context, p: *const Palette, panel: SidePanel, on_
     if (width) |w| {
         _ = c.leaf(.{ .absolute = true, .offset = .{ .x = if (on_left) w - 1 else 0 }, .width = px(1), .height = .fill, .background = p.hairline }, .none, null);
         switch (panel) {
-            inline else => |pn| edgeHandle(b, c, p, comptime pn.field(), pn.min(), pn.max(), pn.standard(), on_left, if (on_left) w - 9 else 0),
+            inline else => |pn| edgeHandle(b, c, p, comptime pn.field(), pn.min(), if (pn == .chat) @max(pn.min(), c.size.w - metrics.page_min) else pn.max(), pn.standard(), on_left, if (on_left) w - 9 else 0),
         }
     }
     c.end();

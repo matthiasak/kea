@@ -8,6 +8,10 @@
 #   ./build.sh release test    stops at build/Kea.app and touches nothing else
 #   KEA_INSTALL=0 ./build.sh   the same as `test`
 #   KEA_SIGN_IDENTITY="…"      a Developer ID to sign with (default: the first in the keychain, else ad-hoc)
+#   KEA_PROVISION_PROFILE=…    a Developer ID provisioning profile carrying
+#                              com.apple.developer.web-browser.public-key-credential
+#                              (default: Kea.provisionprofile). Apple Passwords' helper
+#                              is killed by macOS unless its parent holds that entitlement.
 set -euo pipefail
 
 cd "$(dirname "$0")"
@@ -110,7 +114,32 @@ PLIST
 IDENTITY="${KEA_SIGN_IDENTITY:-$(security find-identity -v -p codesigning 2>/dev/null \
   | grep -o '"Developer ID Application: [^"]*"' | head -1 | tr -d '"' || true)}"
 if [ -n "$IDENTITY" ]; then
-  codesign --force --deep --timestamp --options runtime --entitlements Kea.entitlements --sign "$IDENTITY" "$APP"
+  ENTITLEMENTS=Kea.entitlements
+  PROFILE="${KEA_PROVISION_PROFILE:-Kea.provisionprofile}"
+  if [ -f "$PROFILE" ]; then
+    cp "$PROFILE" "$APP/Contents/embedded.provisionprofile"
+    ENTITLEMENTS="$(mktemp -t kea-ent).plist"
+    cp Kea.entitlements "$ENTITLEMENTS"
+    security cms -D -i "$PROFILE" > "$ENTITLEMENTS.profile"
+    pb() { /usr/libexec/PlistBuddy -c "$1" "$ENTITLEMENTS.profile" 2>/dev/null || true; }
+    TEAM="$(pb 'Print :TeamIdentifier:0')"
+    PROFILE_APP="$(pb 'Print :Entitlements:com.apple.application-identifier')"
+    [ -n "$TEAM" ] || { echo "profile $PROFILE has no TeamIdentifier" >&2; exit 1; }
+    # Not copied from the profile: its values may be wildcards, which a signature can't carry.
+    [ "$PROFILE_APP" = "$TEAM.app.kea.browser" ] || [ "$PROFILE_APP" = "$TEAM.*" ] \
+      || { echo "profile $PROFILE is for '$PROFILE_APP', not $TEAM.app.kea.browser" >&2; exit 1; }
+    [ "$(pb 'Print :Entitlements:com.apple.developer.web-browser.public-key-credential')" = true ] \
+      || { echo "profile $PROFILE lacks com.apple.developer.web-browser.public-key-credential" >&2; exit 1; }
+    for kv in "com.apple.application-identifier string $TEAM.app.kea.browser" \
+              "com.apple.developer.team-identifier string $TEAM" \
+              "com.apple.developer.web-browser.public-key-credential bool true"; do
+      set -- $kv
+      /usr/libexec/PlistBuddy -c "Add :$1 $2 $3" "$ENTITLEMENTS"
+    done
+    rm -f "$ENTITLEMENTS.profile"
+    echo "passkeys: profile embedded"
+  fi
+  codesign --force --deep --timestamp --options runtime --entitlements "$ENTITLEMENTS" --sign "$IDENTITY" "$APP"
   echo "signed as: $IDENTITY"
 else
   codesign --force --deep --sign - "$APP"

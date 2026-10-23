@@ -29,6 +29,6 @@ pub const side_max: f32 = 440;
 /// Ubi Chat's column, until pulled wider or narrower.
 pub const chat: f32 = 380;
 pub const chat_min: f32 = 300;
-pub const chat_max: f32 = 720;
+pub const chat_max: f32 = 10_000;
 /// The narrowest page the side panels leave in a small window.
 pub const page_min: f32 = 320;

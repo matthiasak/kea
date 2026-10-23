@@ -36,7 +36,11 @@ pub fn conversation(b: *Browser, c: *ui.Context, p: *const Palette, a: *Assistan
     if (a.help_shown) help(c, p, a, z);
     const none = a.chat.turns.len == 0 and a.live == null;
     if (none and a.notice == null) {
+        ui.column(c, .{ .gap = 10, .width = .fill, .padding = .all(16), .radius = 14, .background = p.wash.alpha(0.45), .border = p.hairline });
+        ui.row(c, .{ .gap = 6, .align_items = .center });
+        ui.icon(c, "sparkles", .{ .size = 12 * z, .weight = .semibold, .color = p.muted });
         ui.text(c, "Ask anything.", .{ .size = 13 * z, .weight = .semibold, .color = p.ink });
+        ui.end(c);
         ui.text(c, "The page in front goes with your question unless you close its eye below. Type tabs/, bookmarks/, history/ or @ to pin more pages, and / for commands.", .{ .size = 12 * z, .color = p.muted, .wrap = true });
         if (a.sharesPage()) {
             ui.row(c, .{ .gap = 6 });
@@ -45,6 +49,7 @@ pub fn conversation(b: *Browser, c: *ui.Context, p: *const Palette, a: *Assistan
             }
             ui.end(c);
         }
+        ui.end(c);
     }
     if (a.addressed and a.notice == null) caution(c, p, "This page has text written for an AI to follow. The answer may have been steered by it.", z);
     const fold = folded(a.chat);
@@ -61,7 +66,7 @@ pub fn conversation(b: *Browser, c: *ui.Context, p: *const Palette, a: *Assistan
         }
     }
     for (a.chat.turns[fold..]) |t| turnView(b, c, p, st, t, z, 1);
-    if (a.liveTurn()) |t| turnView(b, c, p, st, t, z, 1);
+    if (a.liveTurn()) |t| _ = turnViewBox(b, c, p, st, t, z, 1, false);
 }
 
 /// "Earlier, compacted · N turns" between two hairlines, folding them open.
@@ -116,11 +121,91 @@ fn noticeCard(c: *ui.Context, p: *const Palette, a: *Assistant, n: @import("assi
 
 /// `TurnView`: the question on the right, the answer under it.
 fn turnView(b: *Browser, c: *ui.Context, p: *const Palette, st: *State, t: Turn, z: f32, opacity: f32) void {
-    ui.column(c, .{ .gap = 8, .width = .fill, .opacity = opacity });
+    _ = turnViewBox(b, c, p, st, t, z, opacity, true);
+}
+
+fn estimateTurnHeight(t: Turn, z: f32) f32 {
+    const lines: f32 = @floatFromInt(t.answer.len / 48 + 2);
+    return (52.0 + lines * 18.0) * z;
+}
+
+pub fn virtualConversation(b: *Browser, c: *ui.Context, p: *const Palette, a: *Assistant, st: *State, todo: *Do, z: f32, scroll_id: u64) void {
+    const sc_rect = c.rects.get(scroll_id);
+    const vw: f32 = if (sc_rect) |r| r.w else 0;
+    if ((vw > 0 and @abs(vw - st.heights_width) > 0.5) or st.heights_zoom != z) {
+        st.heights.clearRetainingCapacity();
+        st.rendered_turns.clearRetainingCapacity();
+        if (vw > 0) st.heights_width = vw;
+        st.heights_zoom = z;
+    }
+    if (st.heights.capacity() < a.chat.turns.len) st.heights.ensureTotalCapacity(b.gpa, @intCast(a.chat.turns.len + 16)) catch {};
+    if (st.rendered_turns.capacity < 32) st.rendered_turns.ensureTotalCapacity(b.gpa, 32) catch {};
+    for (st.rendered_turns.items) |rt| {
+        if (c.rects.get(rt.box_id)) |r| if (r.h > 0) {
+            st.heights.put(b.gpa, rt.id, r.h) catch {};
+        };
+    }
+    st.rendered_turns.clearRetainingCapacity();
+
+    ui.column(c, .{ .gap = 18, .width = .fill, .padding = .xy(16, 12) });
     defer ui.end(c);
+    if (a.notice) |n| noticeCard(c, p, a, n, todo, z);
+    if (a.shy) ui.text(c, "A private tab's chat: only an AI on this Mac, and nothing is kept.", .{ .size = 12 * z, .color = p.muted, .wrap = true });
+    if (a.help_shown) help(c, p, a, z);
+    if (a.addressed and a.notice == null) caution(c, p, "This page has text written for an AI to follow. The answer may have been steered by it.", z);
+    const fold = folded(a.chat);
+    if (fold > 0) {
+        earlier(c, p, st, fold, z);
+        if (st.show_earlier) {
+            if (a.chat.summary) |summary| if (summary.len > 0) {
+                ui.column(c, .{ .gap = 6, .width = .fill, .padding = .all(10), .radius = 10, .background = p.wash });
+                ui.text(c, "Summary", .{ .size = 11.5 * z, .weight = .semibold, .color = p.muted });
+                markdown_view.answer(b, c, p, &st.answers, summary, .{ .zoom = z });
+                ui.end(c);
+            };
+        }
+    }
+    const start_idx: usize = if (fold > 0 and !st.show_earlier) fold else 0;
+    const shown_turns = a.chat.turns[start_idx..];
+
+    var total_h: f32 = 24;
+    for (shown_turns, 0..) |t, idx| {
+        if (idx > 0) total_h += 18;
+        total_h += st.heights.get(t.id) orelse estimateTurnHeight(t, z);
+    }
+    if (a.liveTurn()) |lt| total_h += 18 + estimateTurnHeight(lt, z);
+
+    const vh = if (sc_rect) |r| r.h else c.size.h;
+    const raw_scroll = c.scroll.get(scroll_id) orelse 0;
+    const eff_scroll = @min(raw_scroll, @max(0, total_h - vh));
+    const lo = eff_scroll - 400;
+    const hi = eff_scroll + vh + 400;
+
+    var y: f32 = 12;
+    for (shown_turns, start_idx..) |t, abs_idx| {
+        const measured = st.heights.get(t.id);
+        const h = measured orelse estimateTurnHeight(t, z);
+        if (y + h < lo or y > hi) {
+            _ = c.leaf(.{ .width = .fill, .height = px(h) }, .none, null);
+        } else {
+            const box_id = turnViewBox(b, c, p, st, t, z, if (abs_idx < fold) 0.75 else 1.0, true);
+            st.rendered_turns.append(b.gpa, .{ .id = t.id, .box_id = box_id }) catch {};
+        }
+        y += h + 18;
+    }
+    if (a.liveTurn()) |lt| {
+        _ = turnViewBox(b, c, p, st, lt, z, 1.0, false);
+    }
+}
+
+fn turnViewBox(b: *Browser, c: *ui.Context, p: *const Palette, st: *State, t: Turn, z: f32, opacity: f32, cache_ast: bool) u64 {
+    c.next_key_int = std.mem.readInt(u64, t.id.bytes[0..8], .little);
+    const box = c.open(.{ .direction = .column, .gap = 8, .width = .fill, .opacity = opacity }, null);
+    defer c.end();
+    const box_id = c.node(box).id;
     ui.row(c, .{ .width = .fill, .padding = .{ .left = 40 } });
     _ = c.leaf(.{ .grow = 1 }, .none, null);
-    _ = c.open(.{ .padding = .xy(12, 8), .radius = 14, .background = p.wash, .selectable = true }, null);
+    _ = c.open(.{ .padding = .xy(12, 8), .radius = 14, .background = p.wash, .border = p.hairline, .selectable = true }, null);
     hug(c, t.question, .{ .size = 12.5 * z, .color = p.ink });
     c.end();
     ui.end(c);
@@ -137,7 +222,7 @@ fn turnView(b: *Browser, c: *ui.Context, p: *const Palette, st: *State, t: Turn,
         ui.end(c);
     }
     if (t.answer.len == 0 and !t.done) ui.text(c, "…", .{ .size = 13 * z, .color = p.faint });
-    if (t.answer.len > 0) markdown_view.answer(b, c, p, &st.answers, t.answer, .{ .zoom = z });
+    if (t.answer.len > 0) markdown_view.answer(b, c, p, &st.answers, t.answer, .{ .zoom = z, .cache = cache_ast });
     if (t.failed) |failed| ui.text(c, failed, .{ .size = 12 * z, .color = p.muted, .wrap = true });
     if (t.strays.len > 0) {
         const joined = std.mem.join(c.alloc(), ", ", t.strays) catch "";
@@ -148,4 +233,5 @@ fn turnView(b: *Browser, c: *ui.Context, p: *const Palette, st: *State, t: Turn,
     _ = c.leaf(.{ .grow = 1, .min_width = 0 }, .none, null);
     if (t.done and t.answer.len > 0 and plate.quick(c, p, "Copy", null).clicked) ubi.copy(b.gpa, t.answer);
     ui.end(c);
+    return box_id;
 }

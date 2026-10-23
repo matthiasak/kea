@@ -126,6 +126,9 @@ pub fn setActive(self: *Browser, id: u64) void {
     const old = self.active_id;
     if (self.tabById(old)) |left| left.touch();
     self.active_id = id;
+    if (old != 0) for (self.tabs.items) |t| if (!t.popup and t.opener == id) {
+        t.opener = null;
+    };
     @import("split.zig").activeMoved(self, old, id);
     // The switcher's order, most recently used first.
     if (old != 0) @import("../chrome/tab_switcher.zig").leftTab(self, old);
@@ -143,6 +146,7 @@ pub fn letGo(self: *Browser, t: *Tab) void {
     if (self.editing_pin == t.id) self.editing_pin = null;
     if (self.editing_tab == t.id) self.cancelTabEdit();
     t.destroy();
+    if (!self.restoring) if (self.kea.ext) |e| e.follow(self);
 }
 
 pub const OpenOptions = struct {
@@ -166,6 +170,7 @@ pub fn open(self: *Browser, url: []const u8, o: OpenOptions) *Tab {
         asleep.shy = shy;
         break :blk asleep;
     } else self.make(url, shy);
+    if (!o.foreground and !o.at_end) t.opener = if (o.from) |s| s.id else self.active_id;
     if (self.prefs.uses_tab_groups and !t.shy) if (o.from) |s| {
         t.group_id = s.group_id;
     };
@@ -263,7 +268,7 @@ pub fn visit(self: *Browser, url: []const u8, apart: bool) void {
         self.setTyped("");
         return self.redraw();
     }
-    _ = self.open(url, .{ .foreground = true, .from = a });
+    _ = self.open(url, .{ .foreground = !apart, .from = a, .may_wait = apart });
 }
 
 // MARK: picking
@@ -431,6 +436,13 @@ pub fn placeForNew(self: *Browser) usize {
     if (self.activeSplit()) |p| if (self.tabById(p.right())) |r| {
         after = self.indexOf(r).?;
     };
+    const vis = self.visibleTabIDs();
+    while (after + 1 < self.tabs.items.len) {
+        const next = self.tabs.items[after + 1];
+        const op = next.opener orelse break;
+        if (op != vis[0] and (vis[1] == 0 or op != vis[1])) break;
+        after += 1;
+    }
     return @max(after + 1, self.pinnedCount());
 }
 

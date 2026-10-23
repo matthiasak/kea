@@ -13,7 +13,7 @@ const Read = @import("page_text.zig").Read;
 
 const email_pattern = "[A-Za-z0-9._%+\\-]+@[A-Za-z0-9.\\-]+\\.[A-Za-z]{2,}";
 const place_pattern = "(?:https?://|www\\.)[^\\s<>()\\[\\]\"']+|\\b(?:[A-Za-z0-9\\-]+\\.)+[A-Za-z]{2,}(?:/[^\\s<>()\\[\\]\"']*)?";
-const phone_pattern = "\\+?\\d[\\d\\s().\\-]{6,}\\d";
+const phone_pattern = "\\+?\\d[\\d \\t().\\-]{6,}\\d";
 
 /// What a file's name ends with, rather than a site's.
 const file_endings = [_][]const u8{
@@ -131,17 +131,11 @@ pub fn strays(a: std.mem.Allocator, answer: []const u8, r: Read) ![]const []cons
     var emails: Set = .empty;
     var hosts: Set = .empty;
     var phones: std.ArrayList([]const u8) = .empty;
-    var looked: std.ArrayList([]const u8) = .empty;
-    try looked.appendSlice(a, try words(a, page));
-    try looked.appendSlice(a, r.links);
-    try looked.append(a, r.url orelse "");
-    for (looked.items) |word| {
-        for (try email_re.matches(a, word)) |e| try emails.put(a, try std.ascii.allocLowerString(a, e), {});
-        for (try place_re.matches(a, word)) |p| if (try hostOf(a, p)) |h| try hosts.put(a, h, {});
-    }
-    for (try lines(a, page)) |line| {
-        for (try phone_re.matches(a, line)) |p| try phones.append(a, try digits(a, p));
-    }
+    const links_text = try std.mem.join(a, "\n", r.links);
+    const page_all = try std.mem.concat(a, u8, &.{ page, "\n", links_text, "\n", r.url orelse "" });
+    for (try email_re.matches(a, page_all)) |e| try emails.put(a, try std.ascii.allocLowerString(a, e), {});
+    for (try place_re.matches(a, page_all)) |p| if (try hostOf(a, p)) |h| try hosts.put(a, h, {});
+    for (try phone_re.matches(a, page)) |p| try phones.append(a, try digits(a, p));
     if (r.url) |u| if (@import("../data/url.zig").Parts.parse(u)) |parts| if (parts.hostName()) |h| {
         const lower = try std.ascii.allocLowerString(a, h);
         try hosts.put(a, if (std.mem.startsWith(u8, lower, "www.")) lower[4..] else lower, {});
@@ -149,7 +143,9 @@ pub fn strays(a: std.mem.Allocator, answer: []const u8, r: Read) ![]const []cons
 
     var found: std.ArrayList([]const u8) = .empty;
     for (try words(a, said)) |word| {
-        const found_emails = try email_re.matches(a, word);
+        const core = std.mem.trimEnd(u8, word, ".,;:!?)]}'\"");
+        if (std.mem.indexOfScalar(u8, core, '.') == null) continue;
+        const found_emails = if (std.mem.indexOfScalar(u8, core, '@') != null) try email_re.matches(a, word) else &.{};
         for (found_emails) |e| if (!emails.contains(try std.ascii.allocLowerString(a, e))) try note(a, &found, e);
         places: for (try place_re.matches(a, word)) |place| {
             var shown = place;
@@ -168,16 +164,14 @@ pub fn strays(a: std.mem.Allocator, answer: []const u8, r: Read) ![]const []cons
             if (!hosts.contains(host)) try note(a, &found, shown);
         }
     }
-    for (try lines(a, said)) |line| {
-        for (try phone_re.matches(a, line)) |phone| {
-            const d = try digits(a, phone);
-            if (d.len < 7) continue;
-            var known = false;
-            for (phones.items) |p| if (std.mem.indexOf(u8, p, d) != null) {
-                known = true;
-            };
-            if (!known) try note(a, &found, std.mem.trim(u8, phone, " \t"));
-        }
+    for (try phone_re.matches(a, said)) |phone| {
+        const d = try digits(a, phone);
+        if (d.len < 7) continue;
+        var known = false;
+        for (phones.items) |p| if (std.mem.indexOf(u8, p, d) != null) {
+            known = true;
+        };
+        if (!known) try note(a, &found, std.mem.trim(u8, phone, " \t"));
     }
     return found.items;
 }

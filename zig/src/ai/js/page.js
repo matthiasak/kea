@@ -1,30 +1,25 @@
 (function () {
-  var seen = 0, limit = 40000;
-  var skip = { SCRIPT: 1, STYLE: 1, NOSCRIPT: 1, TEMPLATE: 1, IFRAME: 1, FRAME: 1, OBJECT: 1, EMBED: 1,
-               INPUT: 1, TEXTAREA: 1, SELECT: 1, OPTION: 1, SVG: 1, CANVAS: 1, VIDEO: 1, AUDIO: 1, HEAD: 1 };
-  var width = document.documentElement.scrollWidth, height = document.documentElement.scrollHeight;
+  var seen = 0, limit = 150000;
+  var skip = { SCRIPT: 1, STYLE: 1, NOSCRIPT: 1, TEMPLATE: 1, OBJECT: 1, EMBED: 1, VIDEO: 1, AUDIO: 1, HEAD: 1 };
 
   // Whether a person could see this element, and so everything in it.
   function shown(el) {
     if (el.hidden || el.getAttribute('aria-hidden') === 'true' || el.inert) return false;
     var s = getComputedStyle(el);
     if (s.display === 'none' || s.visibility === 'hidden' || s.visibility === 'collapse') return false;
-    if (parseFloat(s.opacity) < 0.1 || s.contentVisibility === 'hidden') return false;
-    if (parseFloat(s.fontSize) < 6) return false;
+    if (parseFloat(s.opacity) < 0.05 || s.contentVisibility === 'hidden') return false;
+    if (parseFloat(s.fontSize) < 4) return false;
     // Clipped away to nothing: the "for screen readers only" trick.
     if ((s.clip && s.clip.indexOf('rect(0') === 0) || /circle\(0/.test(s.clipPath || '')) return false;
     var inset = /inset\((\d+)%/.exec(s.clipPath || '');
     if (inset && +inset[1] >= 50) return false;
     // Faded out by a filter, or its text pushed far off to the side.
     var faded = /opacity\(([\d.]+)(%?)\)/.exec(s.filter || '');
-    if (faded && +faded[1] / (faded[2] ? 100 : 1) < 0.1) return false;
+    if (faded && +faded[1] / (faded[2] ? 100 : 1) < 0.05) return false;
     if (parseFloat(s.textIndent) < -500) return false;
     var r = el.getBoundingClientRect();
-    if ((r.width < 2 || r.height < 2) && s.overflow !== 'visible') return false;
-    if (r.width < 1 && r.height < 1) return false;
-    // Pushed off the page to the left or the top, where nobody scrolls.
-    var x = r.right + window.scrollX, y = r.bottom + window.scrollY;
-    if (x < 0 || y < 0 || r.left + window.scrollX > width + 50) return false;
+    var tag = (el.tagName || '').toUpperCase();
+    if (r.width < 1 && r.height < 1 && s.overflow !== 'visible' && tag !== 'TR' && tag !== 'CONTENTS' && s.display !== 'contents') return false;
     return true;
   }
 
@@ -63,51 +58,95 @@
   }
   function unreadable(color, behind) {
     var c = rgb(color);
-    if (!c || !behind) return false;
-    if (c.a < 0.3) return true;
+    if (!c) return false;
+    if (c.a < 0.15) return true;
+    if (!behind) return false;
     var a = light(c), b = light(behind);
     return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05) < 1.25;
   }
 
-  var out = [], links = [];
-  // `behind`: the colour behind this node, or null where a picture is
-  // (text over an image can't be judged by colours alone).
-  // `alpha`: how opaque it is through all its parents together.
+  var out = [], links = [], root = null;
   function walk(node, behind, alpha) {
     if (seen++ > limit) return;
     if (node.nodeType === 3) {
       var t = node.nodeValue.replace(/\s+/g, ' ');
-      var ps = getComputedStyle(node.parentElement);
+      var pe = node.parentElement;
+      if (!pe) { if (t.trim()) out.push(t); return; }
+      var ps = getComputedStyle(pe);
       var fill = rgb(ps.webkitTextFillColor);
-      if (t.trim() && !unreadable(ps.color, behind) && !(fill && fill.a < 0.3)) out.push(t);
+      if (t.trim() && !unreadable(ps.color, behind) && !(fill && fill.a < 0.15)) out.push(t);
       return;
     }
-    if (node.nodeType !== 1 || skip[node.tagName.toUpperCase()]) return;
-    if (node.tagName === 'BR') { out.push('\n'); return; }
+    if (node.nodeType !== 1) return;
+    var tag = (node.tagName || '').toUpperCase();
+    if (skip[tag]) return;
+    if (tag === 'BR') { out.push('\n'); return; }
     if (node !== root && node.matches && node.matches(clutter)) return;
     if (!shown(node)) return;
+    if (tag === 'INPUT') {
+      var tp = (node.type || 'text').toLowerCase();
+      if (tp !== 'password' && tp !== 'hidden') {
+        var iv = (node.value || node.placeholder || '').trim();
+        if (iv) out.push(' ' + iv + ' ');
+      }
+      return;
+    }
+    if (tag === 'TEXTAREA') {
+      var tv = (node.value || node.placeholder || '').trim();
+      if (tv) out.push('\n' + tv + '\n');
+      return;
+    }
+    if (tag === 'SELECT') {
+      var opt = node.selectedOptions && node.selectedOptions[0];
+      var sv = (opt ? opt.textContent : node.value || '').trim();
+      if (sv) out.push(' ' + sv + ' ');
+      return;
+    }
+    if (tag === 'IMG' || tag === 'CANVAS') {
+      var alt = (node.getAttribute('alt') || node.getAttribute('aria-label') || '').trim();
+      if (alt) out.push(' [' + alt + '] ');
+      return;
+    }
+    if (tag === 'IFRAME' || tag === 'FRAME') {
+      try {
+        if (node.contentDocument && node.contentDocument.body) walk(node.contentDocument.body, null, alpha);
+      } catch (e) {}
+      return;
+    }
     var s = getComputedStyle(node);
     if (s.backgroundImage && s.backgroundImage !== 'none') behind = null;
-    else { var bg = rgb(s.backgroundColor); if (bg && bg.a > 0.5 && behind !== null) behind = bg; }
+    else { var bg = rgb(s.backgroundColor); if (bg && bg.a > 0.85) behind = bg; }
     var block = !/^inline/.test(s.display);
     if (block) out.push('\n');
     alpha = alpha * (parseFloat(s.opacity) || 0);
-    if (alpha < 0.1) return;
+    if (alpha < 0.05) return;
+    if (node.shadowRoot) {
+      for (var sc = node.shadowRoot.firstChild; sc; sc = sc.nextSibling) walk(sc, behind, alpha);
+    }
     for (var c = node.firstChild; c; c = c.nextSibling) walk(c, behind, alpha);
     if (block) out.push('\n');
   }
 
-  var root = article() || document.body;
-  if (!root) return null;
-  // The colour behind the article: its own, or the first of its
-  // parents' that is painted, or white as a page is.
-  var ground = { r: 255, g: 255, b: 255, a: 1 };
-  for (var up = root; up && up.nodeType === 1; up = up.parentElement) {
-    var painted = rgb(getComputedStyle(up).backgroundColor);
-    if (painted && painted.a > 0.5) { ground = painted; break; }
+  function groundOf(el) {
+    for (var up = el; up && up.nodeType === 1; up = up.parentElement) {
+      var us = getComputedStyle(up);
+      if (us.backgroundImage && us.backgroundImage !== 'none') return null;
+      var painted = rgb(us.backgroundColor);
+      if (painted && painted.a > 0.85) return painted;
+    }
+    return null;
   }
-  // Every visible link on the page, the article's or not, for the check
-  // on the answer: an address the page shows you is on the page.
+  function extractFrom(start) {
+    out = [];
+    seen = 0;
+    root = start;
+    walk(start, groundOf(start), 1);
+    return out.join('').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+  }
+
+  var art = article();
+  var startRoot = art || document.body;
+  if (!startRoot) return null;
   for (var l = 0; l < document.links.length && links.length < 400; l++) {
     var a = document.links[l];
     if (!/^https?:/.test(a.href)) continue;
@@ -116,7 +155,12 @@
     if (visible) links.push(a.href);
   }
   var heading = document.querySelector('h1');
-  walk(root, ground, 1);
-  var text = out.join('').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+  var text = extractFrom(startRoot);
+  if (art && document.body && art !== document.body) {
+    var bodyLen = (document.body.innerText || '').trim().length;
+    if (text.length < 1200 || (bodyLen > 0 && text.length * 2 < bodyLen)) {
+      text = extractFrom(document.body);
+    }
+  }
   return { title: document.title || (heading && heading.textContent.trim()) || '', text: text, links: links };
 })();

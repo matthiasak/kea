@@ -55,6 +55,8 @@ pub const App = struct {
         self.gui = flags.snapshot == null and flags.generate_dir == null;
         // Pixels, not stretched bitmaps: nanoui draws at the monitor's DPI.
         if (self.gui) _ = w.SetProcessDPIAware();
+        // Where other threads' calls for the main thread arrive (`onMain`).
+        @import("fdwatch.zig").prepare() catch {};
         return self;
     }
 
@@ -107,6 +109,15 @@ pub const App = struct {
         if (self.stopping) return;
         self.stopping = true;
         if (self.running) w.PostQuitMessage(0);
+    }
+
+    /// Files the system asks the app to open: on macOS only; here a file
+    /// is named on the command line, which the app reads itself.
+    pub fn onOpenFiles(_: *App, _: *anyopaque, _: *const fn (ctx: *anyopaque, paths: []const []const u8) void) void {}
+
+    /// From any thread: calls `func(ctx)` on the main thread soon.
+    pub fn onMain(ctx: ?*anyopaque, func: *const fn (?*anyopaque) callconv(.c) void) void {
+        _ = @import("fdwatch.zig").post(ctx, func);
     }
 
     pub fn after(ms: u64, ctx: ?*anyopaque, func: *const fn (?*anyopaque) callconv(.c) void) void {

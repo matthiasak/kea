@@ -1,0 +1,212 @@
+//! Frames on screen through Direct3D 11 and a DXGI flip-sequential swap
+//! chain (issue #5), as Vercel's Native SDK presents its canvas: the CPU
+//! renderer's pixels go into the swap chain's back buffer and are
+//! presented by the compositor, with no GDI copy. Flip presentation keeps
+//! resizing smooth: the buffers grow with the window (`ResizeBuffers`),
+//! content stays anchored at the top left (no stretching), and the edge a
+//! resize uncovers shows the background color until the next frame.
+//!
+//! A hardware device, else WARP (Windows' software one: virtual machines,
+//! CI). A lost device (a driver update, a GPU reset) is dropped and made
+//! again for the next frame; where none can be made the surface keeps
+//! drawing with GDI. COM is called through each interface's vtable, by
+//! slot, in the order the SDK's headers declare them.
+const std = @import("std");
+const w = @import("win32.zig");
+
+const HRESULT = i32;
+const Guid = extern struct { a: u32, b: u16, c: u16, d: [8]u8 };
+
+const iid_dxgi_device: Guid = .{ .a = 0x54ec77fa, .b = 0x1377, .c = 0x44e6, .d = .{ 0x8c, 0x32, 0x88, 0xfd, 0x5f, 0x44, 0xc8, 0x4c } };
+const iid_dxgi_factory2: Guid = .{ .a = 0x50c83a1c, .b = 0xe072, .c = 0x4c48, .d = .{ 0x87, 0xb0, 0x36, 0x30, 0xfa, 0x36, 0xa6, 0xd0 } };
+const iid_texture2d: Guid = .{ .a = 0x6f15aaf2, .b = 0xd208, .c = 0x4e89, .d = .{ 0x9a, 0xb4, 0x48, 0x95, 0x35, 0xd3, 0x4f, 0x9c } };
+
+const format_bgra8: u32 = 87; // DXGI_FORMAT_B8G8R8A8_UNORM, as the renderer writes
+const occluded: HRESULT = 0x087A0001; // DXGI_STATUS_OCCLUDED: presented, not visible
+const device_removed: u32 = 0x887A0005;
+const device_reset: u32 = 0x887A0007;
+
+extern "d3d11" fn D3D11CreateDevice(adapter: ?*anyopaque, driver: u32, software: ?*anyopaque, flags: u32, levels: ?[*]const u32, n_levels: u32, sdk: u32, device: *?*Com, level: ?*u32, context: *?*Com) callconv(.winapi) HRESULT;
+
+/// A COM object: its first field points at its vtable.
+pub const Com = extern struct {
+    vtable: [*]const *const anyopaque,
+
+    fn slot(c: *Com, comptime T: type, i: usize) T {
+        return @ptrCast(@alignCast(c.vtable[i]));
+    }
+
+    pub fn release(c: *Com) void {
+        _ = c.slot(*const fn (*Com) callconv(.winapi) u32, 2)(c);
+    }
+
+    fn query(c: *Com, iid: *const Guid) !*Com {
+        var out: ?*Com = null;
+        try check(c.slot(*const fn (*Com, *const Guid, *?*Com) callconv(.winapi) HRESULT, 0)(c, iid, &out));
+        return out orelse error.NoInterface;
+    }
+};
+
+fn check(hr: HRESULT) !void {
+    if (hr < 0) return error.Direct3D;
+}
+
+const SwapChainDesc1 = extern struct {
+    width: u32,
+    height: u32,
+    format: u32 = format_bgra8,
+    stereo: w.BOOL = 0,
+    sample_count: u32 = 1,
+    sample_quality: u32 = 0,
+    usage: u32 = 0x20, // DXGI_USAGE_RENDER_TARGET_OUTPUT
+    buffers: u32 = 2,
+    scaling: u32 = 1, // DXGI_SCALING_NONE: anchored, never stretched
+    effect: u32 = 3, // DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL
+    alpha: u32 = 3, // DXGI_ALPHA_MODE_IGNORE
+    flags: u32 = 0,
+};
+
+pub const Texture2DDesc = extern struct {
+    width: u32,
+    height: u32,
+    mips: u32 = 1,
+    array: u32 = 1,
+    format: u32 = format_bgra8,
+    sample_count: u32 = 1,
+    sample_quality: u32 = 0,
+    usage: u32 = 0,
+    bind: u32 = 0,
+    cpu: u32 = 0,
+    misc: u32 = 0,
+};
+
+pub const Mapped = extern struct { data: [*]u8, row_pitch: u32, depth_pitch: u32 };
+
+const Rgba = extern struct { r: f32, g: f32, b: f32, a: f32 };
+
+/// A window's swap chain and the device it presents with.
+pub const Presenter = struct {
+    device: *Com,
+    context: *Com,
+    swap: *Com,
+    width: u32,
+    height: u32,
+
+    /// A device (hardware, else WARP) and a flip-sequential swap chain for
+    /// `hwnd`, `width` × `height` pixels.
+    pub fn init(hwnd: w.HWND, width: u32, height: u32) !Presenter {
+        var device: ?*Com = null;
+        var context: ?*Com = null;
+        const bgra: u32 = 0x20; // D3D11_CREATE_DEVICE_BGRA_SUPPORT
+        // D3D_DRIVER_TYPE_HARDWARE, then D3D_DRIVER_TYPE_WARP.
+        if (D3D11CreateDevice(null, 1, null, bgra, null, 0, 7, &device, null, &context) < 0)
+            try check(D3D11CreateDevice(null, 5, null, bgra, null, 0, 7, &device, null, &context));
+        const dev = device orelse return error.Direct3D;
+        const ctx = context orelse return error.Direct3D;
+        errdefer {
+            ctx.release();
+            dev.release();
+        }
+        // The factory that made the device's adapter makes the swap chain.
+        const dxgi = try dev.query(&iid_dxgi_device);
+        defer dxgi.release();
+        var adapter: ?*Com = null;
+        try check(dxgi.slot(*const fn (*Com, *?*Com) callconv(.winapi) HRESULT, 7)(dxgi, &adapter)); // GetAdapter
+        defer adapter.?.release();
+        var factory: ?*Com = null;
+        try check(adapter.?.slot(*const fn (*Com, *const Guid, *?*Com) callconv(.winapi) HRESULT, 6)(adapter.?, &iid_dxgi_factory2, &factory)); // GetParent
+        defer factory.?.release();
+        const desc: SwapChainDesc1 = .{ .width = @max(width, 1), .height = @max(height, 1) };
+        var swap: ?*Com = null;
+        try check(factory.?.slot(*const fn (*Com, *Com, w.HWND, *const SwapChainDesc1, ?*anyopaque, ?*anyopaque, *?*Com) callconv(.winapi) HRESULT, 15)(factory.?, dev, hwnd, &desc, null, null, &swap)); // CreateSwapChainForHwnd
+        // Alt+Enter is nanoui's to give meaning to, not DXGI's.
+        _ = factory.?.slot(*const fn (*Com, w.HWND, u32) callconv(.winapi) HRESULT, 8)(factory.?, hwnd, 2); // MakeWindowAssociation, NO_ALT_ENTER
+        return .{ .device = dev, .context = ctx, .swap = swap orelse return error.Direct3D, .width = desc.width, .height = desc.height };
+    }
+
+    pub fn deinit(p: *Presenter) void {
+        p.swap.release();
+        p.context.release();
+        p.device.release();
+    }
+
+    /// What a resize uncovers shows this until the next frame.
+    pub fn setBackground(p: *Presenter, r: f32, g: f32, b: f32) void {
+        const color: Rgba = .{ .r = r, .g = g, .b = b, .a = 1 };
+        _ = p.swap.slot(*const fn (*Com, *const Rgba) callconv(.winapi) HRESULT, 25)(p.swap, &color); // SetBackgroundColor
+    }
+
+    /// Puts `pixels` (BGRA, `width` × `height`, rows from the top) in the
+    /// back buffer, the buffers resized first if the window was.
+    pub fn upload(p: *Presenter, pixels: []const u8, width: u32, height: u32) !void {
+        if (width != p.width or height != p.height) {
+            // ResizeBuffers: keep the count and format.
+            try check(p.swap.slot(*const fn (*Com, u32, u32, u32, u32, u32) callconv(.winapi) HRESULT, 13)(p.swap, 0, width, height, 0, 0));
+            p.width = width;
+            p.height = height;
+        }
+        const buffer = try p.backBuffer();
+        defer buffer.release();
+        // UpdateSubresource
+        p.context.slot(*const fn (*Com, *Com, u32, ?*const anyopaque, [*]const u8, u32, u32) callconv(.winapi) void, 48)(p.context, buffer, 0, null, pixels.ptr, width * 4, 0);
+    }
+
+    /// Shows the back buffer, at the next vertical blank. False when the
+    /// device was lost: the caller drops this presenter and makes another.
+    pub fn present(p: *Presenter) bool {
+        const hr = p.swap.slot(*const fn (*Com, u32, u32) callconv(.winapi) HRESULT, 8)(p.swap, 1, 0); // Present
+        const code: u32 = @bitCast(hr);
+        return !(code == device_removed or code == device_reset);
+    }
+
+    pub fn backBuffer(p: *Presenter) !*Com {
+        var tex: ?*Com = null;
+        try check(p.swap.slot(*const fn (*Com, u32, *const Guid, *?*Com) callconv(.winapi) HRESULT, 9)(p.swap, 0, &iid_texture2d, &tex)); // GetBuffer
+        return tex orelse error.Direct3D;
+    }
+
+    /// The back buffer's pixels, read back (for tests): `out` gets
+    /// width × height BGRA.
+    pub fn readBack(p: *Presenter, out: []u8) !void {
+        var staging: ?*Com = null;
+        // CreateTexture2D: D3D11_USAGE_STAGING, D3D11_CPU_ACCESS_READ.
+        const desc: Texture2DDesc = .{ .width = p.width, .height = p.height, .usage = 3, .cpu = 0x20000 };
+        try check(p.device.slot(*const fn (*Com, *const Texture2DDesc, ?*const anyopaque, *?*Com) callconv(.winapi) HRESULT, 5)(p.device, &desc, null, &staging));
+        defer staging.?.release();
+        const buffer = try p.backBuffer();
+        defer buffer.release();
+        p.context.slot(*const fn (*Com, *Com, *Com) callconv(.winapi) void, 47)(p.context, staging.?, buffer); // CopyResource
+        var mapped: Mapped = undefined;
+        try check(p.context.slot(*const fn (*Com, *Com, u32, u32, u32, *Mapped) callconv(.winapi) HRESULT, 14)(p.context, staging.?, 0, 1, 0, &mapped)); // Map, READ
+        defer p.context.slot(*const fn (*Com, *Com, u32) callconv(.winapi) void, 15)(p.context, staging.?, 0); // Unmap
+        const row = p.width * 4;
+        for (0..p.height) |y| @memcpy(out[y * row ..][0..row], mapped.data[y * mapped.row_pitch ..][0..row]);
+    }
+};
+
+test "pixels reach the flip swap chain's back buffer, before and after a resize" {
+    const class = std.unicode.utf8ToUtf16LeStringLiteral("STATIC");
+    const hwnd = w.CreateWindowExW(0, class, class, 0, 0, 0, 64, 64, null, null, null, null) orelse return error.SkipZigTest;
+    defer _ = w.DestroyWindow(hwnd);
+    var p = Presenter.init(hwnd, 4, 3) catch |e| {
+        std.debug.print("no Direct3D 11 here: {t}\n", .{e});
+        return error.SkipZigTest;
+    };
+    defer p.deinit();
+    p.setBackground(1, 1, 1);
+    var pixels: [4 * 3 * 4]u8 = undefined;
+    for (0..12) |i| pixels[i * 4 ..][0..4].* = .{ @intCast(i), 0x40, 0x80, 0xff };
+    try p.upload(&pixels, 4, 3);
+    var back: [4 * 3 * 4]u8 = undefined;
+    try p.readBack(&back);
+    try std.testing.expectEqualSlices(u8, &pixels, &back);
+    try std.testing.expect(p.present());
+    // Bigger: the buffers follow.
+    var big: [8 * 6 * 4]u8 = undefined;
+    @memset(&big, 0x7f);
+    try p.upload(&big, 8, 6);
+    var back2: [8 * 6 * 4]u8 = undefined;
+    try p.readBack(&back2);
+    try std.testing.expectEqualSlices(u8, &big, &back2);
+    try std.testing.expect(p.present());
+}

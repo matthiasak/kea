@@ -1,6 +1,7 @@
 //! What differs by operating system below nanoui's own code, chosen at
-//! compile time: macOS (AppKit, CoreText, Metal), Linux (GTK, nanoui's own
-//! text, the CPU renderer) and Windows (Win32, likewise).
+//! compile time: macOS (AppKit, CoreText, Metal), iOS (UIKit, likewise),
+//! Linux (GTK, nanoui's own text, the CPU renderer) and Windows (Win32,
+//! likewise).
 const std = @import("std");
 const builtin = @import("builtin");
 
@@ -13,7 +14,7 @@ extern "c" const kCFRunLoopDefaultMode: *const anyopaque;
 /// handled (headless tests use it between frames).
 pub fn runFor(seconds: f64) void {
     switch (os) {
-        .macos => _ = CFRunLoopRunInMode(kCFRunLoopDefaultMode, seconds, false),
+        .macos, .ios => _ = CFRunLoopRunInMode(kCFRunLoopDefaultMode, seconds, false),
         .linux => @import("linux/loop.zig").runFor(seconds),
         .windows => @import("windows/loop.zig").runFor(seconds),
         else => {},
@@ -24,6 +25,7 @@ pub fn runFor(seconds: f64) void {
 pub fn clipboardWrite(text: []const u8) void {
     switch (os) {
         .macos => @import("desktop.zig").clipboard.writeText(text),
+        .ios => @import("ios/desktop.zig").clipboard.writeText(text),
         .linux => @import("linux/desktop.zig").clipboard.writeText(text),
         .windows => @import("windows/desktop.zig").clipboard.writeText(text),
         else => {},

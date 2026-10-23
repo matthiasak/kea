@@ -51,7 +51,7 @@ pub fn addTabGroup(self: *Browser, tab: *Tab) Uuid {
     self.editing_group_id = id;
     self.moveToGroup(tab, id);
     self.removeEmptyGroup(id);
-    self.writeSession(true);
+    self.writeSession(false);
     self.redraw();
     return id;
 }
@@ -63,14 +63,14 @@ pub fn renameTabGroup(self: *Browser, id: Uuid, name: []const u8) void {
     const copy = self.gpa.dupe(u8, trimmed) catch return;
     self.gpa.free(g.name);
     g.name = copy;
-    self.writeSession(true);
+    self.writeSession(false);
     self.redraw();
 }
 
 pub fn toggleTabGroup(self: *Browser, id: Uuid) void {
     const g = self.groupById(id) orelse return;
     g.collapsed = !g.collapsed;
-    self.writeSession(true);
+    self.writeSession(false);
     self.redraw();
 }
 
@@ -83,7 +83,7 @@ pub fn removeTabGroup(self: *Browser, id: Uuid) void {
     self.gpa.free(self.tab_groups.orderedRemove(at).name);
     self.arrangeGroupedTabs(null);
     if (self.editing_group_id != null and self.editing_group_id.?.eql(id)) self.editing_group_id = null;
-    self.writeSession(true);
+    self.writeSession(false);
     self.redraw();
 }
 
@@ -104,7 +104,7 @@ pub fn closeTabGroup(self: *Browser, id: Uuid) void {
     closed.endBatch(self, batch, was);
     // The group goes with its last tab; an empty one goes here.
     if (groupIndex(self, id) != null) self.removeTabGroup(id);
-    self.writeSession(true);
+    self.writeSession(false);
     self.redraw();
 }
 
@@ -124,7 +124,7 @@ pub fn moveToGroup(self: *Browser, tab: *Tab, id: ?Uuid) void {
     if (id) |g| if (self.groupById(g)) |group| {
         group.collapsed = false;
     };
-    self.writeSession(true);
+    self.writeSession(false);
     self.redraw();
 }
 
@@ -152,7 +152,7 @@ pub fn moveTabGroup(self: *Browser, id: Uuid, index: usize) void {
     const g = self.tab_groups.orderedRemove(from);
     self.tab_groups.insert(self.gpa, index, g) catch @panic("OOM");
     self.arrangeGroupedTabs(null);
-    self.writeSession(true);
+    self.writeSession(false);
     self.redraw();
 }
 

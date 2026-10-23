@@ -50,7 +50,7 @@ fn build(a: std.mem.Allocator, source: []const u8) !?Diagram {
         const cps = std.unicode.utf8CountCodepoints(source) catch source.len;
         if (cps - std.mem.count(u8, source, "\r\n") > max_chars) return null;
     }
-    const lf = try std.mem.replaceOwned(u8, a, try std.mem.replaceOwned(u8, a, source, "\r\n", "\n"), "\r", "\n");
+    const lf = try text.replaceIfPresent(a, try text.replaceIfPresent(a, source, "\r\n", "\n"), "\r", "\n");
     var raw: std.ArrayList([]const u8) = .empty;
     var it = std.mem.splitScalar(u8, lf, '\n');
     while (it.next()) |l| try raw.append(a, l);

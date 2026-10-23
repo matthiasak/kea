@@ -12,6 +12,9 @@ extern "c" fn CGContextDrawImage(ctx: cf.CGContextRef, rect: objc.CGRect, image:
 extern "c" fn CGContextTranslateCTM(ctx: cf.CGContextRef, tx: f64, ty: f64) void;
 extern "c" fn CGContextSetAllowsFontSmoothing(ctx: cf.CGContextRef, v: bool) void;
 extern "c" fn CGColorSpaceCreateDeviceGray() ?cf.CGColorSpaceRef;
+extern "c" fn UIGraphicsPushContext(ctx: cf.CGContextRef) void;
+extern "c" fn UIGraphicsPopContext() void;
+
 /// The atlas starts at 2048 so cold start never grows it, up to `max_size`.
 const initial_size: u32 = 2048;
 const max_size: u32 = 4096;
@@ -206,15 +209,7 @@ pub const Atlas = struct {
     fn rasterizeSymbol(a: *Atlas, name: []const u8, point_size: f32, weight: u8) ?Sprite {
         const pool = objc.Pool.push();
         defer pool.pop();
-        const base = objc.msg(?objc.Object, objc.class("NSImage"), "imageWithSystemSymbolName:accessibilityDescription:", .{
-            objc.nsString(name), @as(?objc.Object, null),
-        }) orelse return null;
-        // NSFontWeight: regular, medium, semibold, bold.
-        const weights = [_]f64{ 0, 0.23, 0.3, 0.4 };
-        const config = objc.msg(objc.Object, objc.class("NSImageSymbolConfiguration"), "configurationWithPointSize:weight:", .{
-            @as(f64, point_size), weights[@min(weight, 3)],
-        });
-        const img = objc.msg(?objc.Object, base, "imageWithSymbolConfiguration:", .{config}) orelse return null;
+        const img = symbolImage(name, point_size, weight) orelse return null;
         const sz = objc.msg(objc.CGSize, img, "size", .{});
         if (sz.width <= 0 or sz.height <= 0) return null;
         const scale = a.scale;
@@ -227,20 +222,30 @@ pub const Atlas = struct {
         // AppKit draws the symbol, into color (it can't into a mask), and
         // the mask keeps its coverage: the symbol's CGImage holds only the
         // strokes' outlines on recent macOS.
-        const rgba = a.gpa.alloc(u8, dw * dh * 4) catch return null;
-        defer a.gpa.free(rgba);
+        a.pixels.resize(a.gpa, dw * dh * 5) catch return null;
+        const mask = a.pixels.items[0 .. dw * dh];
+        const rgba = a.pixels.items[dw * dh ..][0 .. dw * dh * 4];
         @memset(rgba, 0);
         const space = cf.CGColorSpaceCreateWithName(cf.kCGColorSpaceSRGB) orelse return null;
         defer cf.CGColorSpaceRelease(space);
         const ctx = cf.CGBitmapContextCreate(rgba.ptr, dw, dh, 8, dw * 4, space, 2 | (2 << 12)) orelse return null;
         defer cf.CGContextRelease(ctx);
-        const gc = objc.msg(objc.Object, objc.class("NSGraphicsContext"), "graphicsContextWithCGContext:flipped:", .{ @as(*anyopaque, ctx), objc.NO });
-        objc.msg(void, objc.class("NSGraphicsContext"), "saveGraphicsState", .{});
-        objc.msg(void, objc.class("NSGraphicsContext"), "setCurrentContext:", .{gc});
-        objc.msg(void, img, "drawInRect:fromRect:operation:fraction:", .{ rect, objc.CGRect{}, @as(objc.NSUInteger, 2), @as(f64, 1) });
-        objc.msg(void, objc.class("NSGraphicsContext"), "restoreGraphicsState", .{});
-        a.pixels.resize(a.gpa, dw * dh) catch return null;
-        for (a.pixels.items, 0..) |*m, i| m.* = rgba[i * 4 + 3];
+        if (objc.uikit) {
+            // UIKit draws top down: flip the bitmap's coordinates to its own.
+            CGContextTranslateCTM(ctx, 0, @floatFromInt(dh));
+            cf.CGContextScaleCTM(ctx, 1, -1);
+            UIGraphicsPushContext(ctx);
+            objc.msg(void, img, "drawInRect:", .{rect});
+            UIGraphicsPopContext();
+        } else {
+            const gc = objc.msg(objc.Object, objc.class("NSGraphicsContext"), "graphicsContextWithCGContext:flipped:", .{ @as(*anyopaque, ctx), objc.NO });
+            objc.msg(void, objc.class("NSGraphicsContext"), "saveGraphicsState", .{});
+            objc.msg(void, objc.class("NSGraphicsContext"), "setCurrentContext:", .{gc});
+            objc.msg(void, img, "drawInRect:fromRect:operation:fraction:", .{ rect, objc.CGRect{}, @as(objc.NSUInteger, 2), @as(f64, 1) });
+            objc.msg(void, objc.class("NSGraphicsContext"), "restoreGraphicsState", .{});
+        }
+        for (mask, 0..) |*m, i| m.* = rgba[i * 4 + 3];
+        a.pixels.shrinkRetainingCapacity(dw * dh);
         const origin = a.allocate(dw, dh) orelse blk: {
             a.makeRoom();
             break :blk a.allocate(dw, dh) orelse return null;
@@ -293,3 +298,24 @@ pub const Atlas = struct {
         return at;
     }
 };
+
+/// The SF Symbol `name` at `point_size` and `weight` (regular, medium,
+/// semibold, bold): an NSImage on macOS, a UIImage on iOS.
+fn symbolImage(name: []const u8, point_size: f32, weight: u8) ?objc.Object {
+    if (objc.uikit) {
+        // UIImageSymbolWeight: regular is 4, then medium, semibold, bold.
+        const config = objc.msg(objc.Object, objc.class("UIImageSymbolConfiguration"), "configurationWithPointSize:weight:", .{
+            @as(f64, point_size), @as(objc.NSInteger, 4 + @as(objc.NSInteger, @min(weight, 3))),
+        });
+        return objc.msg(?objc.Object, objc.class("UIImage"), "systemImageNamed:withConfiguration:", .{ objc.nsString(name), config });
+    }
+    const base = objc.msg(?objc.Object, objc.class("NSImage"), "imageWithSystemSymbolName:accessibilityDescription:", .{
+        objc.nsString(name), @as(?objc.Object, null),
+    }) orelse return null;
+    // NSFontWeight: regular, medium, semibold, bold.
+    const weights = [_]f64{ 0, 0.23, 0.3, 0.4 };
+    const config = objc.msg(objc.Object, objc.class("NSImageSymbolConfiguration"), "configurationWithPointSize:weight:", .{
+        @as(f64, point_size), weights[@min(weight, 3)],
+    });
+    return objc.msg(?objc.Object, base, "imageWithSymbolConfiguration:", .{config});
+}

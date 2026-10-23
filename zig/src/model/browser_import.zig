@@ -242,6 +242,8 @@ pub fn sweepLater() void {
 }
 
 fn sweep(_: ?*anyopaque) callconv(.c) void {
+    const pool = objc.Pool.push();
+    defer pool.pop();
     files.sweepScratch(heap);
 }
 

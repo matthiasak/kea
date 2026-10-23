@@ -18,7 +18,28 @@ const Do = chat_view.Do;
 
 const prompt = "Ask, or type / or @…";
 
+fn offered(c: *ui.Context, want: ui.Shortcut) bool {
+    const s = c.input.shortcut orelse return false;
+    return s.key == want.key and s.cmd == want.cmd and s.ctrl == want.ctrl and s.alt == want.alt and s.shift == want.shift;
+}
+
 pub fn view(b: *Browser, c: *ui.Context, p: *const Palette, a: *Assistant, st: *State, todo: *Do) void {
+    if (offered(c, .{ .key = 'v', .cmd = true }) and !b.fieldShowing() and b.editing_tab == null) {
+        if (a.pasteFromClipboard()) {
+            _ = c.shortcut(.{ .key = 'v', .cmd = true });
+            st.typing = true;
+        } else if (c.focus == 0) {
+            if (nanoui.clipboard.readText(b.gpa) catch null) |txt| {
+                defer b.gpa.free(txt);
+                if (txt.len > 0) {
+                    a.draft.appendSlice(a.gpa, txt) catch {};
+                    _ = a.cachedSuggestions();
+                    _ = c.shortcut(.{ .key = 'v', .cmd = true });
+                    st.typing = true;
+                }
+            }
+        }
+    }
     // The composer's text follows the draft wherever it changed (a pick, a
     // command, Cancel on the notice); what is typed goes back below.
     if (!std.mem.eql(u8, st.draft.text(), a.draft.items)) st.draft.set(a.draft.items);
@@ -28,9 +49,22 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette, a: *Assistant, st: *
 
     ui.column(c, .{ .width = .fill, .padding = .all(10) });
     defer ui.end(c);
-    ui.column(c, .{ .gap = 8, .width = .fill, .padding = .all(12), .radius = 16, .background = p.wash.alpha(0.5), .border = p.hairline });
-    defer ui.end(c);
-
+    const card = c.open(.{ .direction = .column, .gap = 8, .width = .fill, .padding = .all(12), .radius = 16, .background = p.wash.alpha(0.5), .border = p.hairline }, "kea.chat.composer.card");
+    defer c.end();
+    c.acceptDrop(card);
+    if (c.dropAt(card)) |drop| {
+        var attached = false;
+        for (drop.urls) |u| {
+            const path = if (std.mem.startsWith(u8, u, "file://")) u["file://".len..] else u;
+            if (a.attachFilePath(path)) attached = true;
+        }
+        if (!attached and drop.text.len > 0) {
+            a.draft.appendSlice(a.gpa, drop.text) catch {};
+            _ = a.cachedSuggestions();
+        }
+        st.typing = true;
+        c.changed = true;
+    }
     if (pins.len > 0) {
         if (st.pins_folded) {
             if (plain(c, "Pins")) {
@@ -69,6 +103,30 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette, a: *Assistant, st: *
         ui.end(c);
     }
 
+    if (a.shot != null or a.attachments.items.len > 0) {
+        ui.row(c, .{ .gap = 6, .width = .fill, .scroll_x = true, .scroll_bar = false, .align_items = .center });
+        if (a.shot) |shot| {
+            ui.row(c, .{ .gap = 6, .padding = .xy(8, 4), .radius = 8, .background = p.wash, .border = p.hairline, .align_items = .center });
+            _ = ui.image(c, .{ .key = c.print("chat-shot-{d}", .{shot.len}), .bytes = shot, .max_width = 28, .max_height = 20, .radius = 4 });
+            ui.text(c, "Page screenshot", .{ .size = 11.5, .color = p.ink });
+            if (controls.door(c, p, "xmark", .{ .help = "Remove screenshot" }).clicked) todo.* = .attach_shot;
+            ui.end(c);
+        }
+        for (a.attachments.items) |att| {
+            c.next_key_int = att.id;
+            ui.row(c, .{ .gap = 6, .padding = .xy(8, 4), .radius = 8, .background = p.wash, .border = p.hairline, .align_items = .center });
+            if (att.is_image) {
+                _ = ui.image(c, .{ .key = c.print("chat-att-{d}", .{att.id}), .bytes = att.data, .max_width = 28, .max_height = 20, .radius = 4 });
+            } else {
+                ui.icon(c, "doc.text", .{ .size = 11, .color = p.muted });
+            }
+            ui.text(c, att.name, .{ .size = 11.5, .color = p.ink, .truncate = true });
+            if (controls.door(c, p, "xmark", .{ .help = "Remove attachment" }).clicked) todo.* = .{ .remove_attachment = att.id };
+            ui.end(c);
+        }
+        ui.end(c);
+    }
+
     if (a.notice != null) {
         // `.disabled(assistant.notice != nil)`.
         ui.text(c, if (a.draft.items.len == 0) prompt else a.draft.items, .{ .size = 13, .color = p.faint, .wrap = true });
@@ -99,13 +157,14 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette, a: *Assistant, st: *
     if (a.busy()) {
         if (controls.door(c, p, "stop.fill", .{ .help = "Stop" }).clicked) todo.* = .stop;
     } else {
-        const live = has_text and a.notice == null;
+        const can_send = has_text or a.attachments.items.len > 0 or a.shot != null;
+        const live = can_send and a.notice == null;
         const i = c.open(.{ .control = live }, null);
         defer c.end();
         c.help(i, "Send   \u{21A9}");
         c.addA11y(i, .button, "Send", "", false, live);
         if (live and c.interact(i, .{}).clicked) todo.* = .submit;
-        ui.icon(c, "arrow.up.circle.fill", .{ .size = 20, .color = if (has_text) p.ink else p.faint });
+        ui.icon(c, "arrow.up.circle.fill", .{ .size = 20, .color = if (can_send) p.ink else p.faint });
     }
 }
 
@@ -185,30 +244,101 @@ fn icon(source: ubi.Source) []const u8 {
     };
 }
 
-/// `ModelPicker`: the model in use; its menu picks another, or the provider.
+/// `ModelPicker`: the model in use, plus Thinking, Effort, and Web Search controls.
 fn modelPicker(b: *Browser, c: *ui.Context, p: *const Palette) void {
     const m = b.kea.ai;
     const provider = m.chosen();
     const model = if (provider) |pr| m.model(pr) else "";
     const label = if (model.len == 0) "Choose an AI" else model;
-    const i = c.open(.{ .direction = .row, .gap = 4, .align_items = .center, .control = true }, null);
-    defer c.end();
-    const it = c.interact(i, .{});
-    if (provider) |pr| c.help(i, pr.name);
-    c.addA11y(i, .menu_button, label, "", false, true);
-    ui.text(c, label, .{ .size = 11, .color = p.muted, .truncate = true });
-    ui.icon(c, "chevron.up.chevron.down", .{ .size = 7.5, .color = p.muted });
-    if (it.clicked) if (it.rect) |r| chat_view.menuLater(b, .{ .x = r.x, .y = r.y + r.h }, b.assisting.?.chat.id, modelItems);
+    const chat_id = if (b.assisting) |a| a.chat.id else Uuid{ .bytes = @splat(0) };
+    {
+        const i = c.open(.{ .direction = .row, .gap = 4, .align_items = .center, .control = true }, null);
+        defer c.end();
+        const it = c.interact(i, .{});
+        if (provider) |pr| c.help(i, pr.name);
+        c.addA11y(i, .menu_button, label, "", false, true);
+        ui.text(c, label, .{ .size = 11, .color = p.muted, .truncate = true });
+        ui.icon(c, "chevron.up.chevron.down", .{ .size = 7.5, .color = p.muted });
+        if (it.clicked) if (it.rect) |r| chat_view.menuLater(b, .{ .x = r.x, .y = r.y + r.h }, chat_id, modelItems);
+    }
+    {
+        const on = b.prefs.ai_thinking;
+        const i = c.open(.{ .direction = .row, .padding = .{ .left = 5, .right = 5, .top = 2, .bottom = 2 }, .radius = 5, .background = if (on) p.wash else null, .align_items = .center, .control = true }, null);
+        defer c.end();
+        c.help(i, if (on) "Thinking: On" else "Thinking: Off");
+        c.addA11y(i, .button, "Thinking", "", on, true);
+        if (c.interact(i, .{}).clicked) {
+            b.prefs.set("ai_thinking", !on);
+            c.changed = true;
+        }
+        ui.icon(c, "brain", .{ .size = 10, .color = if (on) p.ink else p.faint });
+    }
+    {
+        const on = b.prefs.ai_thinking;
+        const eff_label = if (on) b.prefs.ai_effort.label() else "Off";
+        const i = c.open(.{ .direction = .row, .gap = 3, .padding = .{ .left = 5, .right = 5, .top = 2, .bottom = 2 }, .radius = 5, .background = if (on) p.wash else null, .align_items = .center, .control = true }, null);
+        defer c.end();
+        const it = c.interact(i, .{});
+        c.help(i, "Thinking Level");
+        c.addA11y(i, .menu_button, eff_label, "Thinking Level", on, true);
+        ui.text(c, eff_label, .{ .size = 10.5, .color = if (on) p.ink else p.faint });
+        ui.icon(c, "chevron.up.chevron.down", .{ .size = 6.5, .color = if (on) p.muted else p.faint });
+        if (it.clicked) {
+            if (b.kea.ui_app != null) {
+                if (it.rect) |r| chat_view.menuLater(b, .{ .x = r.x, .y = r.y + r.h }, chat_id, effortItems);
+            } else {
+                if (!on) b.prefs.set("ai_thinking", true) else b.prefs.set("ai_effort", b.prefs.ai_effort.next());
+                c.changed = true;
+            }
+        }
+    }
+    {
+        const on = b.prefs.ai_web_search;
+        const i = c.open(.{ .direction = .row, .padding = .{ .left = 5, .right = 5, .top = 2, .bottom = 2 }, .radius = 5, .background = if (on) p.wash else null, .align_items = .center, .control = true }, null);
+        defer c.end();
+        c.help(i, if (on) "Web Search: On" else "Web Search: Off");
+        c.addA11y(i, .button, "Web Search", "", on, true);
+        if (c.interact(i, .{}).clicked) {
+            b.prefs.set("ai_web_search", !on);
+            c.changed = true;
+        }
+        ui.icon(c, "globe", .{ .size = 10, .color = if (on) p.ink else p.faint });
+    }
 }
 
-fn modelItems(arena: std.mem.Allocator, b: *Browser, id: Uuid) anyerror![]const MenuItem {
+pub fn effortItems(arena: std.mem.Allocator, b: *Browser, id: Uuid) anyerror![]const MenuItem {
+    var out: std.ArrayList(MenuItem) = .empty;
+    const on = b.prefs.ai_thinking;
+    const eff = b.prefs.ai_effort;
+    try out.append(arena, try chat_view.checkedItem(arena, b, "Thinking", .thinking_toggle, id, "", on));
+    try out.append(arena, .separator);
+    try out.append(arena, try chat_view.checkedItem(arena, b, "Low", .effort_low, id, "", on and eff == .low));
+    try out.append(arena, try chat_view.checkedItem(arena, b, "Medium", .effort_medium, id, "", on and eff == .medium));
+    try out.append(arena, try chat_view.checkedItem(arena, b, "High", .effort_high, id, "", on and eff == .high));
+    try out.append(arena, try chat_view.checkedItem(arena, b, "Max", .effort_max, id, "", on and eff == .max));
+    return out.items;
+}
+
+pub fn modelItems(arena: std.mem.Allocator, b: *Browser, id: Uuid) anyerror![]const MenuItem {
     const m = b.kea.ai;
     var out: std.ArrayList(MenuItem) = .empty;
     if (m.chosen()) |provider| {
-        for (try ubi.models(arena, m, provider, m.model(provider))) |name|
-            try out.append(arena, try chat_view.item(arena, b, name, .model, id, try arena.dupe(u8, name), false));
+        const current = m.model(provider);
+        for (try ubi.models(arena, m, provider, current)) |name|
+            try out.append(arena, try chat_view.checkedItem(arena, b, name, .model, id, try arena.dupe(u8, name), std.mem.eql(u8, name, current)));
         try out.append(arena, .separator);
     }
+    const on = b.prefs.ai_thinking;
+    const eff = b.prefs.ai_effort;
+    try out.append(arena, try chat_view.checkedItem(arena, b, "Thinking", .thinking_toggle, id, "", on));
+    try out.append(arena, try chat_view.checkedItem(arena, b, "Thinking: Low", .effort_low, id, "", on and eff == .low));
+    try out.append(arena, try chat_view.checkedItem(arena, b, "Thinking: Medium", .effort_medium, id, "", on and eff == .medium));
+    try out.append(arena, try chat_view.checkedItem(arena, b, "Thinking: High", .effort_high, id, "", on and eff == .high));
+    try out.append(arena, try chat_view.checkedItem(arena, b, "Thinking: Max", .effort_max, id, "", on and eff == .max));
+    try out.append(arena, .separator);
+    try out.append(arena, try chat_view.checkedItem(arena, b, "Web Search", .web_search_toggle, id, "", b.prefs.ai_web_search));
+    try out.append(arena, try chat_view.checkedItem(arena, b, "Browser Tools", .tools_toggle, id, "", b.prefs.ubi_tools));
+    try out.append(arena, .separator);
     try out.append(arena, try chat_view.item(arena, b, "Choose Provider\u{2026}", .settings, id, "", false));
     return out.items;
 }

@@ -29,13 +29,19 @@ fn clear() void {
 /// (valid until `generation` or `serial` moves); null when it can't be drawn.
 /// `key` names it among the extension's pictures.
 pub fn png(key: []const u8, image: objc.Object, side: f64, serial: u64, generation: u64) ?[]const u8 {
-    if (made_for[0] != serial or made_for[1] != generation) {
+    _ = generation;
+    if (made_for[0] != serial) {
         clear();
-        made_for = .{ serial, generation };
+        made_for = .{ serial, 0 };
     }
-    if (cache.get(key)) |b| return b;
+    var buf: [256]u8 = undefined;
+    const full_key = std.fmt.bufPrint(&buf, "{s}:{x}:{d}", .{ key, @intFromPtr(image), @as(u32, @intFromFloat(side * 2)) }) catch key;
+    if (cache.get(full_key)) |b| return b;
     const bytes = draw(image, side) orelse return null;
-    const k = heap.dupe(u8, key) catch return null;
+    const k = heap.dupe(u8, full_key) catch {
+        heap.free(bytes);
+        return null;
+    };
     cache.put(heap, k, bytes) catch {
         heap.free(k);
         heap.free(bytes);

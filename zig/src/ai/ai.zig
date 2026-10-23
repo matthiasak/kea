@@ -162,6 +162,18 @@ pub const Ai = struct {
         self.no_tools.put(self.gpa, key, {}) catch self.gpa.free(key);
     }
 
+    pub fn isNoWebSearch(self: *const Ai, provider_id: []const u8, model_name: []const u8) bool {
+        var buf: [256]u8 = undefined;
+        const key = std.fmt.bufPrint(&buf, "web:{s}:{s}", .{ provider_id, model_name }) catch return false;
+        return self.no_tools.contains(key);
+    }
+
+    pub fn rememberNoWebSearch(self: *Ai, provider_id: []const u8, model_name: []const u8) void {
+        if (self.isNoWebSearch(provider_id, model_name)) return;
+        const key = std.fmt.allocPrint(self.gpa, "web:{s}:{s}", .{ provider_id, model_name }) catch return;
+        self.no_tools.put(self.gpa, key, {}) catch self.gpa.free(key);
+    }
+
     /// The base address's host, lowercased; "" when it has none. On `a`.
     pub fn host(self: *const Ai, a: std.mem.Allocator, p: Provider) ![]u8 {
         const b = try self.base(a, p);

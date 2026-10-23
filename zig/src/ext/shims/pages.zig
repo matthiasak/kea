@@ -167,15 +167,16 @@ fn pages(c: *ans.Call) ans.Error!Value {
 /// One `background.wake`: up to three starts, each failed by WebKit's error
 /// or eight seconds of silence, 400 ms apart; then the extension afresh.
 const Wake = struct {
-    owner: *Extensions,
+    serial: u64,
     context: objc.Object, // retained
     pending: *ans.Pending,
     id: []const u8, // on pending's arena
     attempt: u8 = 0,
 
     fn start(w: *Wake) void {
-        const t = w.owner.gpa.create(Try) catch return w.done(false);
-        t.* = .{ .wake = w, .gpa = w.owner.gpa };
+        if (@import("../controller.zig").alive(w.serial) == null) return w.abandon();
+        const t = std.heap.c_allocator.create(Try) catch return w.done(false);
+        t.* = .{ .wake = w };
         const pool = objc.Pool.push();
         defer pool.pop();
         var block = objc.Block(Try, &.{?objc.Object}).init(t, Try.loaded);
@@ -184,6 +185,7 @@ const Wake = struct {
     }
 
     fn failed(w: *Wake) void {
+        if (@import("../controller.zig").alive(w.serial) == null) return w.abandon();
         w.attempt += 1;
         if (w.attempt >= 3) return w.done(true);
         objc.dispatchAfter(400 * std.time.ns_per_ms, w, again);
@@ -194,12 +196,18 @@ const Wake = struct {
         w.start();
     }
 
-    fn done(w: *Wake, revive: bool) void {
-        if (revive) w.owner.revive(w.id, "its worker wouldn't start");
+    fn abandon(w: *Wake) void {
         objc.release(w.context);
-        const gpa = w.owner.gpa;
+        w.pending.drop();
+        std.heap.c_allocator.destroy(w);
+    }
+
+    fn done(w: *Wake, revive: bool) void {
+        const owner = @import("../controller.zig").alive(w.serial) orelse return w.abandon();
+        if (revive) owner.revive(w.id, "its worker wouldn't start");
+        objc.release(w.context);
         w.pending.value(.null);
-        gpa.destroy(w);
+        std.heap.c_allocator.destroy(w);
     }
 };
 
@@ -208,7 +216,6 @@ const Wake = struct {
 // ponytail: a WebKit callback that never comes leaves this Try (a few bytes) behind.
 const Try = struct {
     wake: *Wake,
-    gpa: std.mem.Allocator,
     finished: bool = false,
     left: u8 = 2,
 
@@ -217,7 +224,7 @@ const Try = struct {
         const first = !t.finished;
         t.finished = true;
         t.left -= 1;
-        if (t.left == 0) t.gpa.destroy(t);
+        if (t.left == 0) std.heap.c_allocator.destroy(t);
         if (!first) return;
         if (ok) w.done(false) else w.failed();
     }
@@ -234,8 +241,8 @@ const Try = struct {
 
 fn wake(c: *ans.Call) ans.Error!?ans.Out {
     if (!objc.msg(objc.BOOL, c.webExtension(), "hasBackgroundContent", .{})) return ans.none;
-    const w = try c.owner.gpa.create(Wake);
-    w.* = .{ .owner = c.owner, .context = objc.retain(c.context), .pending = c.pending, .id = c.id };
+    const w = try std.heap.c_allocator.create(Wake);
+    w.* = .{ .serial = c.owner.serial, .context = objc.retain(c.context), .pending = c.pending, .id = c.id };
     w.start();
     return .later;
 }

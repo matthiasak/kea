@@ -1,12 +1,14 @@
-//! A single-line text field, edited through AppKit's text input: typing,
-//! accents and input methods (composition shown underlined), the system's
-//! key bindings, selection with the keyboard and the mouse, the clipboard,
-//! and horizontal scrolling that keeps the caret in view.
+//! A text field, edited through AppKit's text input: typing, accents and
+//! input methods (composition shown underlined), the system's key bindings,
+//! selection with the keyboard and the mouse, the clipboard. One line that
+//! scrolls sideways to keep the caret in view, or (`multiline`) lines that
+//! wrap and grow, then scroll (textfield_lines.zig).
 const std = @import("std");
 const keymap = @import("keymap.zig");
 const types = @import("types.zig");
 const utf8 = @import("utf8.zig");
 const ctx_mod = @import("context.zig");
+const lines_mod = @import("textfield_lines.zig");
 const Context = ctx_mod.Context;
 const EditState = ctx_mod.EditState;
 
@@ -103,6 +105,10 @@ pub const Options = struct {
     color: ?types.Color = null,
     /// Gaining the focus selects all the text, as an address field.
     select_all_on_focus: bool = false,
+    /// Wraps, and grows to `max_lines` before it scrolls; Shift-Return
+    /// (or Option-Return) starts a new line, Return still submits.
+    multiline: bool = false,
+    max_lines: u16 = 8,
 };
 
 pub const Result = struct {
@@ -119,6 +125,10 @@ pub const Result = struct {
     vim_visual: bool = false,
     /// Vim's j and k in normal mode: -1 back through history, 1 forward.
     history: i8 = 0,
+    /// The caret's line as drawn, of how many (one, unless multiline): an
+    /// app's ↑ on the first or ↓ on the last goes to its history.
+    line: usize = 0,
+    lines: usize = 1,
 };
 
 /// Applies one text input operation to the buffer and its editing state.
@@ -138,6 +148,10 @@ pub fn apply(buffer: *TextBuffer, e: *EditState, op: ctx_mod.TextOp, opts: Optio
     }
     const lo = @min(e.caret, e.anchor);
     const hi = @max(e.caret, e.anchor);
+    // A line's start and end: the text's, or in a multiline field the
+    // caret's line's (between newlines).
+    const line_start = if (opts.multiline) keymap.lineStart(s, e.caret) else 0;
+    const line_end = if (opts.multiline) keymap.lineEnd(s, e.caret) else s.len;
     switch (op) {
         .insert => |t| {
             const range = e.marked orelse .{ lo, hi };
@@ -171,7 +185,7 @@ pub fn apply(buffer: *TextBuffer, e: *EditState, op: ctx_mod.TextOp, opts: Optio
                     } else if (e.caret > 0) {
                         const from = switch (cmd) {
                             .delete_word_backward => prevWord(s, e.caret),
-                            .delete_to_line_start => 0,
+                            .delete_to_line_start => if (line_start == e.caret and e.caret > 0) e.caret - 1 else line_start,
                             else => prevBoundary(s, e.caret),
                         };
                         buffer.remove(from, e.caret);
@@ -184,7 +198,7 @@ pub fn apply(buffer: *TextBuffer, e: *EditState, op: ctx_mod.TextOp, opts: Optio
                         buffer.remove(lo, hi);
                         collapse(e, lo);
                     } else if (e.caret < s.len) {
-                        const to = if (cmd == .delete_word_forward) nextWord(s, e.caret) else s.len;
+                        const to = if (cmd == .delete_word_forward) nextWord(s, e.caret) else if (line_end == e.caret) e.caret + 1 else line_end;
                         buffer.remove(e.caret, to);
                     } else return;
                     result.changed = true;
@@ -202,19 +216,31 @@ pub fn apply(buffer: *TextBuffer, e: *EditState, op: ctx_mod.TextOp, opts: Optio
                 .move_right => collapse(e, if (hi > lo) hi else nextBoundary(s, e.caret)),
                 .move_word_left => collapse(e, prevWord(s, e.caret)),
                 .move_word_right => collapse(e, nextWord(s, e.caret)),
-                .move_line_start, .move_up => collapse(e, 0),
-                .move_line_end, .move_down => collapse(e, s.len),
+                .move_line_start => collapse(e, line_start),
+                .move_line_end => collapse(e, line_end),
+                // A multiline field moves between lines itself (textField).
+                .move_up => collapse(e, 0),
+                .move_down => collapse(e, s.len),
+                .select_up => e.caret = 0,
+                .select_down => e.caret = s.len,
                 .select_left => e.caret = prevBoundary(s, e.caret),
                 .select_right => e.caret = nextBoundary(s, e.caret),
                 .select_word_left => e.caret = prevWord(s, e.caret),
                 .select_word_right => e.caret = nextWord(s, e.caret),
-                .select_line_start, .select_up => e.caret = 0,
-                .select_line_end, .select_down => e.caret = s.len,
+                .select_line_start => e.caret = line_start,
+                .select_line_end => e.caret = line_end,
                 .select_all => {
                     e.anchor = 0;
                     e.caret = s.len;
                 },
                 .insert_newline => result.submitted = true,
+                .insert_line_break => if (opts.multiline) {
+                    const n = buffer.replace(lo, hi, "\n");
+                    collapse(e, lo + n);
+                    result.changed = n > 0;
+                } else {
+                    result.submitted = true;
+                },
                 .insert_tab, .cancel => {},
                 .copy, .cut => {
                     if (hi == lo or password) return;
@@ -236,14 +262,16 @@ pub fn textField(c: *Context, buffer: *TextBuffer, opts: Options) Result {
     const th = c.theme;
     const style: types.TextStyle = .{ .size = opts.size };
     const pad_x: f32 = if (opts.bare) 0 else 10;
+    const pad_y: f32 = if (opts.bare) 2 else 7;
+    const multi = opts.multiline and !opts.password;
     const i = c.open(.{
-        .direction = .row,
+        .direction = if (multi) .column else .row,
         .width = opts.width,
-        .padding = .xy(pad_x, if (opts.bare) 2 else 7),
+        .padding = .xy(pad_x, pad_y),
         .radius = 8,
         .background = if (opts.bare) null else th.surface,
         .border = if (opts.bare) null else th.border,
-        .align_items = .center,
+        .align_items = if (multi) .start else .center,
         .clip = true,
     }, null);
     defer c.end();
@@ -264,6 +292,14 @@ pub fn textField(c: *Context, buffer: *TextBuffer, opts: Options) Result {
 
     var result: Result = .{ .focused = it.focused };
     const e = editState(c, it.id, buffer) orelse return result;
+    // A multiline field wraps at last frame's width (unknown at first).
+    const wrap_w: f32 = if (it.rect) |r| @max(1, r.w - 2 * pad_x) else 1e6;
+    const lh_ = c.text.font(style).lineHeight();
+    // Where the wheel scrolled a multiline field; the caret before edits.
+    if (multi) if (c.scroll.get(it.id)) |v| {
+        e.scroll_y = v;
+    };
+    const caret_before = .{ e.caret, e.anchor, buffer.text().len };
 
     // What is drawn: bullets for passwords, one per character.
     const shownOf = struct {
@@ -286,7 +322,21 @@ pub fn textField(c: *Context, buffer: *TextBuffer, opts: Options) Result {
         const was_focused = e.had_focus;
         if (it.rect) |r| {
             const local_x = c.input.mouse.x - r.x - pad_x + e.scroll_x;
-            if (c.input.pressed and c.input.button == .left and !c.input.ctrl and it.hovered) {
+            const local_y = c.input.mouse.y - r.y - pad_y + e.scroll_y;
+            if (multi and ((c.input.pressed and c.input.button == .left and !c.input.ctrl and it.hovered) or (e.selecting and c.input.down))) {
+                const at = lines_mod.indexAtPoint(c, buffer.text(), style, lines_mod.layout(c, buffer.text(), style, wrap_w), c.input.mouse.x - r.x - pad_x, local_y, lh_);
+                e.caret = at;
+                if (c.input.pressed) {
+                    if (!c.input.shift) e.anchor = at;
+                    if (c.input.click_count >= 2) {
+                        e.anchor = prevWord(buffer.text(), at);
+                        e.caret = nextWord(buffer.text(), at);
+                    }
+                    e.marked = null;
+                    c.selection.blocked = true;
+                    e.selecting = true;
+                }
+            } else if (c.input.pressed and c.input.button == .left and !c.input.ctrl and it.hovered) {
                 const idx = c.text.indexAt(shownOf(buffer.text(), opts.password, bullets), style, local_x);
                 const at = if (opts.password) byteOfCodepoint(buffer.text(), idx / 3) else idx;
                 textedit.pointerSelect(c, e, buffer.text(), at, false);
@@ -301,8 +351,24 @@ pub fn textField(c: *Context, buffer: *TextBuffer, opts: Options) Result {
         e.undo.begin(buffer.text(), e.caret);
         var took: keymap.Took = if (opts.keys != .system) keymap.handle(c, buffer, e, opts, &result) else .{};
         if (!took.key and textedit.handleUndoShortcuts(c, buffer, e, &result)) took.key = true;
-        for (c.input.ops) |op| {
-            if (took.text and op == .insert) continue;
+        for (c.input.ops) |op_in| {
+            if (took.text and op_in == .insert) continue;
+            var op = op_in;
+            if (multi and op == .command) switch (op.command) {
+                // Shift-Return: a new line; ↑ and ↓ between the lines.
+                .insert_newline => if (c.input.shift) {
+                    op = .{ .command = .insert_line_break };
+                },
+                .move_up, .move_down, .select_up, .select_down => {
+                    const cmd = op.command;
+                    const at = lines_mod.vertical(c, buffer.text(), style, lines_mod.layout(c, buffer.text(), style, wrap_w), e.caret, if (cmd == .move_up or cmd == .select_up) -1 else 1);
+                    e.caret = at;
+                    if (cmd == .move_up or cmd == .move_down) e.anchor = at;
+                    e.marked = null;
+                    continue;
+                },
+                else => {},
+            };
             if (op == .command and op.command == .cancel) c.focus = 0;
             if (op == .command and op.command == .insert_tab) {
                 c.focusCycle(c.input.shift);
@@ -319,10 +385,18 @@ pub fn textField(c: *Context, buffer: *TextBuffer, opts: Options) Result {
             .delete => apply(buffer, e, .{ .command = .delete_forward }, opts, c.clipboard, &result),
             .left => apply(buffer, e, .{ .command = if (c.input.shift) .select_left else .move_left }, opts, c.clipboard, &result),
             .right => apply(buffer, e, .{ .command = if (c.input.shift) .select_right else .move_right }, opts, c.clipboard, &result),
-            .home, .up => apply(buffer, e, .{ .command = .move_line_start }, opts, c.clipboard, &result),
-            .end, .down => apply(buffer, e, .{ .command = .move_line_end }, opts, c.clipboard, &result),
+            .up, .down => if (multi) {
+                e.caret = lines_mod.vertical(c, buffer.text(), style, lines_mod.layout(c, buffer.text(), style, wrap_w), e.caret, if (k == .up) -1 else 1);
+                if (!c.input.shift) e.anchor = e.caret;
+            } else apply(buffer, e, .{ .command = if (k == .up) .move_line_start else .move_line_end }, opts, c.clipboard, &result),
+            .home => apply(buffer, e, .{ .command = .move_line_start }, opts, c.clipboard, &result),
+            .end => apply(buffer, e, .{ .command = .move_line_end }, opts, c.clipboard, &result),
             .tab => c.focusCycle(c.input.shift),
-            .enter => result.submitted = true,
+            .enter => if (multi and (c.input.shift or c.input.alt)) {
+                apply(buffer, e, .{ .command = .insert_line_break }, opts, c.clipboard, &result);
+            } else {
+                result.submitted = true;
+            },
             .escape => c.focus = 0,
             else => {},
         };
@@ -348,6 +422,32 @@ pub fn textField(c: *Context, buffer: *TextBuffer, opts: Options) Result {
     // A copy for the frame: the app may set the buffer (moving it) before
     // the frame is painted, or the input method asks about it.
     const s = c.alloc().dupe(u8, buffer.text()) catch buffer.text();
+    if (multi) {
+        const lines = lines_mod.layout(c, s, style, wrap_w);
+        const rows: f32 = @floatFromInt(@max(1, @min(lines.len, opts.max_lines)));
+        const view_h = rows * lh_;
+        c.node(i).style.height = .{ .px = view_h + 2 * pad_y };
+        // Past its most lines it scrolls: the wheel's, and a scrollbar.
+        c.node(i).style.scroll = lines.len > opts.max_lines;
+        const follow = result.changed or e.caret != caret_before[0] or e.anchor != caret_before[1] or s.len != caret_before[2];
+        const d = lines_mod.draw(c, s, e, style, lines, view_h, focused, follow, result.vim_normal, opts.placeholder, opts.suggestion);
+        c.scroll.put(c.gpa, it.id, e.scroll_y) catch {};
+        result.line = d.line;
+        result.lines = d.lines;
+        if (focused) {
+            c.focused_multiline = true;
+            const r = it.rect orelse types.Rect{};
+            c.focused_text = .{
+                .id = it.id,
+                .text = s,
+                .caret = e.caret,
+                .anchor = e.anchor,
+                .marked = e.marked,
+                .caret_rect = .{ .x = r.x + pad_x + d.caret.x, .y = r.y + pad_y + d.caret.y, .w = 1.5, .h = lh_ },
+            };
+        }
+        return result;
+    }
     const shown = shownOf(s, opts.password, bullets);
     const lh = c.text.font(style).lineHeight();
     const caret_x = c.text.caretX(shown, style, shownIndex(s, opts.password, e.caret));
@@ -407,50 +507,9 @@ fn byteOfCodepoint(s: []const u8, n: usize) usize {
     return @min(i, s.len);
 }
 
-/// Carries focus and edit state across when a field's ancestor path changes.
-pub fn rehome(c: *Context, buffer: *TextBuffer, id: u64) void {
-    if (buffer.last_id != 0 and buffer.last_id != id and c.focus == buffer.last_id) {
-        c.focus = id;
-        if (c.edits.fetchRemove(buffer.last_id)) |kv| c.edits.put(c.gpa, id, kv.value) catch {};
-    }
-    buffer.last_id = id;
-}
-
-/// The editing state of field `id`, with what the app asked of it since
-/// the last frame (`want_caret`, `want_selection`) applied.
-pub fn editState(c: *Context, id: u64, buffer: *TextBuffer) ?*EditState {
-    const len = buffer.text().len;
-    const entry = c.edits.getOrPut(c.gpa, id) catch return null;
-    if (!entry.found_existing) entry.value_ptr.* = .{ .caret = len, .anchor = len };
-    const e = entry.value_ptr;
-    if (buffer.want_caret) |at| {
-        e.caret = at;
-        e.anchor = at;
-        e.marked = null;
-        buffer.want_caret = null;
-    }
-    if (buffer.want_selection) |sel| {
-        e.anchor = sel[0];
-        e.caret = sel[1];
-        e.marked = null;
-        buffer.want_selection = null;
-    }
-    e.caret = @min(e.caret, len);
-    e.anchor = @min(e.anchor, len);
-    return e;
-}
-
-/// A focused field selects all of its `len` bytes when `focusNext` asked
-/// for it, or as it gains the focus with `on_focus`.
-pub fn focusSelect(c: *Context, e: *EditState, on_focus: bool, len: usize) void {
-    if ((on_focus and !e.had_focus) or c.focus_select_all) {
-        e.anchor = 0;
-        e.caret = len;
-        e.selecting = false;
-        c.focus_select_all = false;
-    }
-    e.had_focus = true;
-}
+pub const rehome = textedit.rehome;
+pub const editState = textedit.editState;
+pub const focusSelect = textedit.focusSelect;
 
 test "buffer edits" {
     var b: TextBuffer = .{};

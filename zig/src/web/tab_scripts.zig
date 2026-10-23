@@ -63,12 +63,40 @@ pub fn uninstall(_: *Tab, wv: objc.Object) void {
     objc.msg(void, ucc, "removeAllUserScripts", .{});
 }
 
+const Cached = struct {
+    var scroll: ?objc.Object = null;
+    var picker: ?objc.Object = null;
+    var forms_s: ?objc.Object = null;
+    var favicons_relay: ?objc.Object = null;
+    var auto_scroll: ?objc.Object = null;
+    var swipe: ?objc.Object = null;
+    var image: ?objc.Object = null;
+    var link: ?objc.Object = null;
+    var middle: ?objc.Object = null;
+    var store: ?objc.Object = null;
+    var live_rate: ?objc.Object = null;
+    var passkeys_on: ?objc.Object = null;
+    var passkeys_off: ?objc.Object = null;
+    var passkeys_bridge: ?objc.Object = null;
+};
+
 /// `WKUserInjectionTimeAtDocumentStart` = 0, `AtDocumentEnd` = 1.
 fn add(ucc: objc.Object, source: []const u8, start: bool, main_only: bool, world: objc.Object) void {
     const script = objc.msg(objc.Object, objc.alloc("WKUserScript"), "initWithSource:injectionTime:forMainFrameOnly:inContentWorld:", .{
         objc.nsString(source), @as(objc.NSInteger, if (start) 0 else 1), main_only, world,
     });
     defer objc.release(script);
+    objc.msg(void, ucc, "addUserScript:", .{script});
+}
+
+fn addCached(ucc: objc.Object, slot: *?objc.Object, source: []const u8, start: bool, main_only: bool, world: objc.Object) void {
+    const script = slot.* orelse blk: {
+        const s = objc.msg(objc.Object, objc.alloc("WKUserScript"), "initWithSource:injectionTime:forMainFrameOnly:inContentWorld:", .{
+            objc.nsString(source), @as(objc.NSInteger, if (start) 0 else 1), main_only, world,
+        });
+        slot.* = s;
+        break :blk s;
+    };
     objc.msg(void, ucc, "addUserScript:", .{script});
 }
 
@@ -86,38 +114,43 @@ pub fn arm(t: *Tab, css: []const u8) void {
     var h = std.hash.Wyhash.init(0);
     h.update(t.veils);
     h.update(&.{ @intFromBool(prefs.auto_scroll), @intFromBool(prefs.shows_links), @intFromBool(prefs.passkeys) });
-    // A page an extension lists reaches it as chrome.runtime (ext/external.zig).
-    const external = if (t.kea.ext) |x| @import("../ext/external.zig").script(x, t.gpa) else null;
-    defer if (external) |e| t.gpa.free(e);
-    h.update(external orelse "");
+    const ext_gen: u64 = if (t.kea.ext) |x| (if (x.contexts.count() > 0) @import("../ext/external.zig").generation else 0) else 0;
+    h.update(std.mem.asBytes(&ext_gen));
     const key = h.final() | 1;
     if (t.armed_key == key) return;
     t.armed_key = key;
+    // A page an extension lists reaches it as chrome.runtime (ext/external.zig).
+    const external = if (t.kea.ext) |x| @import("../ext/external.zig").script(x, t.gpa) else null;
+    defer if (external) |e| t.gpa.free(e);
     const pool = objc.Pool.push();
     defer pool.pop();
     const ucc = controller(wv);
     const w = config.world();
+    const pw = config.pageWorld();
     objc.msg(void, ucc, "removeAllUserScripts", .{});
-    add(ucc, scroll_script, false, true, w);
-    add(ucc, curtain_js.picker_script, true, true, w);
-    add(ucc, forms.script, false, true, w);
-    add(ucc, favicons.relay_script, false, true, w);
-    if (prefs.auto_scroll) add(ucc, auto_scroll_script, false, true, w);
+    addCached(ucc, &Cached.scroll, scroll_script, false, true, w);
+    addCached(ucc, &Cached.picker, curtain_js.picker_script, false, true, w);
+    addCached(ucc, &Cached.forms_s, forms.script, false, true, w);
+    addCached(ucc, &Cached.favicons_relay, favicons.relay_script, false, true, w);
+    if (prefs.auto_scroll) addCached(ucc, &Cached.auto_scroll, auto_scroll_script, false, true, w);
     // Every frame: a swipe over an embedded map is the map's.
-    add(ucc, swipe_script, true, false, w);
-    add(ucc, image_script, true, false, w);
-    if (prefs.shows_links) add(ucc, link_script, true, false, w);
+    addCached(ucc, &Cached.swipe, swipe_script, true, false, w);
+    addCached(ucc, &Cached.image, image_script, false, false, w);
+    if (prefs.shows_links) addCached(ucc, &Cached.link, link_script, false, false, w);
     // The main frame only: a middle-click inside an ad's frame is its own.
-    add(ucc, middle_script, true, true, w);
+    addCached(ucc, &Cached.middle, middle_script, false, true, w);
     // The store's "Add to Kea" only where Kea can add extensions.
-    if (t.kea.ext != null) add(ucc, store_relay.script, false, true, w);
+    if (t.kea.ext != null) addCached(ucc, &Cached.store, store_relay.script, false, true, w);
     // Every frame, in the page's own world and ahead of its scripts.
-    add(ucc, live_rate_script, true, false, config.pageWorld());
-    if (external) |e| add(ucc, e, true, false, config.pageWorld());
+    addCached(ucc, &Cached.live_rate, live_rate_script, true, false, pw);
+    if (external) |e| add(ucc, e, true, false, pw);
     // Passkeys stand in the page's own world, replacing its functions, and
     // reach Kea through a bridge in Kea's, off or on (Tab.swift 799-814).
-    add(ucc, if (prefs.passkeys) passkeys.pageScript() else forms.without_passkeys, true, false, config.pageWorld());
-    add(ucc, passkeys.bridge_script, true, false, w);
+    if (prefs.passkeys)
+        addCached(ucc, &Cached.passkeys_on, passkeys.pageScript(), true, false, pw)
+    else
+        addCached(ucc, &Cached.passkeys_off, forms.without_passkeys, true, false, pw);
+    addCached(ucc, &Cached.passkeys_bridge, passkeys.bridge_script, true, false, w);
     if (t.veils.len > 0) {
         const style = veilStyle(t.gpa, t.veils) catch return;
         defer t.gpa.free(style);
@@ -130,6 +163,7 @@ pub fn autoScrollChanged(b: *Browser) void {
     const parked = b.parkedTabs(b.gpa) catch return;
     defer b.gpa.free(parked);
     for ([_][]const *Tab{ b.tabs.items, parked }) |list| for (list) |t| {
+        if (t.web == null) continue;
         curtain_js.armFor(t, t.url());
         t.evaluate(if (t.kea.prefs.auto_scroll) auto_scroll_script else auto_scroll_off, .kea, null, 0);
     };
@@ -143,6 +177,7 @@ pub fn showsLinksChanged(b: *Browser) void {
     const parked = b.parkedTabs(b.gpa) catch return;
     defer b.gpa.free(parked);
     for ([_][]const *Tab{ b.tabs.items, parked }) |list| for (list) |t| {
+        if (t.web == null) continue;
         curtain_js.armFor(t, t.url());
         t.evaluate(if (on) link_script else "if (window.__keaLinks) window.__keaLinks.on = false;", .kea, null, 0);
     };

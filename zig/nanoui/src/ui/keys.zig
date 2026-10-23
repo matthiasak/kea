@@ -4,8 +4,9 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-/// Whether this platform's command key is Command (macOS) or Control.
-pub const mac = builtin.os.tag == .macos;
+/// Whether this platform's command key is Command (macOS, and iOS with a
+/// keyboard) or Control.
+pub const mac = builtin.os.tag == .macos or builtin.os.tag == .ios;
 
 /// `s` (written with the Mac's ⌘ ⌃ ⌥ ⇧) as this platform shows it.
 pub fn label(comptime s: []const u8) []const u8 {

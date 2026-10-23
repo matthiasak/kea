@@ -1,5 +1,5 @@
 //! Pictures the UI shows (`ui.image`): decoded once from the bytes the app
-//! gives (ImageIO on macOS, nanoui's PNG decoder elsewhere), scaled to at
+//! gives (ImageIO on macOS and iOS, nanoui's PNG decoder elsewhere), scaled to at
 //! most `max_side` pixels, and packed into one BGRA atlas the renderers
 //! sample (premultiplied). Made on the first picture; when full, emptied
 //! and packed again, and the frame painted again.
@@ -8,7 +8,7 @@ const builtin = @import("builtin");
 const build_options = @import("build_options");
 const png_decode = @import("png_decode.zig");
 
-const portable = build_options.portable or builtin.os.tag != .macos;
+const portable = build_options.portable or !(builtin.os.tag == .macos or builtin.os.tag == .ios);
 const imageio = if (portable) void else @import("image.zig");
 
 pub const size: u32 = 2048;
@@ -35,7 +35,7 @@ pub const Decoded = struct {
 };
 
 /// Decoded pictures kept at most (the oldest go first).
-const max_kept_bytes = 24 * 1024 * 1024;
+const max_kept_bytes = 12 * 1024 * 1024;
 
 /// Where packed pictures go instead of `pixels`: the GPU's texture, so no
 /// copy of the atlas is kept in memory (a window on Metal).
@@ -78,6 +78,8 @@ pub const Images = struct {
     shelf_h: u32 = 0,
     /// Changes whenever the pixels do, for the GPU's copy.
     generation: u64 = 0,
+    /// Bumped when it starts over: a picture may now be where another was.
+    resets: u64 = 0,
     /// Emptied during a frame: its earlier pictures must be painted again.
     reset_during_frame: bool = false,
     decodes_left: u32 = 6,
@@ -87,8 +89,14 @@ pub const Images = struct {
         if (im.pixels.len > 0) im.gpa.free(im.pixels);
         im.headers.deinit(im.gpa);
         im.entries.deinit(im.gpa);
-        for (im.decoded.values()) |d| if (d) |x| im.gpa.free(x.bgra);
+        im.trimDecoded();
         im.decoded.deinit(im.gpa);
+    }
+
+    pub fn trimDecoded(im: *Images) void {
+        for (im.decoded.values()) |d| if (d) |x| im.gpa.free(x.bgra);
+        im.decoded.clearRetainingCapacity();
+        im.kept_bytes = 0;
     }
 
     /// Called at the start of `paint`: compacts stale entries before any
@@ -104,6 +112,7 @@ pub const Images = struct {
     /// Sizing a picture needs only this: it is decoded and packed when drawn.
     pub fn info(im: *Images, k: u64, bytes: []const u8) ?Info {
         if (im.headers.get(k)) |h| return h;
+        if (im.headers.count() >= 2048) im.headers.clearRetainingCapacity();
         const h = probeHeader(bytes);
         im.headers.put(im.gpa, k, h) catch {};
         return h;
@@ -232,6 +241,7 @@ pub const Images = struct {
         im.shelf_x = 0;
         im.shelf_y = 0;
         im.shelf_h = 0;
+        im.resets +%= 1;
     }
 };
 

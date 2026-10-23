@@ -6,11 +6,11 @@ const testing = std.testing;
 const ui = @import("ui.zig");
 const raster = @import("raster.zig");
 
-const Scene = struct {
+pub const Scene = struct {
     on: bool = true,
     value: f32 = 0.4,
     picture: []const u8 = "",
-    fn view(s: *Scene, c: *ui.Context) void {
+    pub fn view(s: *Scene, c: *ui.Context) void {
         ui.column(c, .{ .padding = .all(20), .gap = 14, .width = .fill, .height = .fill });
         defer ui.end(c);
         ui.text(c, "Settings", .{ .size = 22, .weight = .bold });
@@ -305,6 +305,92 @@ test "group opacity composites once" {
         try testing.expect(mean < 0.05);
         try testing.expect(worst <= 16);
     }
+}
+
+test "drawing only what a frame changed makes the pixels drawing it all does" {
+    // The CPU renderer's own atlas: where nanoui shapes text itself.
+    if (!@import("text.zig").portable) return error.SkipZigTest else try partial();
+}
+
+fn partial() !void {
+    const gpa = testing.allocator;
+    const Instance = @import("gpu.zig").Instance;
+    var s: Scene = .{};
+    var t: ui.Tester = undefined;
+    try t.init(gpa, .init(&s, Scene.view), .{ .width = 360, .height = 300 });
+    defer t.deinit();
+    t.settle(1);
+    const pixels = try t.render(gpa);
+    defer pixels.deinit(gpa);
+    const w = pixels.width;
+    const h = pixels.height;
+    const before = try gpa.dupe(Instance, t.instances.items);
+    defer gpa.free(before);
+    try testing.expectEqual(@as(?[4]usize, null), raster.damage(w, h, before, before, t.scale));
+
+    // The same number of instances: a hovered button and a toggle turned off.
+    const save = t.findText("Save") orelse return error.TextNotFound;
+    t.moveTo(save.x + save.w / 2, save.y + save.h / 2);
+    s.on = false;
+    t.settle(1);
+    const d = raster.damage(w, h, before, t.instances.items, t.scale) orelse return error.NoDamage;
+    try testing.expect((d[2] - d[0]) * (d[3] - d[1]) < w * h / 2);
+    raster.drawRegion(pixels, t.instances.items, t.text.atlas.mask(), t.text.images.pictures(), t.scale, t.theme.background, d);
+    const whole = try t.render(gpa);
+    defer whole.deinit(gpa);
+    try testing.expectEqualSlices(u8, whole.bytes, pixels.bytes);
+
+    // One fewer instance: a glyph past the middle gone.
+    var fewer: std.ArrayList(Instance) = .empty;
+    defer fewer.deinit(gpa);
+    try fewer.appendSlice(gpa, t.instances.items);
+    var k = fewer.items.len / 2;
+    while (fewer.items[k].kind != @import("gpu.zig").Kind.text) k += 1;
+    _ = fewer.orderedRemove(k);
+    const e = raster.damage(w, h, t.instances.items, fewer.items, t.scale) orelse return error.NoDamage;
+    raster.drawRegion(pixels, fewer.items, t.text.atlas.mask(), t.text.images.pictures(), t.scale, t.theme.background, e);
+    raster.draw(whole, fewer.items, t.text.atlas.mask(), t.text.images.pictures(), t.scale, t.theme.background);
+    try testing.expectEqualSlices(u8, whole.bytes, pixels.bytes);
+}
+
+test "rounded boxes, borders, glyphs and shadows" {
+    const gpa = std.testing.allocator;
+    const bytes = try gpa.alloc(u8, 40 * 40 * 4);
+    defer gpa.free(bytes);
+    const out: @import("gpu.zig").Pixels = .{ .bytes = bytes, .width = 40, .height = 40 };
+    var texels: [4]u8 = .{ 255, 255, 255, 255 };
+    raster.draw(out, &.{
+        .{ .rect = .{ 2, 2, 16, 16 }, .color = .{ 1, 0, 0, 1 }, .radius = 4 },
+        .{ .rect = .{ 0, 0, 10, 10 }, .color = .{ 0, 0, 1, 1 }, .uv = .{ 0, 0, 1, 1 }, .kind = @import("gpu.zig").Kind.text, .clip = .{ 0, 0, 5, 20 } },
+    }, .{ .pixels = &texels, .size = 2 }, .{}, 2, .{ .r = 1, .g = 1, .b = 1 });
+    const at = struct {
+        fn f(o: @import("gpu.zig").Pixels, x: usize, y: usize) [4]u8 { return o.bytes[(y * o.width + x) * 4 ..][0..4].*; }
+    }.f;
+    try std.testing.expectEqual([4]u8{ 0, 0, 255, 255 }, at(out, 20, 20));
+    try std.testing.expectEqual([4]u8{ 255, 255, 255, 255 }, at(out, 4, 34));
+    try std.testing.expectEqual([4]u8{ 255, 0, 0, 255 }, at(out, 2, 2));
+    try std.testing.expectEqual([4]u8{ 255, 255, 255, 255 }, at(out, 15, 2));
+}
+
+test "a clip's rounded corners cut what it clips, only where asked" {
+    const gpa = std.testing.allocator;
+    const bytes = try gpa.alloc(u8, 40 * 40 * 4);
+    defer gpa.free(bytes);
+    const out: @import("gpu.zig").Pixels = .{ .bytes = bytes, .width = 40, .height = 40 };
+    raster.draw(out, &.{
+        .{ .rect = .{ 0, 0, 20, 20 }, .color = .{ 1, 0, 0, 1 }, .clip = .{ 0, 0, 20, 20 }, .clip_round = @import("gpu.zig").clipRound(8, 1 | 8) },
+    }, .{ .pixels = &.{}, .size = 0 }, .{}, 2, .{ .r = 1, .g = 1, .b = 1 });
+    const at = struct {
+        fn f(o: @import("gpu.zig").Pixels, x: usize, y: usize) [4]u8 { return o.bytes[(y * o.width + x) * 4 ..][0..4].*; }
+    }.f;
+    try std.testing.expectEqual([4]u8{ 255, 255, 255, 255 }, at(out, 0, 0));
+    try std.testing.expectEqual([4]u8{ 255, 255, 255, 255 }, at(out, 0, 39));
+    try std.testing.expectEqual([4]u8{ 0, 0, 255, 255 }, at(out, 39, 0));
+    try std.testing.expectEqual([4]u8{ 0, 0, 255, 255 }, at(out, 39, 39));
+    try std.testing.expectEqual([4]u8{ 0, 0, 255, 255 }, at(out, 20, 20));
+    const unpacked = @import("gpu.zig").clipCorners(@import("gpu.zig").clipRound(8, 1 | 8));
+    try std.testing.expectEqual(@as(f32, 8), unpacked.radius);
+    try std.testing.expectEqual(@as(u4, 9), unpacked.corners);
 }
 
 test {

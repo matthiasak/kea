@@ -70,6 +70,17 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette) void {
         if (b.prefs.ai) {
             frame.rule(c, p);
             _ = frame.prefLine(b, c, p, "ubi_tools", "Let Ubi Chat look through your tabs, history and bookmarks", "When a question needs it, Ubi Chat can search your open tabs, history and bookmarks or read an open tab");
+            frame.rule(c, p);
+            _ = frame.prefLine(b, c, p, "ai_web_search", "Web search and SDK plugins", "Let Gemini, Anthropic and OpenRouter search the web and read URLs");
+            frame.rule(c, p);
+            _ = frame.prefLine(b, c, p, "ai_thinking", "Thinking", "Think before answering complex questions");
+            if (b.prefs.ai_thinking) {
+                frame.rule(c, p);
+                plate.line(c, p, "Thinking level", "How much effort the model spends thinking first");
+                var eff: usize = @intFromEnum(b.prefs.ai_effort);
+                if (controls.segmented(c, p, &.{ "Low", "Medium", "High", "Max" }, &eff, false)) b.prefs.set("ai_effort", @as(@import("../../data/prefs.zig").AiEffort, @enumFromInt(eff)));
+                ui.end(c);
+            }
         }
     }
     if (!disclose.begin(c, 0x6b65_612e_6169_626c, b.prefs.ai, motion.settle)) return;

@@ -55,9 +55,38 @@ pub const Kind = struct {
     /// under the box shows through it. `uv`'s x, y: where the box is from
     /// the shadow's rect, in points.
     pub const shadow_out: f32 = 5;
-    pub const layer_begin: f32 = 6;
-    pub const layer_end: f32 = 7;
-    pub const layer_composite: f32 = 8;
+    /// A line (`ui.Canvas`): from `uv`'s first point to its second, in
+    /// points, `border_width` wide, its ends round; dashed when
+    /// `border_color` holds a dash's length, the gap's and where the line
+    /// starts in them. `rect` bounds it.
+    pub const segment: f32 = 6;
+    /// A filled triangle (`ui.Canvas`): its corners `uv`'s two points and
+    /// `border_color`'s first; `border_color`'s third says which edges are
+    /// smoothed (1 the first to the second, 2 the second to the third, 4
+    /// the third to the first), the others shared with triangles beside it,
+    /// cut sharp so the two meet without a seam. `rect` bounds it.
+    pub const triangle: f32 = 7;
+    /// A texture the app gave this frame (`ui.texture`, a video frame):
+    /// `uv` the part of it shown, `border_width` its slot in the frame's
+    /// textures, its corners rounded as a picture's.
+    pub const texture: f32 = 8;
+    pub const layer_begin: f32 = 9;
+    pub const layer_end: f32 = 10;
+    pub const layer_composite: f32 = 11;
+};
+
+/// Pixels the app gives a frame to show (`ui.texture`), changing as often
+/// as it likes: a video's frames. On macOS a CVPixelBuffer (BGRA, Metal
+/// compatible) is wrapped as a texture without a copy; else, or for the
+/// CPU renderer, `bgra` (premultiplied, `stride` bytes a row, 0 for
+/// `width * 4`) is drawn.
+pub const Texture = struct {
+    width: u32,
+    height: u32,
+    bgra: []const u8 = &.{},
+    stride: usize = 0,
+    /// A CVPixelBufferRef, kept alive by the app until the frame is drawn.
+    pixel_buffer: ?*anyopaque = null,
 };
 
 pub fn color4(c: types.Color) [4]f32 {

@@ -333,6 +333,8 @@ const Certify = struct {
     ok: bool = false,
 
     fn ask(ctx: ?*anyopaque) callconv(.c) void {
+        const pool = objc.Pool.push();
+        defer pool.pop();
         const self: *Certify = @ptrCast(@alignCast(ctx.?));
         self.ok = SecTrustEvaluateWithError(self.trust, null);
         cg.CFRelease(self.trust);
@@ -363,7 +365,7 @@ fn after(b: *Browser, t: *Tab, comptime act: fn (*Tab) void) void {
     close(b);
     const Later = struct {
         fn fire(ctx: ?*anyopaque) callconv(.c) void {
-            act(Tab.alive(@intFromPtr(ctx)) orelse return);
+            if (Tab.alive(@intFromPtr(ctx))) |tab| act(tab);
         }
     };
     objc.dispatchMain(@ptrFromInt(t.serial), Later.fire);
@@ -546,15 +548,7 @@ fn row(c: *ui.Context, title: []const u8, keys: []const u8, submenu: bool, dark:
     const it = c.interact(outer, .{});
     c.addA11y(outer, .button, title, "", false, true);
     const lit = it.hovered;
-    _ = c.open(.{
-        .direction = .row,
-        .width = .fill,
-        .height = px(menu.row),
-        .align_items = .center,
-        .padding = .{ .left = menu.text - menu.inset, .right = menu.trailing - menu.inset },
-        .radius = menu.highlight,
-        .background = if (lit) menu.selection(dark) else null,
-    }, null);
+    _ = c.open(.{ .direction = .row, .width = .fill, .height = px(menu.row), .align_items = .center, .padding = .{ .left = menu.text - menu.inset, .right = menu.trailing - menu.inset }, .radius = menu.highlight, .background = if (lit) menu.selection(dark) else null }, null);
     defer c.end();
     const ink = if (lit) ui.Color.white else menu.label(dark);
     const soft = if (lit) ui.Color.white else menu.secondary(dark);

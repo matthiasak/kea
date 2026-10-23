@@ -139,6 +139,8 @@ pub fn fetch(gpa: std.mem.Allocator, ext_id: []const u8, ctx: anytype, comptime 
         out: Fetched = undefined,
 
         fn work(raw: ?*anyopaque) callconv(.c) void {
+            const pool = objc.Pool.push();
+            defer pool.pop();
             const j: *@This() = @ptrCast(@alignCast(raw));
             const session = urlsession.ephemeral(60);
             defer objc.release(session);

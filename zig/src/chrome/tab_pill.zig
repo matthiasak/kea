@@ -172,19 +172,20 @@ pub fn helpText(b: *const Browser, c: *ui.Context, t: *Tab, hovered: bool) []con
     if (t.mem_at == 0 or now - t.mem_at >= 5.0) {
         t.mem_at = now;
         t.mem_mb = if (footprint.mb(pid)) |m| @floatCast(m) else 0;
+        var others: u16 = 0;
+        for (b.tabs.items) |other| if (other != t) {
+            if (footprint.webPid(other.web)) |op| if (op == pid) {
+                others +|= 1;
+            };
+        };
+        t.mem_shared = others;
     }
     const mb: u32 = @intFromFloat(@round(@max(0, t.mem_mb)));
     if (mb == 0) return label;
-    var others: usize = 0;
-    for (b.tabs.items) |other| if (other != t) {
-        if (footprint.webPid(other.web)) |op| if (op == pid) {
-            others += 1;
-        };
-    };
-    return if (others == 0)
+    return if (t.mem_shared == 0)
         c.print("{s} — {d} MB", .{ label, mb })
     else
-        c.print("{s} — {d} MB, shared with {d} tabs", .{ label, mb, others });
+        c.print("{s} — {d} MB, shared with {d} tabs", .{ label, mb, t.mem_shared });
 }
 
 /// A pinned square: the letter being typed, the ring, the icon, or the letter.

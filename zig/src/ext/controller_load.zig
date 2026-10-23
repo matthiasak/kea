@@ -21,6 +21,8 @@ const log = std.log.scoped(.extensions);
 pub fn offMain(comptime T: type, job: *T, comptime work: fn (*T) void, comptime then: fn (*T) void) void {
     const S = struct {
         fn bg(p: ?*anyopaque) callconv(.c) void {
+            const pool = objc.Pool.push();
+            defer pool.pop();
             work(@ptrCast(@alignCast(p.?)));
             objc.dispatchMain(p, fg);
         }

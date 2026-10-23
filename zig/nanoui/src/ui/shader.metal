@@ -2,7 +2,9 @@
 // borders (kind 0), glyph runs and icons sampled from the atlas (kind 1),
 // shadows (kind 2): Gaussian blurs of rounded boxes, as GPUI draws them, or
 // pictures sampled from the image atlas (kind 3), their corners rounded.
-// Shadows of kind 5 are drawn outside their box only (knocked out).
+// Shadows of kind 5 are drawn outside their box only (knocked out); lines
+// (kind 6) and filled triangles (kind 7) are drawn where they are rather
+// than over their bounds; textures the app gave the frame are kind 8.
 // Panes of glass (kind 4) have their own fragment function (glass.metal).
 // Each is clipped to its clip rectangle, some of whose corners may be
 // rounded (a box with rounded corners that clips its children).
@@ -54,7 +56,18 @@ vertex VOut vs(uint vid [[vertex_id]], uint iid [[instance_id]],
     float2 p = p_unrot;
     float pulse_alpha = 1.0;
     float angle = i.xf.x + i.xf.y * time;
-    if (angle != 0.0 || i.pulse.x > 0.0) {
+    if (i.kind == 6.0) {
+        // A box along the line, a point past its round ends.
+        float2 a = i.uv.xy, b = i.uv.zw;
+        float len = length(b - a);
+        float2 u = len > 0.0 ? (b - a) / len : float2(1.0, 0.0);
+        float2 n = float2(-u.y, u.x);
+        float e = i.border_width * 0.5 + 1.0;
+        p = mix(a - u * e, b + u * e, corner.x) + n * (corner.y * 2.0 - 1.0) * e;
+    } else if (i.kind == 7.0) {
+        // The triangle itself: its third corner twice.
+        p = vid == 0 ? i.uv.xy : (vid == 1 ? i.uv.zw : i.border_color.xy);
+    } else if (angle != 0.0 || i.pulse.x > 0.0) {
         float2 d = p - i.xf.zw;
         if (i.pulse.x > 0.0) {
             float s = 0.5 - 0.5 * cos(2.0 * M_PI_F * time / i.pulse.x);
@@ -163,7 +176,50 @@ static float corner_sdf(float2 p, float2 half_size, float r_in) {
     float2 q = float2(cx - dx, cx - dy);
     return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - cr;
 }
-static float4 shade(VOut in, Instance i, texture2d<float> atlas, texture2d<float> images, texture2d<float> layer_tex);
+
+static float4 shade(VOut in, Instance i, texture2d<float> atlas, texture2d<float> images, texture2d<float> layer_tex, texture2d<float> frame);
+
+// A line: round ends, half a pixel smoothed each side; its dashes cut
+// square, smoothed likewise. raster.zig's `segment` computes the same.
+static float4 line_color(float2 w, Instance i) {
+    float2 a = i.uv.xy, ab = i.uv.zw - i.uv.xy;
+    float len2 = dot(ab, ab);
+    float t = len2 > 0.0 ? clamp(dot(w - a, ab) / len2, 0.0, 1.0) : 0.0;
+    float d = length(w - (a + ab * t));
+    float aa = max(fwidth(d), 0.0001) * 0.5;
+    float cover = 1.0 - smoothstep(i.border_width * 0.5 - aa, i.border_width * 0.5 + aa, d);
+    float on = i.border_color.x, off = i.border_color.y;
+    if (on > 0.0 && off > 0.0) {
+        // Along the line unclamped: its ends are cut square, as its dashes.
+        float along = (len2 > 0.0 ? dot(w - a, ab) / sqrt(len2) : 0.0) + i.border_color.z;
+        float m = along - (on + off) * floor(along / (on + off));
+        float e = min(m, on - m);
+        float ea = max(fwidth(along), 0.0001) * 0.5;
+        cover *= smoothstep(-ea, ea, e);
+    }
+    float alpha = i.color.a * cover;
+    return float4(i.color.rgb * alpha, alpha);
+}
+
+// A triangle: whole where the rasterizer drew it, its smoothed edges
+// fading over the half pixel inside them.
+static float4 triangle_color(float2 w, Instance i) {
+    float2 v[3] = { i.uv.xy, i.uv.zw, i.border_color.xy };
+    float area = (v[1].x - v[0].x) * (v[2].y - v[0].y) - (v[1].y - v[0].y) * (v[2].x - v[0].x);
+    float side = area < 0.0 ? -1.0 : 1.0;
+    uint edges = uint(i.border_color.z);
+    float cover = 1.0;
+    for (int k = 0; k < 3; k++) {
+        if ((edges & (1u << k)) == 0u) continue;
+        float2 p = v[k], q = v[(k + 1) % 3];
+        float len = max(length(q - p), 0.0001);
+        float d = side * ((q.x - p.x) * (w.y - p.y) - (q.y - p.y) * (w.x - p.x)) / len;
+        float aa = max(fwidth(d), 0.0001) * 0.5;
+        cover *= smoothstep(-aa, aa, d);
+    }
+    float alpha = i.color.a * cover;
+    return float4(i.color.rgb * alpha, alpha);
+}
 
 // How much of the fragment the instance's clip lets through: discarded
 // outside it, cut in its rounded corners.
@@ -190,17 +246,18 @@ fragment float4 fs(VOut in [[stage_in]],
                    constant Instance *instances [[buffer(0)]],
                    texture2d<float> atlas [[texture(0)]],
                    texture2d<float> images [[texture(1)]],
-                   texture2d<float> layer_tex [[texture(2)]]) {
+                   texture2d<float> layer_tex [[texture(2)]],
+                   texture2d<float> frame [[texture(3)]]) {
     Instance i = instances[in.inst];
     float clip_cover = clip_coverage(in, i);
-    return shade(in, i, atlas, images, layer_tex) * (clip_cover * in.pulse_alpha);
+    return shade(in, i, atlas, images, layer_tex, frame) * (clip_cover * in.pulse_alpha);
 }
 
-static float4 shade(VOut in, Instance i, texture2d<float> atlas, texture2d<float> images, texture2d<float> layer_tex) {
-    if (i.kind == 8.0) {
+static float4 shade(VOut in, Instance i, texture2d<float> atlas, texture2d<float> images, texture2d<float> layer_tex, texture2d<float> frame) {
+    if (i.kind == 11.0) {
         return layer_tex.read(uint2(in.pos.xy)) * i.color.a;
     }
-    if (i.kind == 6.0 || i.kind == 7.0) {
+    if (i.kind == 9.0 || i.kind == 10.0) {
         return float4(0.0);
     }
 
@@ -222,6 +279,9 @@ static float4 shade(VOut in, Instance i, texture2d<float> atlas, texture2d<float
         }
         return float4(i.color.rgb * a, a);
     }
+
+    if (i.kind == 6.0) return line_color(in.world, i);
+    if (i.kind == 7.0) return triangle_color(in.world, i);
 
     float2 half_size = i.rect.zw * 0.5;
     float2 p = in.local - half_size;
@@ -251,6 +311,12 @@ static float4 shade(VOut in, Instance i, texture2d<float> atlas, texture2d<float
         }
         return px * (coverage * i.color.a);
     }
+    if (i.kind == 8.0) {
+        constexpr sampler s(filter::linear, address::clamp_to_edge);
+        float coverage = 1.0 - smoothstep(-aa, aa, d);
+        return frame.sample(s, in.uv) * (coverage * i.color.a);
+    }
+
     if (i.kind == 2.0 || i.kind == 5.0) {
         float sigma = max(i.border_width, 0.25);
         float a = shadow_alpha(p, half_size, r, sigma) * i.color.a;

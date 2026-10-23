@@ -283,9 +283,8 @@ pub fn closeWith(doc: *Document, why: []const u8) void {
     defer pool.pop();
     if (documents.get(doc.id) == doc) _ = documents.swapRemove(doc.id);
     objc.msg(void, doc.context, "didCloseTab:windowIsClosing:", .{ doc.delegate, objc.NO });
-    objc.msg(void, doc.web, "setNavigationDelegate:", .{@as(?objc.Object, null)});
-    objc.msg(void, doc.web, "setUIDelegate:", .{@as(?objc.Object, null)});
-    objc.msg(void, doc.web, "stopLoading", .{});
+    @import("capture_watch.zig").unwatch(doc.web);
+    @import("../web/config.zig").teardownWebView(doc.web);
     var it = doc.deliveries.iterator();
     while (it.next()) |e| {
         for (e.value_ptr.waiters.items) |w| w.fail(why);

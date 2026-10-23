@@ -76,8 +76,29 @@ fn elementClass() objc.Class {
     });
 }
 
+fn pruneCache(s: *Surface) void {
+    var stale: [64]u64 = undefined;
+    var n: usize = 0;
+    var it = s.a11y_cache.keyIterator();
+    outer: while (it.next()) |k| {
+        for (s.ctx.a11y_items.items) |item| if (item.id == k.*) continue :outer;
+        stale[n] = k.*;
+        n += 1;
+        if (n == stale.len) break;
+    }
+    for (stale[0..n]) |k| if (s.a11y_cache.fetchRemove(k)) |kv| {
+        if (payloadOf(kv.value)) |p| {
+            objc.setZig(kv.value, null);
+            p.deinit(s.gpa);
+            s.gpa.destroy(p);
+        }
+        objc.release(kv.value);
+    };
+}
+
 fn viewChildren(obj: objc.Object, _: objc.SEL) callconv(.c) objc.Object {
     const s = objc.getZig(Surface, obj) orelse return objc.msg(objc.Object, objc.class("NSArray"), "array", .{});
+    if (s.a11y_cache.count() > s.ctx.a11y_items.items.len + 64) pruneCache(s);
     const arr = objc.msg(objc.Object, objc.class("NSMutableArray"), "arrayWithCapacity:", .{@as(objc.NSUInteger, s.ctx.a11y_items.items.len)});
     const cls = elementClass();
     for (s.ctx.a11y_items.items) |it| {

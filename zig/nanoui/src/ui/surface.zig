@@ -51,11 +51,17 @@ pub const Surface = struct {
     paced: bool = false,
     in_frame: bool = false,
     full_pending: bool = false,
+    retained_ready: bool = false,
     frame_in_due: f64 = 0,
     pending_sync: bool = false,
     /// A frame was wanted while the window was hidden: run it once visible.
     pending: bool = false,
     dead: bool = false,
+    torn_down: bool = false,
+    /// The window is being resized: only its size changes draw (each when
+    /// the layer is displayed); the link waits, and what else asks for a
+    /// frame (output, an animation) gets the resize's next one.
+    resizing: bool = false,
     cursor: ctx_mod.Cursor = .arrow,
     cursor_dirty: bool = false,
     theme_override: ?Theme = null,
@@ -121,6 +127,7 @@ pub const Surface = struct {
         // A layer-hosting view: the Metal layer is ours.
         objc.msg(void, nsview, "setLayer:", .{renderer.layer});
         objc.msg(void, nsview, "setWantsLayer:", .{objc.YES});
+        objc.msg(void, renderer.layer, "setAutoresizingMask:", .{@as(c_uint, 2 | 16)}); // width, height sizable
         objc.msg(void, window.nswindow, "setContentView:", .{nsview});
         objc.msg(void, window.nswindow, "setAcceptsMouseMovedEvents:", .{objc.YES});
         _ = objc.msg(objc.BOOL, window.nswindow, "makeFirstResponder:", .{nsview});
@@ -155,38 +162,45 @@ pub const Surface = struct {
     }
 
     pub fn destroy(self: *Surface) void {
-        objc.setZig(self.nsview, null);
-        {
+        self.dead = true;
+        if (!self.in_frame) self.finishDestroy();
+    }
+
+    fn finishDestroy(self: *Surface) void {
+        if (!self.torn_down) {
+            self.torn_down = true;
+            objc.setZig(self.nsview, null);
             const ws = objc.msg(objc.Object, objc.class("NSWorkspace"), "sharedWorkspace", .{});
-            const center = objc.msg(objc.Object, ws, "notificationCenter", .{});
-            objc.msg(void, center, "removeObserver:", .{self.nsview});
-        }
-        if (self.display_link) |link| {
-            if (objc.msg(objc.BOOL, link, "respondsToSelector:", .{objc.sel("setDelegate:")})) {
-                objc.msg(void, link, "setDelegate:", .{@as(?objc.Object, null)});
+            objc.msg(void, objc.msg(objc.Object, ws, "notificationCenter", .{}), "removeObserver:", .{self.nsview});
+            if (self.display_link) |link| {
+                if (objc.msg(objc.BOOL, link, "respondsToSelector:", .{objc.sel("setDelegate:")}))
+                    objc.msg(void, link, "setDelegate:", .{@as(?objc.Object, null)});
+                objc.msg(void, link, "invalidate", .{});
+                objc.release(link);
             }
-            objc.msg(void, link, "invalidate", .{});
-            objc.release(link);
+            if (self.tracking) |t| objc.release(t);
+            a11y.clearCache(self);
+            objc.release(self.nsview);
+            self.instances.deinit(self.gpa);
+            self.pasted.deinit(self.gpa);
+            if (self.tip) |t| self.gpa.free(t);
+            self.text_queue.deinit(self.gpa);
+            self.ctx.deinit();
+            self.text.deinit();
+            if (self.atlas_texture) |t| objc.release(t);
+            self.renderer.deinit();
+            if (self.frame_log) |*fl| fl.deinit();
         }
-        if (self.tracking) |t| objc.release(t);
-        a11y.clearCache(self);
-        objc.release(self.nsview);
-        self.instances.deinit(self.gpa);
-        self.pasted.deinit(self.gpa);
-        if (self.tip) |t| self.gpa.free(t);
-        self.text_queue.deinit(self.gpa);
-        self.ctx.deinit();
-        self.text.deinit();
-        if (self.atlas_texture) |t| objc.release(t);
-        self.renderer.deinit();
-        if (self.frame_log) |*fl| fl.deinit();
-        if (self.tick_scheduled) self.dead = true else self.gpa.destroy(self);
+        if (!self.tick_scheduled) self.gpa.destroy(self);
+    }
+
+    fn finishFrame(self: *Surface) void {
+        self.in_frame = false;
+        if (self.dead) self.finishDestroy();
     }
 
     pub fn recordFrames(self: *Surface, gpa: std.mem.Allocator) !*FrameLog {
-        if (self.frame_log == null) {
-            self.frame_log = try FrameLog.init(gpa, null);
-        }
+        if (self.frame_log == null) self.frame_log = try FrameLog.init(gpa, null);
         return &self.frame_log.?;
     }
 
@@ -266,8 +280,9 @@ pub const Surface = struct {
         const vis = self.visible();
         self.pending = !vis;
         self.in_frame = true;
-        defer self.in_frame = false;
+        defer self.finishFrame();
         self.full_pending = false;
+        self.retained_ready = false;
         const pool = objc.Pool.push();
         defer pool.pop();
         const c = &self.ctx;
@@ -284,70 +299,62 @@ pub const Surface = struct {
         self.frame_kind = kind;
         self.ctx.transparent_root = self.transparent;
         c.reduce_motion = self.reduce_motion;
+        c.reduced_motion = self.reduce_motion;
         c.window_focused = if (vis) self.window.isFocused() else true;
         const r = frame_mod.run(c, self.view, &self.text, &self.instances, self.size, self.scale, self.theme(), dt, now - self.start_time);
+        if (self.dead) return;
+        @import("../play.zig").paint(self.gpa, &self.instances);
         self.frame_in_due = if (c.frame_in) |fi| now + @as(f64, fi) else 0;
         const t_af0 = if (self.frame_log != null) cf.CACurrentMediaTime() else 0;
         const native_changed = if (self.after_frame) |af| af(self.after_frame_ctx, self) else false;
+        if (self.dead) return;
         const after_frame_ms = if (self.frame_log != null) (cf.CACurrentMediaTime() - t_af0) * 1000 else 0;
         const sync = native_changed or self.in_live_resize or self.geometry_changed or self.pending_sync;
         self.geometry_changed = false;
         self.pending_sync = false;
         self.afterFocus();
         if (!vis or !has_drawable) {
+            self.retained_ready = vis and !c.animating and !c.changed and !r.hot_changed;
             self.pending_sync = sync;
             self.updateCursor();
-            if (vis) self.requestFrame() else self.setPaced(false);
+            if (vis) {
+                if (self.retained_ready) {
+                    if (self.display_link != null) {
+                        self.setRate(null);
+                        self.setPaced(true);
+                    } else self.scheduleTick();
+                } else self.requestFrame();
+            } else self.setPaced(false);
             return;
         }
-        const wall_now = cf.CACurrentMediaTime();
-        self.renderer.setLiveResize(sync);
-        const atlas_reset = self.text.atlas.reset_during_frame or self.text.images.reset_during_frame;
-        if (atlas_reset) self.renderer.waitIdle();
-        self.renderer.syncImages(&self.text.images);
-        const clear = if (self.transparent) types.Color.transparent else c.theme.background;
-        const present_at = if (target_in > 0) target_in else if (self.last_present_target > 0) @max(wall_now, self.last_present_target + dur) else wall_now;
-        self.renderer.present_at = present_at;
-        self.renderer.time = @floatCast(now - self.start_time);
-        var presented = true;
-        if (self.frame_log) |*fl| {
-            const interval_ms: f64 = if (fl.last_t > 0) @max(0, (now - fl.last_t) * 1000) else 0;
-            const idx = fl.append(.{
-                .t = now,
-                .kind = kind,
-                .interval_ms = interval_ms,
-                .duration = dur,
-                .dt = dt,
-                .build_ms = c.stats.build_ms,
-                .layout_ms = c.stats.layout_ms,
-                .paint_ms = c.stats.paint_ms,
-                .after_frame_ms = after_frame_ms,
-                .drawable_wait_ms = 0,
-                .encode_ms = 0,
-                .sync = sync,
-                .nodes = c.stats.nodes,
-                .instances = c.stats.instances,
-                .atlas_reset = atlas_reset,
-                .animating = c.animating,
-            });
-            const ds = self.renderer.drawLogged(self.instances.items, self.atlasTexture(), self.size, clear, fl, idx);
-            presented = ds.presented;
-            if (presented) {
-                fl.setDraw(idx, ds.drawable_wait_ms, ds.encode_ms, ds.sync, ds.queued);
-            } else {
-                fl.dropLast();
-            }
-        } else {
-            const ds = self.renderer.drawLogged(self.instances.items, self.atlasTexture(), self.size, clear, null, 0);
-            presented = ds.presented;
-        }
-        if (presented) self.last_present_target = present_at;
+        const presented = self.presentFrame(now, target_in, dur, sync, .{
+            .t = now,
+            .kind = kind,
+            .interval_ms = 0,
+            .duration = dur,
+            .dt = dt,
+            .build_ms = c.stats.build_ms,
+            .layout_ms = c.stats.layout_ms,
+            .paint_ms = c.stats.paint_ms,
+            .after_frame_ms = after_frame_ms,
+            .drawable_wait_ms = 0,
+            .encode_ms = 0,
+            .sync = sync,
+            .nodes = c.stats.nodes,
+            .instances = c.stats.instances,
+            .atlas_reset = false,
+            .animating = c.animating,
+        });
         self.updateCursor();
-        if (!presented) {
-            self.requestFrame();
-            return;
-        }
-        const more = c.animating or r.hot_changed or c.input.down;
+        if (!presented) return self.requestFrame();
+        self.updatePacing(now, r.hot_changed);
+    }
+
+    pub fn updatePacing(self: *Surface, now: f64, hot_changed: bool) void {
+        const c = &self.ctx;
+        const elapsed = (now - self.start_time) - c.caret_moved_at;
+        const recent_typing = c.focused_text != null and c.caret_moved_at > 0 and elapsed >= 0 and elapsed < 0.35;
+        const more = c.animating or hot_changed or c.input.down or recent_typing;
         if (self.display_link != null) {
             if (more) {
                 self.setRate(null);
@@ -374,53 +381,68 @@ pub const Surface = struct {
             return;
         }
         self.in_frame = true;
-        defer self.in_frame = false;
+        defer self.finishFrame();
         const pool = objc.Pool.push();
         defer pool.pop();
         const c = &self.ctx;
         const fallback_dur = 1.0 / @as(f64, @max(60.0, self.max_fps));
         const dur: f64 = if (duration_in > 0) duration_in else fallback_dur;
         if (duration_in > 0) self.link_duration = duration_in;
+        const now = if (target_in > 0) target_in else cf.CACurrentMediaTime();
+        const sync = self.pending_sync;
+        self.pending_sync = false;
+        const presented = self.presentFrame(now, target_in, dur, sync, .{
+            .t = now,
+            .kind = .retained,
+            .interval_ms = 0,
+            .duration = dur,
+            .dt = @floatCast(dur),
+            .build_ms = 0,
+            .layout_ms = 0,
+            .paint_ms = 0,
+            .after_frame_ms = 0,
+            .drawable_wait_ms = 0,
+            .encode_ms = 0,
+            .sync = sync,
+            .nodes = c.stats.nodes,
+            .instances = self.instances.items.len,
+            .atlas_reset = false,
+            .animating = c.time_driven == .fast,
+        });
+        if (!presented) return self.requestFrame();
+        if (self.retained_ready) {
+            self.retained_ready = false;
+            self.updatePacing(now, false);
+        }
+    }
+
+    fn presentFrame(self: *Surface, now: f64, target_in: f64, dur: f64, sync: bool, mut_rec: frame_log_mod.Record) bool {
+        const c = &self.ctx;
         const wall_now = cf.CACurrentMediaTime();
-        const now = if (target_in > 0) target_in else wall_now;
+        self.renderer.setLiveResize(sync);
+        const atlas_reset = self.text.atlas.reset_during_frame or self.text.images.reset_during_frame;
+        if (atlas_reset) self.renderer.waitIdle();
+        self.renderer.syncImages(&self.text.images);
+        self.renderer.textures = c.textures.items;
+        const clear = if (self.transparent) types.Color.transparent else c.theme.background;
         const present_at = if (target_in > 0) target_in else if (self.last_present_target > 0) @max(wall_now, self.last_present_target + dur) else wall_now;
-        self.renderer.setLiveResize(false);
         self.renderer.present_at = present_at;
         self.renderer.time = @floatCast(now - self.start_time);
-        const clear = if (self.transparent) types.Color.transparent else c.theme.background;
         var presented = true;
         if (self.frame_log) |*fl| {
-            const interval_ms: f64 = if (fl.last_t > 0) @max(0, (now - fl.last_t) * 1000) else 0;
-            const idx = fl.append(.{
-                .t = now,
-                .kind = .retained,
-                .interval_ms = interval_ms,
-                .duration = dur,
-                .dt = @floatCast(dur),
-                .build_ms = 0,
-                .layout_ms = 0,
-                .paint_ms = 0,
-                .after_frame_ms = 0,
-                .drawable_wait_ms = 0,
-                .encode_ms = 0,
-                .sync = false,
-                .nodes = c.stats.nodes,
-                .instances = self.instances.items.len,
-                .atlas_reset = false,
-                .animating = c.time_driven == .fast,
-            });
+            var rec = mut_rec;
+            rec.interval_ms = if (fl.last_t > 0) @max(0, (now - fl.last_t) * 1000) else 0;
+            rec.sync = sync;
+            rec.atlas_reset = atlas_reset;
+            const idx = fl.append(rec);
             const ds = self.renderer.drawLogged(self.instances.items, self.atlasTexture(), self.size, clear, fl, idx);
             presented = ds.presented;
-            if (presented) {
-                fl.setDraw(idx, ds.drawable_wait_ms, ds.encode_ms, ds.sync, ds.queued);
-            } else {
-                fl.dropLast();
-            }
+            if (presented) fl.setDraw(idx, ds.drawable_wait_ms, ds.encode_ms, ds.sync, ds.queued) else fl.dropLast();
         } else {
-            const ds = self.renderer.drawLogged(self.instances.items, self.atlasTexture(), self.size, clear, null, 0);
-            presented = ds.presented;
+            presented = self.renderer.drawLogged(self.instances.items, self.atlasTexture(), self.size, clear, null, 0).presented;
         }
         if (presented) self.last_present_target = present_at;
+        return presented;
     }
 
     pub fn setTransparent(self: *Surface, on: bool) void {
@@ -431,31 +453,7 @@ pub const Surface = struct {
 
     /// Places `stage_view` behind `self.nsview` inside a flipped host contentView,
     /// enabling transparent viewport holes over live WKWebView panes.
-    pub fn attachBackdrop(self: *Surface, stage_view: objc.Object) void {
-        const host_class = objc.defineClass(.{
-            .name = "NanoUIHostView",
-            .superclass = "NSView",
-            .methods = &.{.{ .name = "isFlipped", .imp = &events.yes, .types = "c@:" }},
-        });
-        const b = objc.msg(objc.CGRect, self.nsview, "bounds", .{});
-        const host = objc.msg(objc.Object, objc.msg(objc.Object, host_class, "alloc", .{}), "initWithFrame:", .{b});
-        objc.msg(void, host, "setWantsLayer:", .{objc.YES});
-        objc.msg(void, host, "setAutoresizingMask:", .{@as(objc.NSUInteger, 2 | 16)});
-        objc.msg(void, self.nsview, "retain", .{});
-        defer objc.msg(void, self.nsview, "release", .{});
-        objc.msg(void, self.window.nswindow, "setContentView:", .{host});
-        objc.msg(void, stage_view, "setFrame:", .{b});
-        objc.msg(void, stage_view, "setAutoresizingMask:", .{@as(objc.NSUInteger, 2 | 16)});
-        objc.msg(void, self.nsview, "setFrame:", .{b});
-        objc.msg(void, self.nsview, "setAutoresizingMask:", .{@as(objc.NSUInteger, 2 | 16)});
-        objc.msg(void, host, "addSubview:", .{stage_view});
-        objc.msg(void, host, "addSubview:", .{self.nsview});
-        if (self.ctx.focus != 0) _ = objc.msg(objc.BOOL, self.window.nswindow, "makeFirstResponder:", .{self.nsview});
-        objc.release(host);
-        self.setTransparent(true);
-        self.hosted = true;
-        self.geometry_changed = true;
-    }
+    pub const attachBackdrop = events.attachBackdrop;
 
     /// Draws a frame at the display's next refresh: for changes from
     pub fn requestFrame(self: *Surface) void {
@@ -476,6 +474,7 @@ pub const Surface = struct {
         const link = self.display_link orelse return;
         const fps: f32 = if (seconds) |s| (if (s < 0.009) 0 else std.math.clamp(1 / @max(s, 0.001), 1, 60)) else 0;
         if (fps == self.link_fps) return;
+        const faster = (fps == 0 and self.link_fps > 0) or (fps > self.link_fps and self.link_fps > 0);
         if (fps == 0 and self.link_fps > 0) {
             if (self.frame_log) |*fl| fl.last_t = 0;
         }
@@ -483,13 +482,18 @@ pub const Surface = struct {
         const s = self.max_fps;
         const Range = extern struct { minimum: f32, maximum: f32, preferred: f32 };
         const range: Range = if (fps == 0) .{ .minimum = s, .maximum = s, .preferred = s } else .{ .minimum = fps, .maximum = fps, .preferred = fps };
+        if (self.paced and faster) objc.msg(void, link, "setPaused:", .{objc.YES});
         objc.msg(void, link, "setPreferredFrameRateRange:", .{range});
+        if (self.paced and faster) objc.msg(void, link, "setPaused:", .{objc.NO});
     }
 
     pub fn visible(self: *Surface) bool {
         if (!self.is_visible) {
             self.is_visible = objc.msg(objc.BOOL, self.window.nswindow, "isVisible", .{}) and (objc.msg(objc.NSUInteger, self.window.nswindow, "occlusionState", .{}) & 2 != 0);
-            if (self.is_visible and self.released) { self.released = false; self.renderer.resize(self.size, self.scale); }
+            if (self.is_visible and self.released) {
+                self.released = false;
+                self.renderer.resize(self.size, self.scale);
+            }
         }
         return self.is_visible;
     }
@@ -497,7 +501,9 @@ pub const Surface = struct {
     fn setPaced(self: *Surface, on: bool) void {
         if (self.paced == on) return;
         self.paced = on;
-        if (!on) if (self.frame_log) |*fl| { fl.last_t = 0; };
+        if (!on) if (self.frame_log) |*fl| {
+            fl.last_t = 0;
+        };
         if (self.display_link) |link| objc.msg(void, link, "setPaused:", .{!on});
     }
 
@@ -508,8 +514,13 @@ pub const Surface = struct {
             self.pending = true;
             self.released = true;
             self.renderer.resize(.{ .w = 1, .h = 1 }, self.scale);
+            self.text.images.trimDecoded();
+            _ = self.ctx.arena.reset(.{ .retain_with_limit = 64 * 1024 });
         } else if (!was and self.is_visible) {
-            if (self.released) { self.released = false; self.renderer.resize(self.size, self.scale); }
+            if (self.released) {
+                self.released = false;
+                self.renderer.resize(self.size, self.scale);
+            }
             if (self.pending) self.frame();
         }
     }
@@ -550,7 +561,7 @@ pub const Surface = struct {
             if (first == null or first.? != self.nsview) _ = objc.msg(objc.BOOL, self.window.nswindow, "makeFirstResponder:", .{self.nsview});
         } else if (self.last_focus != 0 and c.focus == 0) {
             const first = objc.msg(?objc.Object, self.window.nswindow, "firstResponder", .{});
-            if (first != null and first.? == self.nsview) {
+            if (first != null and first.? == self.nsview and c.selection.hit == null and !c.selection.dragging and c.selection.text.items.len == 0) {
                 if (self.keys_released) |kr| kr.func(kr.ctx, self);
             }
         }
@@ -574,20 +585,15 @@ pub const Surface = struct {
         self.tick_scheduled = true;
         objc.dispatchAfter(std.time.ns_per_s / 120, self, tick);
     }
-
     fn tick(ptr: ?*anyopaque) callconv(.c) void {
         const self: *Surface = @ptrCast(@alignCast(ptr));
         self.tick_scheduled = false;
-        if (self.dead) return self.gpa.destroy(self);
+        if (self.dead) return self.finishDestroy();
         self.frame();
     }
-
-    /// A point in the window's coordinates, in the view's (flipped) points.
     pub fn toView(self: *Surface, p: objc.CGPoint) types.Point {
         const local = objc.msg(objc.CGPoint, self.nsview, "convertPoint:fromView:", .{ p, @as(?objc.Object, null) });
         return .{ .x = @floatCast(local.x), .y = @floatCast(local.y) };
     }
 };
-
-// The run loop knows its common modes by this object, not by its name.
 extern "c" const NSRunLoopCommonModes: objc.Object;

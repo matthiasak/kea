@@ -231,6 +231,15 @@ fn shouldClose(ctx: *anyopaque, w: *nanoui.Window) bool {
     if (b.ext.popup != null) return true;
     for (kea.browsers.items) |o| if (o != b and !o.shut and o.window != null and o.ext.popup == null) return true;
     b.shut = true;
+    if (@import("../web/float.zig").floating(b) != null) @import("../web/float.zig").land(b);
+    for (b.tabs.items) |t| if (t.web) |wv| {
+        if (objc.msg(objc.BOOL, wv, "respondsToSelector:", .{objc.sel("pauseAllMediaPlaybackWithCompletionHandler:")}))
+            objc.msg(void, wv, "pauseAllMediaPlaybackWithCompletionHandler:", .{@as(?*anyopaque, null)});
+    };
+    for (b.parked.values()) |row| for (row.tabs.items) |t| if (t.web) |wv| {
+        if (objc.msg(objc.BOOL, wv, "respondsToSelector:", .{objc.sel("pauseAllMediaPlaybackWithCompletionHandler:")}))
+            objc.msg(void, wv, "pauseAllMediaPlaybackWithCompletionHandler:", .{@as(?*anyopaque, null)});
+    };
     b.flushSession();
     save(kea, true);
     if (w.isFullScreen()) w.setFullScreen(false) else w.hide();

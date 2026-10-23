@@ -1,4 +1,4 @@
-//! Text, whichever system shapes it: CoreText on macOS (`text_mac.zig`),
+//! Text, whichever system shapes it: CoreText on macOS and iOS (`text_mac.zig`),
 //! nanoui's own TrueType reader elsewhere (`text_tt.zig`), or there too
 //! when built with `-Dportable=true` (to test that path on a Mac). Both
 //! give the same interface: fonts, shaped and wrapped layouts, carets, and
@@ -11,7 +11,7 @@ const ctx_mod = @import("context.zig");
 const Context = ctx_mod.Context;
 
 /// nanoui's own text and CPU renderer, not CoreText and Metal.
-pub const portable = options.portable or builtin.os.tag != .macos;
+pub const portable = options.portable or !(builtin.os.tag == .macos or builtin.os.tag == .ios);
 const impl = if (portable) @import("text_tt.zig") else @import("text_mac.zig");
 
 pub const TextSystem = impl.TextSystem;
@@ -38,27 +38,15 @@ pub const Cut = struct {
 pub fn warmCaches(ts: *TextSystem) void {
     if (ts.layouts.capacity() < 8192) ts.layouts.ensureTotalCapacity(ts.gpa, 8192) catch {};
     if (ts.previous.capacity() < 8192) ts.previous.ensureTotalCapacity(ts.gpa, 8192) catch {};
-    if (ts.wraps.capacity() < 4096) ts.wraps.ensureTotalCapacity(ts.gpa, 4096) catch {};
+    if (ts.wraps.current.capacity() < 4096) ts.wraps.current.ensureTotalCapacity(ts.gpa, 4096) catch {};
     if (ts.atlas.sprites.capacity() < 4096) ts.atlas.sprites.ensureTotalCapacity(ts.gpa, 4096) catch {};
     if (ts.atlas.symbols.capacity() < 512) ts.atlas.symbols.ensureTotalCapacity(ts.gpa, 512) catch {};
+    if (ts.atlas.pixels.capacity < 16384) ts.atlas.pixels.ensureTotalCapacity(ts.gpa, 16384) catch {};
 }
 
 /// Retains recently shaped layouts across frames up to `max_layouts` so
 /// scrolling and search filtering do not re-allocate glyph slices on steady frames.
-pub fn retainLayouts(ts: *TextSystem) void {
-    if (ts.previous.count() == 0) return;
-    var it = ts.previous.iterator();
-    while (it.next()) |kv| {
-        if (ts.layouts.contains(kv.key_ptr.*) or ts.layouts.count() >= max_layouts) {
-            ts.gpa.free(kv.value_ptr.glyphs);
-        } else {
-            ts.layouts.put(ts.gpa, kv.key_ptr.*, kv.value_ptr.*) catch {
-                ts.gpa.free(kv.value_ptr.glyphs);
-            };
-        }
-    }
-    ts.previous.clearRetainingCapacity();
-}
+pub fn retainLayouts(_: *TextSystem) void {}
 
 fn cutKey(s: []const u8, style: types.TextStyle, zoom: f32, room: f32, mode: u2) u64 {
     const q_room: u64 = @intFromFloat(@round(@max(0, @min(room, 1e6)) * 2.0));

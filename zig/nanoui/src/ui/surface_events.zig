@@ -28,6 +28,7 @@ pub const methods = [_]objc.Method{
     .{ .name = "mouseMoved:", .imp = &mouseMoved, .types = "v@:@" },
     .{ .name = "mouseExited:", .imp = &mouseExited, .types = "v@:@" },
     .{ .name = "scrollWheel:", .imp = &scrollWheel, .types = "v@:@" },
+    .{ .name = "magnifyWithEvent:", .imp = &magnify, .types = "v@:@" },
     .{ .name = "keyDown:", .imp = &keyDown, .types = "v@:@" },
     .{ .name = "flagsChanged:", .imp = &flagsChanged, .types = "v@:@" },
     .{ .name = "paste:", .imp = &paste, .types = "v@:@" },
@@ -113,7 +114,7 @@ fn press(obj: objc.Object, event: objc.Object, button: input.Button) void {
     _ = objc.msg(objc.BOOL, s.window.nswindow, "makeFirstResponder:", .{obj});
     setMouse(s, event);
     s.ctx.updateHot();
-    s.ctx.input.click_count = @intCast(objc.msg(objc.NSInteger, event, "clickCount", .{}));
+    s.ctx.input.click_count = @intCast(std.math.clamp(objc.msg(objc.NSInteger, event, "clickCount", .{}), 0, 255));
     const eff_button: input.Button = if (button == .left and s.ctx.input.ctrl) .right else button;
     s.ctx.input.button = eff_button;
     if (eff_button == .left) {
@@ -127,8 +128,11 @@ fn press(obj: objc.Object, event: objc.Object, button: input.Button) void {
     s.ctx.text_menu = false;
     s.ctx.pointerDown();
     s.frame();
+    if (eff_button == .right and s.ctx.selection.text.items.len > 0) s.ctx.text_menu = true;
     if (s.ctx.focus == 0) {
-        if (s.keys_released) |kr| kr.func(kr.ctx, s);
+        if (s.ctx.selection.hit != null or s.ctx.selection.dragging or s.ctx.selection.text.items.len > 0) {
+            _ = objc.msg(objc.BOOL, s.window.nswindow, "makeFirstResponder:", .{obj});
+        } else if (s.keys_released) |kr| kr.func(kr.ctx, s);
     }
     if (s.ctx.text_menu) {
         s.ctx.text_menu = false;
@@ -211,6 +215,14 @@ fn mouseExited(obj: objc.Object, _: objc.SEL, _: objc.Object) callconv(.c) void 
     }
 }
 
+/// A trackpad's pinch: `input.zoom`, about the pointer.
+fn magnify(obj: objc.Object, _: objc.SEL, event: objc.Object) callconv(.c) void {
+    const s = surfaceOf(obj) orelse return;
+    setMouse(s, event);
+    s.ctx.input.zoom = @floatCast(@max(0.1, 1 + objc.msg(f64, event, "magnification", .{})));
+    s.frame();
+}
+
 fn scrollPhase(event: objc.Object) input.ScrollPhase {
     if (objc.msg(objc.NSUInteger, event, "momentumPhase", .{}) != 0) return .momentum;
     const p = objc.msg(objc.NSUInteger, event, "phase", .{});
@@ -269,6 +281,13 @@ fn keyDown(obj: objc.Object, _: objc.SEL, event: objc.Object) callconv(.c) void 
             s.frame();
             in.shortcut = null;
             if (s.ctx.shortcut_taken) return;
+            if (in.cmd and !in.ctrl and !in.alt and !in.shift) switch (key) {
+                'c' => return textinput.copy(s),
+                'x' => return textinput.cut(s),
+                'v' => return pasteText(s),
+                'a' => return textinput.selectAll(s),
+                else => {},
+            };
         }
     }
     if (code == 48 and !in.cmd and !in.ctrl and !in.alt and !s.ctx.focused_multiline and s.ctx.focusable_ids.items.len > 0) {
@@ -338,6 +357,30 @@ fn flagsChanged(obj: objc.Object, _: objc.SEL, event: objc.Object) callconv(.c) 
     s.frame();
 }
 
+fn pasteText(s: *Surface) void {
+    const pb = objc.msg(objc.Object, objc.class("NSPasteboard"), "generalPasteboard", .{});
+    const str = objc.msg(?objc.Object, pb, "stringForType:", .{objc.nsString("public.utf8-plain-text")});
+    const bytes = objc.fromNSString(str);
+    s.pasted.clearRetainingCapacity();
+    if (s.ctx.focused_multiline) {
+        var i: usize = 0;
+        while (i < bytes.len) : (i += 1) {
+            if (bytes[i] == '\r') {
+                if (i + 1 < bytes.len and bytes[i + 1] == '\n') i += 1;
+                s.pasted.append(s.gpa, '\n') catch return;
+            } else {
+                s.pasted.append(s.gpa, bytes[i]) catch return;
+            }
+        }
+    } else {
+        s.pasted.appendSlice(s.gpa, bytes) catch return;
+        for (s.pasted.items) |*ch| if (ch.* == '\n' or ch.* == '\r') {
+            ch.* = ' ';
+        };
+    }
+    textinput.paste(s, s.pasted.items);
+}
+
 fn paste(obj: objc.Object, _: objc.SEL, _: ?objc.Object) callconv(.c) void {
     const s = surfaceOf(obj) orelse return;
     // ⌘V goes to the view first, as other shortcuts do: it may paste what
@@ -347,16 +390,7 @@ fn paste(obj: objc.Object, _: objc.SEL, _: ?objc.Object) callconv(.c) void {
     s.frame();
     s.ctx.input.shortcut = null;
     if (s.ctx.shortcut_taken) return;
-    const pb = objc.msg(objc.Object, objc.class("NSPasteboard"), "generalPasteboard", .{});
-    const str = objc.msg(?objc.Object, pb, "stringForType:", .{objc.nsString("public.utf8-plain-text")});
-    const bytes = objc.fromNSString(str);
-    // One line: newlines become spaces.
-    s.pasted.clearRetainingCapacity();
-    s.pasted.appendSlice(s.gpa, bytes) catch return;
-    for (s.pasted.items) |*ch| if (ch.* == '\n' or ch.* == '\r') {
-        ch.* = ' ';
-    };
-    textinput.paste(s, s.pasted.items);
+    pasteText(s);
 }
 
 /// Where a drag is, in view points.
@@ -409,13 +443,17 @@ fn performDragOperation(obj: objc.Object, _: objc.SEL, info: objc.Object) callco
 
 fn metalDisplayLinkNeedsUpdate(obj: objc.Object, _: objc.SEL, _: objc.Object, update: objc.Object) callconv(.c) void {
     const s = surfaceOf(obj) orelse return;
-    const drawable = objc.msg(objc.Object, update, "drawable", .{});
     const target = objc.msg(f64, update, "targetPresentationTimestamp", .{});
+    const frame_in_due = s.ctx.frame_in != null and target >= s.frame_in_due - 0.001;
+    if (!s.full_pending and !frame_in_due and !s.ctx.animating and !s.in_live_resize and !s.geometry_changed and !s.retained_ready and !s.pending_sync and s.ctx.time_driven == .none) {
+        s.updatePacing(target, false);
+        return;
+    }
+    const drawable = objc.msg(objc.Object, update, "drawable", .{});
     const duration: f64 = if (s.link_fps > 0) 1.0 / @as(f64, s.link_fps) else 1.0 / @as(f64, @max(60.0, s.max_fps));
     s.renderer.given_drawable = drawable;
     defer s.renderer.given_drawable = null;
-    const frame_in_due = s.ctx.frame_in != null and target >= s.frame_in_due - 0.001;
-    if (!s.full_pending and !frame_in_due and !s.ctx.animating and !s.in_live_resize and !s.geometry_changed and !s.pending_sync and s.ctx.time_driven != .none) {
+    if (!s.full_pending and !frame_in_due and !s.ctx.animating and !s.in_live_resize and !s.geometry_changed and (s.retained_ready or (!s.pending_sync and s.ctx.time_driven != .none))) {
         s.redrawRetained(target, duration);
         return;
     }
@@ -527,4 +565,30 @@ fn beginDragSession(s: *Surface, req: @import("context_hooks.zig").DragRequest, 
     objc.msg(void, drag_item, "setDraggingFrame:contents:", .{ frame, img });
     const items = objc.msg(objc.Object, objc.class("NSArray"), "arrayWithObject:", .{drag_item});
     _ = objc.msg(?objc.Object, s.nsview, "beginDraggingSessionWithItems:event:source:", .{ items, event, s.nsview });
+}
+
+pub fn attachBackdrop(self: *Surface, stage_view: objc.Object) void {
+    const host_class = objc.defineClass(.{
+        .name = "NanoUIHostView",
+        .superclass = "NSView",
+        .methods = &.{.{ .name = "isFlipped", .imp = &yes, .types = "c@:" }},
+    });
+    const b = objc.msg(objc.CGRect, self.nsview, "bounds", .{});
+    const host = objc.msg(objc.Object, objc.msg(objc.Object, host_class, "alloc", .{}), "initWithFrame:", .{b});
+    objc.msg(void, host, "setWantsLayer:", .{objc.YES});
+    objc.msg(void, host, "setAutoresizingMask:", .{@as(objc.NSUInteger, 2 | 16)});
+    objc.msg(void, self.nsview, "retain", .{});
+    defer objc.msg(void, self.nsview, "release", .{});
+    objc.msg(void, self.window.nswindow, "setContentView:", .{host});
+    objc.msg(void, stage_view, "setFrame:", .{b});
+    objc.msg(void, stage_view, "setAutoresizingMask:", .{@as(objc.NSUInteger, 2 | 16)});
+    objc.msg(void, self.nsview, "setFrame:", .{b});
+    objc.msg(void, self.nsview, "setAutoresizingMask:", .{@as(objc.NSUInteger, 2 | 16)});
+    objc.msg(void, host, "addSubview:", .{stage_view});
+    objc.msg(void, host, "addSubview:", .{self.nsview});
+    if (self.ctx.focus != 0) _ = objc.msg(objc.BOOL, self.window.nswindow, "makeFirstResponder:", .{self.nsview});
+    objc.release(host);
+    self.setTransparent(true);
+    self.hosted = true;
+    self.geometry_changed = true;
 }

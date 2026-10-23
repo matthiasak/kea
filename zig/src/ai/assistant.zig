@@ -36,6 +36,13 @@ pub const Live = struct {
 /// What a provider off this Mac is sent, shown before the first question goes.
 pub const Notice = struct { provider_id: []u8, text: []u8 };
 
+pub const Attachment = struct {
+    id: u64,
+    name: []u8,
+    media_type: []u8,
+    data: []u8,
+    is_image: bool,
+};
 pub const Assistant = struct {
     gpa: A,
     m: *ai.Ai,
@@ -50,6 +57,8 @@ pub const Assistant = struct {
     draft: std.ArrayList(u8) = .empty,
     notice: ?Notice = null,
     shot: ?[]u8 = null,
+    attachments: std.ArrayList(Attachment) = .empty,
+    next_attachment_id: u64 = 1,
     /// A shared page has words addressed to an AI (see page_text.addressesAI).
     addressed: bool = false,
     listing: bool = false,
@@ -73,6 +82,11 @@ pub const Assistant = struct {
     pub const compactWith = more.compactWith;
     pub const cleanUp = more.cleanUp;
     pub const stop = more.stop;
+    pub const addAttachment = more.addAttachment;
+    pub const removeAttachment = more.removeAttachment;
+    pub const clearAttachments = more.clearAttachments;
+    pub const attachFilePath = more.attachFilePath;
+    pub const pasteFromClipboard = more.pasteFromClipboard;
 
     pub fn create(m: *ai.Ai, browser: ?*Browser, shy: bool) !*Assistant {
         const self = try m.gpa.create(Assistant);
@@ -93,6 +107,8 @@ pub const Assistant = struct {
         self.clearNotice();
         if (self.waiting) |w| self.gpa.free(w);
         if (self.shot) |s| self.gpa.free(s);
+        self.clearAttachments();
+        self.attachments.deinit(self.gpa);
         self.draft.deinit(self.gpa);
         self.naming.deinit(self.gpa);
         if (self.sugg_arena) |*sa| sa.deinit();
@@ -239,8 +255,8 @@ pub const Assistant = struct {
         const found = self.suggestions(arena.allocator()) catch &.{};
         if (found.len > 0) return self.pick(found[0]);
         const text = std.mem.trim(u8, self.draft.items, " \t\r\n");
-        if (text.len == 0) return;
-        const own = arena.allocator().dupe(u8, text) catch return;
+        if (text.len == 0 and self.attachments.items.len == 0 and self.shot == null) return;
+        const own = arena.allocator().dupe(u8, if (text.len > 0) text else "Describe this.") catch return;
         if (own[0] == '/') return self.run(own);
         if (self.ask(sse.prefix(own, 2000))) self.draft.clearRetainingCapacity();
     }
@@ -320,7 +336,7 @@ pub const Assistant = struct {
         const place = ubi.place(self.gpa, self.m, p, model) catch return;
         const q = self.gpa.dupe(u8, question) catch return self.gpa.free(place);
         self.clearLive();
-        self.live = .{ .id = Uuid.random(), .question = q, .place = place, .shot = self.shot != null };
+        self.live = .{ .id = Uuid.random(), .question = q, .place = place, .shot = self.shot != null or self.attachments.items.len > 0 };
         const tab: ?*Tab = if (self.sharesPage()) self.active() else null;
         runs.Send.start(self, p, model, tab);
     }
@@ -371,6 +387,11 @@ pub const Assistant = struct {
         const found = self.m.chats.chat(id) orelse return;
         self.stop();
         self.clearLive();
+        if (self.shot) |s| {
+            self.gpa.free(s);
+            self.shot = null;
+        }
+        self.clearAttachments();
         self.setChat(found);
         const r = ubi.quiet(self.m) orelse return;
         const first = for (self.chat.turns) |t| {
@@ -385,6 +406,11 @@ pub const Assistant = struct {
     pub fn new(self: *Assistant, keeping_pins: bool) void {
         self.stop();
         self.clearLive();
+        if (self.shot) |s| {
+            self.gpa.free(s);
+            self.shot = null;
+        }
+        self.clearAttachments();
         const c = fresh(if (keeping_pins) self.chat.pageHidden else false, if (keeping_pins) self.chat.pins else &.{});
         self.setChat(c);
     }

@@ -17,6 +17,17 @@ pub const Content = union(enum) {
     text: Text,
     icon: Icon,
     image: Image,
+    texture: Texture,
+    /// What a canvas draws (`ui.canvas`), at points within its box.
+    canvas: *const @import("draw.zig").Canvas,
+
+    /// One of this frame's textures (`Context.textures`), the part `uv`
+    /// (0 to 1) of it shown.
+    pub const Texture = struct {
+        slot: u32,
+        uv: [4]f32 = .{ 0, 0, 1, 1 },
+        opacity: f32 = 1,
+    };
 
     /// A picture: its key in the image atlas, and its bytes for the first
     /// time it is drawn.
@@ -121,6 +132,8 @@ pub const FrameStats = struct {
     instances: usize = 0,
 };
 const Anim = struct { value: f32, frame: u64 };
+/// A widget's own state (`Context.state`): a few bytes, kept while it's drawn.
+const Memory = struct { bytes: [48]u8 align(16), frame: u64 };
 
 pub const Context = struct {
     gpa: std.mem.Allocator,
@@ -129,6 +142,9 @@ pub const Context = struct {
     theme: Theme = .light,
     size: types.Size = .{},
     scale: f32 = 2,
+    /// What draws the frames: Metal, OpenGL (Linux, where there is a GPU),
+    /// or nanoui's own CPU renderer.
+    renderer: []const u8 = if (@import("text.zig").portable) "CPU" else "Metal",
     /// Seconds since the previous frame, for animations.
     dt: f32 = 1.0 / 60.0,
     /// Seconds since the first frame: the clock of animations a view drives itself.
@@ -150,12 +166,24 @@ pub const Context = struct {
     hits: std.ArrayList(Hit) = .empty,
     next_hits: std.ArrayList(Hit) = .empty,
     anims: std.AutoHashMapUnmanaged(u64, Anim) = .empty,
+    /// What widgets remember between frames (`state`).
+    memory: std.AutoHashMapUnmanaged(u64, Memory) = .empty,
+    /// What `ui.motion` remembers of each animated box.
+    motion_store: @import("motion/store.zig").Store = .{},
+    /// The system asks for reduced motion: `ui.motion` moves at once.
+    reduced_motion: bool = false,
+    /// Boxes of a higher layer met while painting, drawn after the page;
+    /// and the one being drawn so.
+    layers: std.ArrayList(u32) = .empty,
+    layer_root: u32 = std.math.maxInt(u32),
     scroll: std.AutoHashMapUnmanaged(u64, f32) = .empty,
     /// Rubber-band overscroll offset by box id (`scroll.zig`).
     overscroll: std.AutoHashMapUnmanaged(u64, f32) = .empty,
     scrollbars: std.AutoHashMapUnmanaged(u64, @import("scroll.zig").ScrollbarGeom) = .empty,
     scrollbar_drag: ?@import("scroll.zig").ScrollbarDrag = null,
     scroll_holding: bool = false,
+    /// The textures this frame shows (`ui.texture`), by slot.
+    textures: std.ArrayList(@import("gpu.zig").Texture) = .empty,
     edits: std.AutoHashMapUnmanaged(u64, EditState) = .empty,
     /// The largest scroll offset of each scrolling box in the last layout.
     scroll_max: std.AutoHashMapUnmanaged(u64, f32) = .empty,
@@ -209,6 +237,12 @@ pub const Context = struct {
     /// its empty space moves the window, as a title bar does: a view with
     /// a toolbar there makes it the toolbar's height.
     title_bar_height: f32 = 28,
+    /// The window's edges the system draws over, in points: on iOS the
+    /// status bar, the home indicator, the screen's corners and the
+    /// keyboard. Zero on the desktop, and in an iOS window that isn't
+    /// `full_bleed` (laid out inside it already). `ui.div(c).safeArea()`
+    /// pads by it.
+    safe_area: types.Edges = .{},
     /// Set by a view that follows the pointer inside one box (a graph's
     /// column under it, a crosshair): every move draws a frame while it is
     /// set, not only moves onto another box. Cleared each frame.
@@ -247,6 +281,7 @@ pub const Context = struct {
 
     pub fn deinit(c: *Context) void {
         c.arena.deinit();
+        c.textures.deinit(c.gpa);
         c.nodes.deinit(c.gpa);
         c.stack.deinit(c.gpa);
         c.a11y_items.deinit(c.gpa);
@@ -256,6 +291,9 @@ pub const Context = struct {
         c.next_hits.deinit(c.gpa);
         c.hot_path.deinit(c.gpa);
         c.anims.deinit(c.gpa);
+        c.motion_store.deinit(c.gpa);
+        c.memory.deinit(c.gpa);
+        c.layers.deinit(c.gpa);
         c.scroll.deinit(c.gpa);
         c.overscroll.deinit(c.gpa);
         c.scrollbars.deinit(c.gpa);
@@ -298,6 +336,7 @@ pub const Context = struct {
         }
         scroll_mod.updateScrollbarDrag(c);
         _ = c.arena.reset(.retain_capacity);
+        c.textures.clearRetainingCapacity();
         c.nodes.clearRetainingCapacity();
         c.stack.clearRetainingCapacity();
         c.next_hits.clearRetainingCapacity();
@@ -361,9 +400,19 @@ pub const Context = struct {
                 }
             }
             for (stale[0..n]) |k| _ = c.anims.remove(k);
+            c.motion_store.forget(c.frame, 120);
+            n = 0;
+            var mit = c.memory.iterator();
+            while (mit.next()) |e| {
+                if (n == stale.len) break;
+                if (c.frame - e.value_ptr.frame > 120) {
+                    stale[n] = e.key_ptr.*;
+                    n += 1;
+                }
+            }
+            for (stale[0..n]) |k| _ = c.memory.remove(k);
         }
         c.motion.prune(c.frame);
-        if (c.text_warmed) text.retainLayouts(c.text);
         if (@hasField(@TypeOf(c.text.images), "wants_frame") and c.text.images.wants_frame) c.animationFrame();
     }
 
@@ -395,6 +444,7 @@ pub const Context = struct {
         c.selection.next_order.ensureTotalCapacity(c.gpa, 1024) catch {};
         c.selection.lines.ensureTotalCapacity(c.gpa, 1024) catch {};
         c.truncates.ensureTotalCapacity(c.gpa, 4096) catch {};
+        _ = c.arena.allocator().alloc(u8, 64 * 1024) catch {};
     }
 
     fn childId(c: *Context, key: ?[]const u8) u64 {
@@ -457,40 +507,7 @@ pub const Context = struct {
         return c.childId(key);
     }
 
-    /// How the pointer relates to the box `index`, from the last layout.
-    pub fn interact(c: *Context, index: u32, opts: struct { focusable: bool = false }) Interaction {
-        const n = c.node(index);
-        n.interactive = true;
-        const id = n.id;
-        if (opts.focusable) c.focusable_ids.append(c.gpa, id) catch {};
-        const rect = c.rects.get(id);
-        // Presses go to the topmost box alone; hover to the boxes it is in too.
-        const top = c.hot == id;
-        const hovered = top or std.mem.indexOfScalar(u64, c.hot_path.items, id) != null;
-        const right_press = top and c.input.pressed and (c.input.button == .right or (c.input.button == .left and c.input.ctrl));
-        const left_press = top and c.input.pressed and c.input.button == .left and !c.input.ctrl;
-        if (top and c.input.pressed) {
-            c.active = id;
-            if (opts.focusable) c.focus = id else if (left_press) c.focus = 0;
-        }
-        // A drag that selected text is not a click.
-        const released = c.input.released and c.active == id and top and !c.selection.moved;
-        const clicked = released and c.input.button == .left and !c.input.ctrl;
-        if (top and c.hand_cursor) c.cursor_hand = true;
-        return .{
-            .id = id,
-            .rect = rect,
-            .hovered = hovered,
-            .pressed = c.active == id and c.input.down and c.input.button == .left and !c.input.ctrl,
-            .clicked = clicked,
-            .double_clicked = clicked and c.input.click_count >= 2,
-            .right_pressed = right_press,
-            .right_clicked = right_press,
-            .middle_clicked = released and c.input.button == .middle,
-            .focused = c.focus == id,
-            .a11y_step = if (c.input.a11y_step) |s| (if (s.id == id) s.dir else 0) else 0,
-        };
-    }
+    pub const interact = hooks.interact;
 
     const hooks = @import("context_hooks.zig");
     const scroll_mod = @import("scroll.zig");
@@ -506,18 +523,9 @@ pub const Context = struct {
     pub const addA11y = hooks.addA11y;
     pub const adjustable = hooks.adjustable;
     pub const a11yStep = hooks.a11yStep;
-    /// Whether this event is the key combination `want`, which the view then
-    /// takes: `if (c.shortcut(.{ .key = 'k', .cmd = true })) clear();`
-    pub fn shortcut(c: *Context, want_in: Shortcut) bool {
-        // Command shortcuts are Control ones where there is no Command key.
-        const want = want_in.native();
-        const s = (c.input.shortcut orelse return false).native();
-        if (s.key != want.key or s.cmd != want.cmd or s.ctrl != want.ctrl or s.alt != want.alt or s.shift != want.shift) return false;
-        c.shortcut_taken = true;
-        c.changed = true;
-        c.input.shortcut = null;
-        return true;
-    }
+    pub const shortcut = hooks.shortcut;
+    pub const state = hooks.state;
+    pub const animate = hooks.animate;
 
     /// Asks for another frame as soon as the display can show it: for
     /// views that animate from `time` every frame.
@@ -541,23 +549,6 @@ pub const Context = struct {
         c.frame_in = if (c.frame_in) |f| @min(f, seconds) else seconds;
     }
 
-    /// Moves `id`'s animated value toward `target`; returns the current value.
-    pub fn animate(c: *Context, id: u64, salt: u32, target: f32, speed: f32) f32 {
-        var h = std.hash.Wyhash.init(id);
-        h.update(std.mem.asBytes(&salt));
-        const key = h.final();
-        const gop = c.anims.getOrPut(c.gpa, key) catch return target;
-        if (!gop.found_existing) {
-            gop.value_ptr.* = .{ .value = target, .frame = c.frame };
-            return target;
-        }
-        const a = gop.value_ptr;
-        a.frame = c.frame;
-        const k = 1 - @exp(-speed * @min(c.dt, 0.1));
-        a.value += (target - a.value) * k;
-        if (@abs(target - a.value) < 0.002) a.value = target else c.animating = true;
-        return a.value;
-    }
 
     pub const addHit = hooks.addHit;
     pub const commitHits = hooks.commitHits;

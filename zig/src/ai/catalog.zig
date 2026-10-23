@@ -164,6 +164,8 @@ const Job = struct {
     found: ?[]u8 = null,
 
     fn fetch(raw: ?*anyopaque) callconv(.c) void {
+        const pool = objc.Pool.push();
+        defer pool.pop();
         const j: *Job = @ptrCast(@alignCast(raw.?));
         const a = std.heap.c_allocator;
         const session = urlsession.ephemeral(20);

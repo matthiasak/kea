@@ -32,9 +32,9 @@ pub const Shortcut = struct {
         return if (cp < 128) std.ascii.toLower(@intCast(cp)) else cp;
     }
 
-    /// As this platform has it: Command is Control off macOS.
+    /// As this platform has it: Command is Control off Apple's systems.
     pub fn native(s: Shortcut) Shortcut {
-        if (@import("builtin").os.tag == .macos or !s.cmd) return s;
+        if (@import("keys.zig").mac or !s.cmd) return s;
         var n = s;
         n.cmd = false;
         n.ctrl = true;
@@ -72,16 +72,18 @@ pub const Command = enum {
     select_line_start,
     select_line_end,
     select_all,
-    insert_newline,
-    insert_tab,
-    cancel,
-    copy,
-    cut,
-    /// ↑ and ↓: a line up or down in a text area; the start or end of a field.
+    /// A line up or down: a multiline field's; a single line's start or end.
     move_up,
     move_down,
     select_up,
     select_down,
+    insert_newline,
+    /// Option-Return, Shift-Return: a new line in a multiline field.
+    insert_line_break,
+    insert_tab,
+    cancel,
+    copy,
+    cut,
 };
 
 /// The focused text field as the last frame left it, for the input
@@ -185,6 +187,11 @@ pub const Input = struct {
     drop: ?Drop = null,
     /// VoiceOver's AXIncrement (+1) / AXDecrement (−1) on box `id`.
     a11y_step: ?struct { id: u64, dir: i8 } = null,
+    /// A pinch in this event (two fingers on a touch screen, a trackpad's
+    /// magnify): how much it scaled by (1: none), about `mouse`.
+    zoom: f32 = 1,
+    /// How far two fingers moved together in this event.
+    pan: types.Point = .{},
     key: ?Key = null,
     /// Text typed or pasted in this event.
     chars: []const u8 = "",
@@ -201,7 +208,7 @@ pub const Input = struct {
     /// The key that adds to a selection with a click: Command on the
     /// Mac, Control elsewhere.
     pub fn adding(i: Input) bool {
-        return if (comptime @import("builtin").os.tag == .macos) i.cmd else i.ctrl;
+        return if (comptime @import("keys.zig").mac) i.cmd else i.ctrl;
     }
 
     pub fn clearEdges(i: *Input) void {
@@ -212,6 +219,8 @@ pub const Input = struct {
         i.mods_changed = false;
         i.drop = null;
         i.a11y_step = null;
+        i.zoom = 1;
+        i.pan = .{};
         i.key = null;
         i.chars = "";
         i.ops = &.{};

@@ -322,6 +322,57 @@ test "stale focus dropped when field vanishes" {
     try testing.expectEqual(@as(u64, 0), t.ctx.focus);
 }
 
+test "double-click selects a word in a selectable box and copies even when a textField is focused" {
+    const Page = struct {
+        buf: ui.TextBuffer = .{},
+        fn view(s: *@This(), cx: *ui.Context) void {
+            const d = ui.div(cx).column().sizeFull().p(12).gap(12);
+            defer d.end();
+            {
+                const sel = ui.div(cx).column();
+                cx.node(sel.index).style.selectable = true;
+                defer sel.end();
+                ui.text(cx, "alpine parrot habitat", .{ .size = 13 });
+            }
+            _ = ui.textField(cx, &s.buf, .{ .placeholder = "Ask" });
+        }
+    };
+    var p: Page = .{};
+    defer p.buf.deinit();
+    var t: ui.Tester = undefined;
+    try t.init(testing.allocator, .init(&p, Page.view), .{ .width = 320, .height = 200 });
+    defer t.deinit();
+    t.settle(1);
+    const r = t.findText("alpine parrot habitat").?;
+    const x_parrot = r.x + t.ctx.text.caretX("alpine parrot habitat", .{ .size = 13 }, 9);
+    t.doubleClick(x_parrot, r.y + r.h / 2);
+    t.settle(1);
+    try testing.expectEqualStrings("parrot", t.ctx.selection.text.items);
+    t.textOps(&.{.{ .command = .copy }});
+    try testing.expectEqualStrings("parrot", t.clipboard.items);
+}
+
+test "multiline textArea preserves newlines on paste" {
+    const Area = struct {
+        buf: ui.TextBuffer = .{},
+        fn view(s: *@This(), cx: *ui.Context) void {
+            ui.column(cx, .{ .padding = .all(12), .width = .fill });
+            defer ui.end(cx);
+            _ = ui.textArea(cx, &s.buf, .{ .min_lines = 1, .max_lines = 6 });
+        }
+    };
+    var a: Area = .{};
+    defer a.buf.deinit();
+    var t: ui.Tester = undefined;
+    try t.init(testing.allocator, .init(&a, Area.view), .{ .width = 320, .height = 200 });
+    defer t.deinit();
+    t.settle(1);
+    t.click(20, 20);
+    t.textOps(&.{.{ .insert = "line one\nline two\nline three" }});
+    t.settle(1);
+    try testing.expectEqualStrings("line one\nline two\nline three", a.buf.text());
+}
+
 test {
     _ = @import("textedit.zig");
     _ = @import("scroll.zig");

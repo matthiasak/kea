@@ -27,6 +27,10 @@ pub const TitleBar = enum {
     default,
     /// Content under a transparent title bar; the traffic lights stay.
     hidden,
+    /// No frame at all: a panel with rounded corners and a shadow, above
+    /// other windows, that takes keys without bringing its app forward and
+    /// hides when it loses them (a menu bar extra's popover). macOS.
+    popover,
 };
 
 pub fn Callback(comptime Window: type) type {
@@ -65,6 +69,11 @@ pub fn Options(comptime Window: type) type {
         always_on_top: bool = false,
         /// Shown at once; otherwise call `show`.
         visible: bool = true,
+        /// iOS: the view spans the whole screen, under the status bar and
+        /// the home indicator, and keeps clear of them itself
+        /// (`ui.Context.safe_area`); without it, the view is laid out
+        /// inside the safe area. Elsewhere it changes nothing.
+        full_bleed: bool = false,
         /// Called as the window closes, before it is freed.
         on_close: ?Callback(Window) = null,
         /// Called after the window resized.

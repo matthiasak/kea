@@ -11,22 +11,52 @@ fn env(name: [*:0]const u8) ?[]const u8 {
     return if (getenv(name)) |v| std.mem.span(v) else null;
 }
 
+/// The CLIPBOARD selection: GTK 3's, or GTK 4's display's.
 fn board() ?*anyopaque {
     if (!gtk.load()) return null;
-    return gtk.api.gtk_clipboard_get(gtk.api.gdk_atom_intern("CLIPBOARD", 0));
+    if (gtk.v4) return gtk.v4api.gdk_display_get_clipboard(gtk.api.gdk_display_get_default() orelse return null);
+    return gtk.v3.gtk_clipboard_get(gtk.v3.gdk_atom_intern("CLIPBOARD", 0));
+}
+
+/// GTK 4 reads the clipboard only asynchronously: the answer, waited for
+/// on GLib's loop (as GTK 3's wait_for_text waits), a second at most.
+const Read = struct {
+    done: bool = false,
+    text: ?[*:0]u8 = null,
+    fn finish(source: *anyopaque, result: *anyopaque, data: ?*anyopaque) callconv(.c) void {
+        const r: *Read = @ptrCast(@alignCast(data));
+        r.text = gtk.v4api.gdk_clipboard_read_text_finish(source, result, null);
+        r.done = true;
+    }
+};
+
+fn readText4(b: *anyopaque) ?[*:0]u8 {
+    var r: Read = .{};
+    gtk.v4api.gdk_clipboard_read_text_async(b, null, Read.finish, &r);
+    var spins: usize = 0;
+    while (!r.done and spins < 1000) : (spins += 1) {
+        if (gtk.api.g_main_context_iteration(null, 0) == 0) std.Io.sleep(std.Io.Threaded.global_single_threaded.io(), .fromMilliseconds(1), .awake) catch {};
+    }
+    return r.text;
 }
 
 pub const clipboard = struct {
     pub fn readText(gpa: std.mem.Allocator) !?[]u8 {
         const b = board() orelse return null;
-        const s = gtk.api.gtk_clipboard_wait_for_text(b) orelse return null;
+        const s = (if (gtk.v4) readText4(b) else gtk.v3.gtk_clipboard_wait_for_text(b)) orelse return null;
         defer gtk.api.g_free(s);
         return try gpa.dupe(u8, std.mem.span(s));
     }
 
     pub fn writeText(text: []const u8) void {
         const b = board() orelse return;
-        gtk.api.gtk_clipboard_set_text(b, text.ptr, @intCast(text.len));
+        if (gtk.v4) {
+            var buf: std.ArrayList(u8) = .empty;
+            defer buf.deinit(std.heap.c_allocator);
+            buf.appendSlice(std.heap.c_allocator, text) catch return;
+            buf.append(std.heap.c_allocator, 0) catch return;
+            gtk.v4api.gdk_clipboard_set_text(b, @ptrCast(buf.items.ptr));
+        } else gtk.v3.gtk_clipboard_set_text(b, text.ptr, @intCast(text.len));
     }
 
     pub fn changeCount() isize {

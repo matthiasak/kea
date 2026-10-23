@@ -168,9 +168,18 @@ pub const Style = struct {
     opacity: f32 = 1,
     /// Moves the box after layout, without moving its siblings.
     offset: Point = .{},
+    /// Glides when the layout moves it (`ui.motion`'s `layout`): its id.
+    layout_motion: u64 = 0,
     /// Out of the flow: placed at its parent's content origin (plus
     /// `offset`), at its own size, over or under its siblings.
     absolute: bool = false,
+    /// With `absolute`: placed from the window's top left (plus `offset`),
+    /// not its parent's, unmoved by scrolling; `.fill` is the window's size.
+    fixed: bool = false,
+    /// Drawn above every box of a lower layer, wherever it is in the tree,
+    /// and not clipped by its parents: menus, popovers, dialogs, tooltips.
+    /// Its clicks come first too. 0 is the page.
+    layer: u8 = 0,
     /// Children are clipped to the box.
     clip: bool = false,
     /// A scrolling box that stays at its end as its content grows, while

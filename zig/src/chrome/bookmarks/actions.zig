@@ -85,14 +85,15 @@ pub const Held = struct { shift: bool = false, cmd: bool = false };
 /// leaves the list open for the next; with ⇧ it goes to the new tab, and
 /// the list closes.
 pub fn pickBookmark(b: *Browser, url: []const u8, in_new_tab: bool, held: Held) void {
-    const foreground = !in_new_tab or held.shift;
+    const new_tab = in_new_tab or held.cmd;
+    const foreground = !new_tab or held.shift;
     if (foreground) {
         b.bookmarking = false;
         if (isOpen(b)) b.overlay = null;
     }
-    if (in_new_tab) {
-        _ = b.open(url, .{ .foreground = foreground, .from = b.activeTab(), .may_wait = true });
-    } else b.visit(url, held.cmd);
+    if (new_tab) {
+        _ = b.open(url, .{ .foreground = foreground, .from = b.activeTab(), .may_wait = !foreground });
+    } else b.visit(url, false);
     b.redraw();
 }
 

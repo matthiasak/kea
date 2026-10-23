@@ -209,10 +209,16 @@ test "requests: shapes per wire, limits and thinking as Swift sets them" {
     try t.expect(std.mem.indexOf(u8, an_tools.body, "{\"type\":\"tool_use\",\"id\":\"call_1\",\"name\":\"search_history\",\"input\":{\"query\":\"kea\"}}") != null);
     try t.expect(std.mem.indexOf(u8, an_tools.body, "{\"role\":\"user\",\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"call_1\",\"content\":\"[{\\\"title\\\":\\\"Kea\\\",\\\"url\\\":\\\"https://kea.example/\\\"}]\"}]}") != null);
 
-    const ge_tools = try client.request(rig.ai, a, .{ .provider = ai.gemini, .model = "g", .system = "S", .messages = &tool_msgs, .key = "k3", .tools = true });
+    const ge_tools = try client.request(rig.ai, a, .{ .provider = ai.gemini, .model = "g", .system = "S", .messages = &tool_msgs, .key = "k3", .tools = true, .web_search = true, .thinking = 8192, .effort = .high });
     try t.expect(std.mem.indexOf(u8, ge_tools.body, "\"tools\":[{\"functionDeclarations\":[{\"name\":\"search_tabs\"") != null);
+    try t.expect(std.mem.indexOf(u8, ge_tools.body, "{\"googleSearch\":{}},{\"urlContext\":{}}") != null);
+    try t.expect(std.mem.indexOf(u8, ge_tools.body, "\"thinkingConfig\":{\"thinkingBudget\":8192}") != null);
     try t.expect(std.mem.indexOf(u8, ge_tools.body, "{\"functionCall\":{\"name\":\"search_history\",\"args\":{\"query\":\"kea\"}}}") != null);
     try t.expect(std.mem.indexOf(u8, ge_tools.body, "{\"functionResponse\":{\"name\":\"search_history\",\"response\":{\"result\":\"[{\\\"title\\\":\\\"Kea\\\",\\\"url\\\":\\\"https://kea.example/\\\"}]\"}}}") != null);
+
+    const or_plugins = try client.request(rig.ai, a, .{ .provider = ai.openRouter, .model = "google/gemini-3.8-flash", .system = "S", .messages = msgs[0..1], .key = "k", .web_search = true, .effort = .high });
+    try t.expect(std.mem.indexOf(u8, or_plugins.body, "\"plugins\":[{\"id\":\"web\"}]") != null);
+    try t.expect(std.mem.indexOf(u8, or_plugins.body, "\"reasoning\":{\"effort\":\"high\"}") != null);
 }
 
 test "allowed: a provider's own host only" {

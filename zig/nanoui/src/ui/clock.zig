@@ -8,7 +8,7 @@ extern "kernel32" fn QueryPerformanceFrequency(freq: *i64) callconv(.winapi) i32
 
 pub fn now() f64 {
     switch (builtin.os.tag) {
-        .macos => return CACurrentMediaTime(),
+        .macos, .ios => return CACurrentMediaTime(),
         .windows => {
             var c: i64 = 0;
             var f: i64 = 1;

@@ -58,13 +58,13 @@ fn createWebView(self: objc.Object, _: objc.SEL, wv: objc.Object, configuration:
         (toolbars != null and !objc.msg(objc.BOOL, toolbars.?, "boolValue", .{}));
     t.opener = source.id;
     b.prepare(t);
-    // The link menu's Open Link in New Tab: behind this tab.
-    if (page_view.takeBehind(wv)) {
-        if (b.prefs.uses_tab_groups and !t.shy) t.group_id = source.group_id;
-        b.tabs.insert(b.gpa, b.placeForNew(), t) catch @panic("OOM");
-        b.arrangeGroupedTabs(null);
-    } else {
-        b.adopt(t);
+    const flags = objc.msg(objc.NSUInteger, action, "modifierFlags", .{});
+    const cmd_behind = (flags & (1 << 20)) != 0 and (flags & (1 << 17)) == 0;
+    if (b.prefs.uses_tab_groups and !t.shy) t.group_id = source.group_id;
+    b.tabs.insert(b.gpa, b.placeForNew(), t) catch @panic("OOM");
+    b.arrangeGroupedTabs(null);
+    b.reindexTabs();
+    if (!page_view.takeBehind(wv) and !cmd_behind) {
         b.setActive(t.id);
         b.setEditing(false);
     }

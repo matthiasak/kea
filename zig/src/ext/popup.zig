@@ -496,10 +496,8 @@ fn closed(ctx: *anyopaque, _: *nanoui.Window) void {
         h.forget(self.web);
         h.destroy();
     }
-    objc.msg(void, self.web, "stopLoading", .{});
-    objc.msg(void, self.web, "setUIDelegate:", .{@as(?objc.Object, null)});
-    objc.msg(void, self.web, "setNavigationDelegate:", .{@as(?objc.Object, null)});
-    objc.msg(void, self.web, "removeFromSuperview", .{});
+    @import("capture_watch.zig").unwatch(self.web);
+    @import("../web/config.zig").teardownWebView(self.web);
     objc.release(self.web);
     heap.free(self.id);
     heap.destroy(self);

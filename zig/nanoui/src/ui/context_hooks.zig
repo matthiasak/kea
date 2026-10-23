@@ -194,3 +194,82 @@ fn hotPath(c: *Context, h: ctx_mod.Hit) void {
         at = n.parent;
     }
 }
+
+pub fn interact(c: *Context, index: u32, opts: struct { focusable: bool = false }) ctx_mod.Interaction {
+    const n = c.node(index);
+    n.interactive = true;
+    const id = n.id;
+    if (opts.focusable) c.focusable_ids.append(c.gpa, id) catch {};
+    const rect = c.rects.get(id);
+    const top = c.hot == id;
+    const hovered = top or std.mem.indexOfScalar(u64, c.hot_path.items, id) != null;
+    const right_press = top and c.input.pressed and (c.input.button == .right or (c.input.button == .left and c.input.ctrl));
+    const left_press = top and c.input.pressed and c.input.button == .left and !c.input.ctrl;
+    if (top and c.input.pressed) {
+        c.active = id;
+        if (opts.focusable) c.focus = id else if (left_press) c.focus = 0;
+    }
+    const released = c.input.released and c.active == id and top and !c.selection.moved;
+    const clicked = released and c.input.button == .left and !c.input.ctrl;
+    if (top and c.hand_cursor) c.cursor_hand = true;
+    return .{
+        .id = id,
+        .rect = rect,
+        .hovered = hovered,
+        .pressed = c.active == id and c.input.down and c.input.button == .left and !c.input.ctrl,
+        .clicked = clicked,
+        .double_clicked = clicked and c.input.click_count >= 2,
+        .right_pressed = right_press,
+        .right_clicked = right_press,
+        .middle_clicked = released and c.input.button == .middle,
+        .focused = c.focus == id,
+        .a11y_step = if (c.input.a11y_step) |s| (if (s.id == id) s.dir else 0) else 0,
+    };
+}
+
+pub fn shortcut(c: *Context, want_in: ctx_mod.Shortcut) bool {
+    const want = want_in.native();
+    const s = (c.input.shortcut orelse return false).native();
+    if (s.key != want.key or s.cmd != want.cmd or s.ctrl != want.ctrl or s.alt != want.alt or s.shift != want.shift) return false;
+    c.shortcut_taken = true;
+    c.changed = true;
+    c.input.shortcut = null;
+    return true;
+}
+
+pub fn state(c: *Context, comptime T: type, key: []const u8) *T {
+    comptime std.debug.assert(@sizeOf(T) <= 48 and @alignOf(T) <= 16);
+    var h = std.hash.Wyhash.init(c.peekId(null));
+    h.update("state:");
+    h.update(key);
+    const gop = c.memory.getOrPut(c.gpa, h.final()) catch {
+        const S = struct {
+            var spare: T = .{};
+        };
+        S.spare = .{};
+        return &S.spare;
+    };
+    if (!gop.found_existing) {
+        gop.value_ptr.* = .{ .bytes = undefined, .frame = c.frame };
+        @as(*T, @ptrCast(&gop.value_ptr.bytes)).* = .{};
+    }
+    gop.value_ptr.frame = c.frame;
+    return @ptrCast(&gop.value_ptr.bytes);
+}
+
+pub fn animate(c: *Context, id: u64, salt: u32, target: f32, speed: f32) f32 {
+    var h = std.hash.Wyhash.init(id);
+    h.update(std.mem.asBytes(&salt));
+    const key = h.final();
+    const gop = c.anims.getOrPut(c.gpa, key) catch return target;
+    if (!gop.found_existing) {
+        gop.value_ptr.* = .{ .value = target, .frame = c.frame };
+        return target;
+    }
+    const a = gop.value_ptr;
+    a.frame = c.frame;
+    const k = 1 - @exp(-speed * @min(c.dt, 0.1));
+    a.value += (target - a.value) * k;
+    if (@abs(target - a.value) < 0.002) a.value = target else c.animating = true;
+    return a.value;
+}

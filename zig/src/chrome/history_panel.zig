@@ -132,8 +132,13 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette) void {
     switch (act) {
         .none => {},
         .go => |u| {
-            sheet.close(b, .recalling);
-            if (b.activeTab()) |t| t.go(u);
+            if (c.input.cmd) {
+                _ = b.open(u, .{ .foreground = c.input.shift, .from = b.activeTab(), .may_wait = !c.input.shift });
+                if (c.input.shift) sheet.close(b, .recalling);
+            } else {
+                sheet.close(b, .recalling);
+                if (b.activeTab()) |t| t.go(u);
+            }
         },
         .forget => |k| {
             // Other Macs forget it too (`Sync.historyForgot`); first, while `k` lives.

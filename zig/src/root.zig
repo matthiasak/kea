@@ -16,6 +16,7 @@ pub const reader = @import("web/reader.zig");
 pub const curtain_js = @import("web/curtain_js.zig");
 pub const little = @import("web/little.zig");
 pub const float = @import("web/float.zig");
+pub const frame_rate = @import("web/frame_rate.zig");
 pub const float_panel = @import("web/float_panel.zig");
 pub const notifications = @import("web/notifications.zig");
 pub const link_bubble = @import("chrome/link_bubble.zig");

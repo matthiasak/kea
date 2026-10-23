@@ -41,8 +41,15 @@ pub const Ask = struct {
     max_tokens: u32 = 2048,
     /// Caps how many tokens Gemini thinks in first; null leaves it to the model.
     thinking: ?u32 = null,
+    effort: ?@import("../data/prefs.zig").AiEffort = null,
     tools: bool = false,
+    web_search: bool = false,
 };
+
+fn isReasoningModel(model: []const u8) bool {
+    return std.mem.startsWith(u8, model, "o1") or std.mem.startsWith(u8, model, "o3") or
+        std.mem.startsWith(u8, model, "o4") or std.mem.startsWith(u8, model, "gpt-5");
+}
 
 /// Where the answer goes. `done` comes once, last — unless the stream is
 /// cancelled first, when nothing more comes at all. Strings are borrowed
@@ -123,7 +130,10 @@ pub fn request(m: *const ai.Ai, a: std.mem.Allocator, q: Ask) (error{ RefusedHos
                 .model = q.model,
                 .stream = true,
                 .messages = said,
-                .tools = if (q.tools) @as(?std.json.Value, try client_messages.toolsFor(a, .openAI)) else null,
+                .tools = try client_messages.toolsForWithPlugins(a, .openAI, q.tools, false),
+                .plugins = if (p.is("openRouter") and q.web_search) @as(?[]const struct { id: []const u8 }, &.{.{ .id = "web" }}) else null,
+                .reasoning = if (p.is("openRouter") and q.effort != null) @as(?struct { effort: []const u8 }, .{ .effort = q.effort.?.apiName() }) else null,
+                .reasoning_effort = if (p.is("openAI") and q.effort != null and isReasoningModel(q.model)) @as(?[]const u8, q.effort.?.apiName()) else null,
                 // Only providers that keep nothing of the request.
                 .provider = if (p.is("openRouter")) @as(?struct { zdr: bool }, .{ .zdr = true }) else null,
                 // A limit on the answer, for every one: OpenAI's own models
@@ -141,7 +151,7 @@ pub fn request(m: *const ai.Ai, a: std.mem.Allocator, q: Ask) (error{ RefusedHos
                 .max_tokens = q.max_tokens,
                 .system = q.system,
                 .messages = said,
-                .tools = if (q.tools) @as(?std.json.Value, try client_messages.toolsFor(a, .anthropic)) else null,
+                .tools = try client_messages.toolsForWithPlugins(a, .anthropic, q.tools, q.web_search),
             });
         },
         .gemini => {
@@ -162,9 +172,9 @@ pub fn request(m: *const ai.Ai, a: std.mem.Allocator, q: Ask) (error{ RefusedHos
             body = try json.encode(a, .{
                 .systemInstruction = Parts{ .parts = sys },
                 .contents = contents,
-                .tools = if (q.tools) @as(?std.json.Value, try client_messages.toolsFor(a, .gemini)) else null,
+                .tools = try client_messages.toolsForWithPlugins(a, .gemini, q.tools, q.web_search),
                 .generationConfig = .{
-                    .maxOutputTokens = q.max_tokens,
+                    .maxOutputTokens = if (q.thinking) |t| (if (t > 1024 and q.max_tokens < t + 2048) t + 2048 else q.max_tokens) else q.max_tokens,
                     .thinkingConfig = if (q.thinking) |t| @as(?struct { thinkingBudget: u32 }, .{ .thinkingBudget = t }) else null,
                 },
             });

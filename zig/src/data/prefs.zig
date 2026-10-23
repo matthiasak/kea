@@ -19,13 +19,54 @@ pub const Glyph = enum { letters, icons };
 
 pub const ReaderTheme = enum { auto, light, sepia, dark };
 pub const ReaderWidth = enum { narrow, medium, wide };
+pub const AiEffort = enum {
+    low,
+    medium,
+    high,
+    max,
+
+    pub fn label(self: AiEffort) []const u8 {
+        return switch (self) {
+            .low => "Low",
+            .medium => "Medium",
+            .high => "High",
+            .max => "Max",
+        };
+    }
+
+    pub fn budget(self: AiEffort) u32 {
+        return switch (self) {
+            .low => 1024,
+            .medium => 4096,
+            .high => 8192,
+            .max => 16384,
+        };
+    }
+
+    pub fn apiName(self: AiEffort) []const u8 {
+        return switch (self) {
+            .low => "low",
+            .medium => "medium",
+            .high, .max => "high",
+        };
+    }
+
+    pub fn next(self: AiEffort) AiEffort {
+        return switch (self) {
+            .low => .medium,
+            .medium => .high,
+            .high => .max,
+            .max => .low,
+        };
+    }
+};
 // ponytail: Design.swift `Metrics` widths, here until design/metrics.zig (P3) holds them.
 pub const side_std: f32 = 232;
 pub const side_min: f32 = 176;
 pub const side_max: f32 = 440;
 pub const chat_std: f32 = 380;
 pub const chat_min: f32 = 300;
-pub const chat_max: f32 = 720;
+pub const chat_max: f32 = 10_000;
 
 /// `AIProvider.custom.home`.
 const custom_server = "http://127.0.0.1:8080/v1/";
@@ -66,6 +107,7 @@ pub const keys = .{
     .reader_width = "reader.width",
     .auto_scroll = "autoscroll",
     .fast_pages = "pages.120",
+    .fast_pages_power = "pages.120.power",
     .peeks_links = "links.peek",
     .little_links = "links.little",
     .always_shows_downloads = "downloads.button",
@@ -89,6 +131,9 @@ pub const keys = .{
     .lists_pins = "pins.list",
     .ai = "ai",
     .ubi_tools = "ai.tools",
+    .ai_web_search = "ai.web_search",
+    .ai_thinking = "ai.thinking",
+    .ai_effort = "ai.effort",
     .ai_provider = "ai.provider",
     .ai_server = "ai.server",
     .split_view = "splitView",
@@ -146,6 +191,7 @@ pub const Prefs = struct {
     reader_width: ReaderWidth = .medium,
     auto_scroll: bool = false,
     fast_pages: bool = false,
+    fast_pages_power: bool = true,
     peeks_links: bool = true,
     little_links: bool = false,
     always_shows_downloads: bool = false,
@@ -170,7 +216,9 @@ pub const Prefs = struct {
     lists_pins: bool = false,
     ai: bool = true,
     ubi_tools: bool = true,
-    /// An `AIProvider.id`; resolved against the catalog by its users.
+    ai_web_search: bool = true,
+    ai_thinking: bool = true,
+    ai_effort: AiEffort = .high,
     ai_provider: ?[]u8 = null,
     ai_server: []u8 = &.{},
     /// `ai.models`: provider id → model, where it isn't the default.

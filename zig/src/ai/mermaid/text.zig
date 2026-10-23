@@ -152,15 +152,20 @@ fn keep(a: std.mem.Allocator, out: *std.ArrayList([]const u8), raw: []const u8) 
     if (s.len > 0 and !std.mem.startsWith(u8, s, "%%")) try out.append(a, s);
 }
 
+pub fn replaceIfPresent(a: std.mem.Allocator, s: []const u8, needle: []const u8, replacement: []const u8) ![]const u8 {
+    if (std.mem.indexOf(u8, s, needle) == null) return s;
+    return std.mem.replaceOwned(u8, a, s, needle, replacement);
+}
+
 /// Unquoted, entity-decoded label lines, wrapped at 180 points.
 pub fn cleanLabel(a: std.mem.Allocator, raw: []const u8) !Lines {
     var s = trim(raw);
     if (s.len >= 2 and s[0] == '"' and s[s.len - 1] == '"') s = s[1 .. s.len - 1];
     for ([_][]const u8{ "<br/>", "<br />", "<br>", "<BR/>", "<BR />", "<BR>" }) |br| {
-        s = try std.mem.replaceOwned(u8, a, s, br, "\n");
+        s = try replaceIfPresent(a, s, br, "\n");
     }
     const entities = [_][2][]const u8{ .{ "&amp;", "&" }, .{ "&lt;", "<" }, .{ "&gt;", ">" }, .{ "&quot;", "\"" }, .{ "#quot;", "\"" } };
-    for (entities) |e| s = try std.mem.replaceOwned(u8, a, s, e[0], e[1]);
+    for (entities) |e| s = try replaceIfPresent(a, s, e[0], e[1]);
     var wrapped: std.ArrayList([]const u8) = .empty;
     var paragraphs = std.mem.splitScalar(u8, s, '\n');
     while (paragraphs.next()) |paragraph| {
@@ -189,10 +194,16 @@ pub fn cleanJoined(a: std.mem.Allocator, raw: []const u8) ![]const u8 {
     return std.mem.join(a, " ", try cleanLabel(a, raw));
 }
 
+var app_ready = false;
+
 /// Width of `text` in the system font, rounded up, as AppKit measures it.
 pub fn textWidth(text: []const u8, bold: bool, size: f64) f64 {
     const pool = objc.Pool.push();
     defer pool.pop();
+    if (!app_ready) {
+        _ = objc.msg(objc.Object, objc.class("NSApplication"), "sharedApplication", .{});
+        app_ready = true;
+    }
     const font = objc.msg(objc.Object, objc.class("NSFont"), if (bold) "boldSystemFontOfSize:" else "systemFontOfSize:", .{size});
     // NSFontAttributeName is @"NSFont".
     const attrs = objc.msg(objc.Object, objc.class("NSDictionary"), "dictionaryWithObject:forKey:", .{ font, objc.nsString("NSFont") });

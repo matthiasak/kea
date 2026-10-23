@@ -101,19 +101,40 @@ pub fn shaped(a: std.mem.Allocator, title: []const u8, address: ?[]const u8, tex
     return r;
 }
 
+const ai_patterns = [_][]const u8{
+    "(?i)\\b(ignore|disregard|forget)\\b.{0,20}\\b(previous|prior|above|earlier|all)\\b.{0,20}\\b(instructions?|prompts?|rules)\\b",
+    "(?im)^\\s*(system|assistant)\\s*:",
+    "(?im)^\\s*(system|assistant)\\s*$",
+    "(?i)<\\|?(im_start|im_end|system)\\|?>",
+    "(?i)\\b(you are|act as) (now )?(an? )?(ai|assistant|language model|llm|chatbot)\\b",
+    "(?i)\\b(ai|assistant|model|llm)s?\\b.{0,30}\\b(must|should) (tell|say|add|include|output)\\b",
+};
+
+const AiRegexes = [ai_patterns.len]regex.Regex;
+var ai_regex_cache: ?*AiRegexes = null;
+
+fn cachedAiRegexes() ?*const AiRegexes {
+    if (@atomicLoad(?*AiRegexes, &ai_regex_cache, .acquire)) |c| return c;
+    const fresh = std.heap.c_allocator.create(AiRegexes) catch return null;
+    for (&ai_patterns, 0..) |p, i| {
+        fresh[i] = regex.Regex.init(p) orelse {
+            for (fresh[0..i]) |r| r.deinit();
+            std.heap.c_allocator.destroy(fresh);
+            return null;
+        };
+    }
+    if (@cmpxchgStrong(?*AiRegexes, &ai_regex_cache, null, fresh, .acq_rel, .acquire)) |existing| {
+        for (fresh) |r| r.deinit();
+        std.heap.c_allocator.destroy(fresh);
+        return existing;
+    }
+    return fresh;
+}
+
 /// Words a page writes for a model rather than for you.
 pub fn addressesAI(text: []const u8) bool {
-    const patterns = [_][]const u8{
-        "(?i)\\b(ignore|disregard|forget)\\b.{0,20}\\b(previous|prior|above|earlier|all)\\b.{0,20}\\b(instructions?|prompts?|rules)\\b",
-        "(?im)^\\s*(system|assistant)\\s*:",
-        // A conversation's roles, alone on their lines, as a transcript
-        // written to be continued.
-        "(?im)^\\s*(system|assistant)\\s*$",
-        "(?i)<\\|?(im_start|im_end|system)\\|?>",
-        "(?i)\\b(you are|act as) (now )?(an? )?(ai|assistant|language model|llm|chatbot)\\b",
-        "(?i)\\b(ai|assistant|model|llm)s?\\b.{0,30}\\b(must|should) (tell|say|add|include|output)\\b",
-    };
-    for (patterns) |p| if (regex.contains(p, text)) return true;
+    const list = cachedAiRegexes() orelse return false;
+    for (list) |r| if (r.contains(text)) return true;
     return false;
 }
 

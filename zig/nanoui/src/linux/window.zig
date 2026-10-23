@@ -1,5 +1,7 @@
-//! Windows on Linux: a GtkWindow showing native UI drawn by nanoui. Pages
-//! (WebKitGTK) are not supported yet.
+//! Windows on Linux: a GtkWindow (GTK 4's, else GTK 3's) showing native UI
+//! drawn by nanoui. GTK 4 doesn't place windows (Wayland leaves that to
+//! the compositor): positions are GTK 3's. Pages (WebKitGTK) are not
+//! supported yet.
 const std = @import("std");
 const gtk = @import("gtk.zig");
 const App = @import("app.zig").App;
@@ -44,14 +46,14 @@ pub const Window = struct {
             .view => |v| self.view = v,
         }
         if (!app.gui) return self;
-        const win = g.gtk_window_new(0);
+        const win = if (gtk.v4) gtk.v4api.gtk_window_new() else gtk.v3.gtk_window_new(0);
         self.gtkwindow = win;
         self.setTitle(options.title);
         g.gtk_window_set_default_size(win, @intFromFloat(options.width), @intFromFloat(options.height));
         g.gtk_window_set_resizable(win, @intFromBool(options.resizable));
         gtk.connect(win, "destroy", @ptrCast(&onDestroy), self);
         self.surface = try Surface.create(self, self.view.?, options.theme);
-        if (options.x != null and options.y != null) self.setPosition(options.x.?, options.y.?) else g.gtk_window_set_position(win, 1);
+        if (options.x != null and options.y != null) self.setPosition(options.x.?, options.y.?) else self.center();
         if (options.always_on_top) self.setAlwaysOnTop(true);
         if (!app.flags.hidden and options.visible) self.show();
         return self;
@@ -76,12 +78,14 @@ pub const Window = struct {
 
     pub fn close(self: *Window) void {
         // Destroying it calls `finish`, which frees it.
-        if (self.gtkwindow) |win| gtk.api.gtk_widget_destroy(win) else self.finish();
+        if (self.gtkwindow) |win| {
+            if (gtk.v4) gtk.v4api.gtk_window_destroy(win) else gtk.v3.gtk_widget_destroy(win);
+        } else self.finish();
     }
 
     pub fn minimize(self: *Window) void {
         const win = self.gtkwindow orelse return;
-        gtk.api.gtk_window_iconify(win);
+        if (gtk.v4) gtk.v4api.gtk_window_minimize(win) else gtk.v3.gtk_window_iconify(win);
     }
 
     pub fn zoom(self: *Window) void {
@@ -96,8 +100,14 @@ pub const Window = struct {
         var w: c_int = 0;
         var h: c_int = 0;
         const win = self.gtkwindow orelse return .{ .x = 0, .y = 0, .width = self.width, .height = self.height };
-        gtk.api.gtk_window_get_position(win, &x, &y);
-        gtk.api.gtk_window_get_size(win, &w, &h);
+        if (gtk.v4) {
+            w = gtk.api.gtk_widget_get_allocated_width(win);
+            h = gtk.api.gtk_widget_get_allocated_height(win);
+            if (w <= 0 or h <= 0) gtk.v4api.gtk_window_get_default_size(win, &w, &h);
+        } else {
+            gtk.v3.gtk_window_get_position(win, &x, &y);
+            gtk.v3.gtk_window_get_size(win, &w, &h);
+        }
         return .{ .x = @floatFromInt(x), .y = @floatFromInt(y), .width = @floatFromInt(w), .height = @floatFromInt(h) };
     }
 
@@ -108,17 +118,17 @@ pub const Window = struct {
 
     pub fn setSize(self: *Window, width: f64, height: f64) void {
         const win = self.gtkwindow orelse return;
-        gtk.api.gtk_window_resize(win, @intFromFloat(width), @intFromFloat(height));
+        if (gtk.v4) gtk.api.gtk_window_set_default_size(win, @intFromFloat(width), @intFromFloat(height)) else gtk.v3.gtk_window_resize(win, @intFromFloat(width), @intFromFloat(height));
     }
 
     pub fn setPosition(self: *Window, x: f64, y: f64) void {
         const win = self.gtkwindow orelse return;
-        gtk.api.gtk_window_move(win, @intFromFloat(x), @intFromFloat(y));
+        if (!gtk.v4) gtk.v3.gtk_window_move(win, @intFromFloat(x), @intFromFloat(y));
     }
 
     pub fn center(self: *Window) void {
         const win = self.gtkwindow orelse return;
-        gtk.api.gtk_window_set_position(win, 1);
+        if (!gtk.v4) gtk.v3.gtk_window_set_position(win, 1);
     }
 
     pub fn setMinSize(self: *Window, width: f64, height: f64) void {
@@ -133,7 +143,7 @@ pub const Window = struct {
 
     pub fn setAlwaysOnTop(self: *Window, on: bool) void {
         const win = self.gtkwindow orelse return;
-        gtk.api.gtk_window_set_keep_above(win, @intFromBool(on));
+        if (!gtk.v4) gtk.v3.gtk_window_set_keep_above(win, @intFromBool(on));
     }
 
     pub fn isFullScreen(self: *Window) bool {
@@ -148,14 +158,19 @@ pub const Window = struct {
 
     pub fn show(self: *Window) void {
         const win = self.gtkwindow orelse return;
-        gtk.api.gtk_widget_show_all(win);
+        if (gtk.v4) gtk.v4api.gtk_widget_set_visible(win, 1) else gtk.v3.gtk_widget_show_all(win);
         gtk.api.gtk_window_present(win);
         if (self.surface) |s| gtk.api.gtk_widget_grab_focus(s.area);
     }
 
     pub fn hide(self: *Window) void {
         const win = self.gtkwindow orelse return;
-        gtk.api.gtk_widget_hide(win);
+        if (gtk.v4) gtk.v4api.gtk_widget_set_visible(win, 0) else gtk.v3.gtk_widget_hide(win);
+    }
+
+    /// Popovers are macOS's: none hides itself here.
+    pub fn justHidden(_: *Window) bool {
+        return false;
     }
 
     pub fn isVisible(self: *Window) bool {

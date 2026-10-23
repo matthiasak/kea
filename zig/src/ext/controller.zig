@@ -413,7 +413,11 @@ pub const Extensions = struct {
 
     pub const apple_passwords_id = "pejdijmoenmkgeppbflobdenhhabjlaj";
 
+    /// On, and able to work: macOS only lets a browser holding the passkeys
+    /// entitlement start Apple's helper (it is killed otherwise), so without it
+    /// Kea's own list keeps filling.
     pub fn usesApple(self: *Extensions) bool {
+        if (!self.kea.prefs.passkeys_possible) return false;
         return if (self.row(apple_passwords_id)) |r| r.enabled else false;
     }
 

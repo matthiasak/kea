@@ -7,18 +7,25 @@
 //! When it names a newer version, the zipped app is downloaded into the
 //! app's cache, checked against its sha256, unpacked, and kept only if
 //! its signature holds and is the running app's own team's. The app then
-//! offers "Restart to update" (`restart`). If the user quits instead, the
+//! offers "Restart to update" (`restart`). It goes on checking: a release
+//! newer still, while one waits, is fetched the same way and takes the
+//! waiting one's place, so an app left open for days restarts into the
+//! latest. If the user quits instead, the
 //! new bundle takes the old one's place as the app ends (`deinit`), and the
 //! next launch runs it.
 //!
 //! Only a bundle that can replace itself takes part: one with a version,
 //! signed by a team, and not running from a disk image or translocated.
-//! Elsewhere (a build run from zig-out, Linux, Windows) the state stays
-//! `off`. Nothing polls: the checks are timers, the work a short thread.
+//! On Linux and Windows the app is a lone program, updated by
+//! `update_portable.zig` when it was built with its version. Elsewhere (a
+//! build run from zig-out) the state stays `off`. Nothing polls: the checks
+//! are timers, the work a short thread.
 const std = @import("std");
 const builtin = @import("builtin");
 const mac = builtin.os.tag == .macos;
 const objc = if (mac) @import("objc.zig") else struct {};
+const portable = @import("update_portable.zig");
+const App = @import("nanoui.zig").App;
 const desktop = if (mac) @import("desktop.zig") else struct {};
 
 pub const Callback = struct {
@@ -29,8 +36,13 @@ pub const Callback = struct {
 pub const Options = struct {
     /// "owner/repo": its latest release carries `manifest.json` and `asset`.
     repo: []const u8,
-    /// The zipped app in each release (`nanoterm-macos-arm64.zip`).
+    /// This platform's archive in each release (`nanoterm-macos-arm64.zip`,
+    /// `nanoterm-linux-x86_64.tar.gz`, `nanoterm-windows-x86_64.zip`).
     asset: []const u8,
+    /// The running app's version where nothing else says it (Linux,
+    /// Windows: no bundle), set at build time; without it, updates are off
+    /// there.
+    version: []const u8 = "",
     /// The app's name: its cache directory (`~/Library/Caches/<name>`).
     name: []const u8,
     /// Called on the main thread when `ready` changes, to redraw.
@@ -43,7 +55,7 @@ pub const Phase = enum(u8) {
     /// This build can't update itself.
     off,
     idle,
-    /// A thread is checking or downloading.
+    /// No longer set: a check runs beside any phase (`Updater.checking`).
     busy,
     /// A newer version is unpacked and verified: `restart` installs it.
     ready,
@@ -62,34 +74,44 @@ pub const Updater = struct {
     bundle: []const u8 = "",
     current: []const u8 = "",
     cache: []const u8 = "",
-    /// The newer version and its unpacked bundle, written by the thread
-    /// before it publishes `ready`.
+    /// The newer version waiting and its unpacked bundle (main thread's).
     version_buf: [32]u8 = undefined,
     version_len: usize = 0,
     staged_buf: [1024]u8 = undefined,
     staged_len: usize = 0,
+    /// A check's thread is at work: it writes the version it fetched here,
+    /// and the main thread adopts it (`adopt`).
+    working: std.atomic.Value(bool) = .init(false),
+    next_version_buf: [32]u8 = undefined,
+    next_version_len: usize = 0,
+    next_staged_buf: [1024]u8 = undefined,
+    next_staged_len: usize = 0,
 
     /// Starts checking, if this build can update itself. Call from `main`,
     /// on the main thread; `deinit` before the app ends.
     pub fn start(init: std.process.Init, options: Options) !*Updater {
         const u = try init.gpa.create(Updater);
         u.* = .{ .gpa = init.gpa, .io = init.io, .options = options };
-        if (comptime !mac) return u;
-        u.detect(init.environ_map) catch return u;
+        if (comptime mac) u.detect(init.environ_map) catch return u else portable.detect(u, init.environ_map) catch return u;
         u.phase.store(.idle, .release);
-        objc.dispatchAfter(options.first_ms * std.time.ns_per_ms, u, tick);
+        App.after(options.first_ms, u, tick);
         return u;
     }
 
     /// Installs a version still waiting, for the next launch, and frees
     /// the updater (unless its thread is still at work: the app is ending).
     pub fn deinit(u: *Updater) void {
-        if (comptime mac) switch (u.phase.load(.acquire)) {
-            .busy => return,
+        if (u.working.load(.acquire)) return;
+        switch (u.phase.load(.acquire)) {
             .ready => u.install() catch |e| std.log.info("nanoui: update not installed: {t}", .{e}),
             else => {},
-        };
+        }
         u.free();
+    }
+
+    /// A check is running (it may find a version newer than one waiting).
+    pub fn checking(u: *const Updater) bool {
+        return u.working.load(.acquire);
     }
 
     /// The newer version that's ready to install, if one is.
@@ -98,27 +120,61 @@ pub const Updater = struct {
         return u.version_buf[0..u.version_len];
     }
 
-    /// Checks now (a menu's "Check for Updates"), unless a check is running.
+    /// Checks now (a menu's "Check for Updates"), unless a check is
+    /// running; with a version waiting, for one newer still.
     pub fn checkNow(u: *Updater) void {
-        if (comptime !mac) return;
-        if (u.phase.cmpxchgStrong(.idle, .busy, .acq_rel, .acquire) != null) return;
+        switch (u.phase.load(.acquire)) {
+            .off, .installed => return,
+            else => {},
+        }
+        if (u.working.swap(true, .acq_rel)) return;
         const t = std.Thread.spawn(.{}, work, .{u}) catch {
-            u.phase.store(.idle, .release);
+            u.working.store(false, .release);
             return;
         };
         t.detach();
     }
 
+    /// What a release must be newer than: the version waiting, else the
+    /// running one.
+    pub fn baseline(u: *const Updater) []const u8 {
+        return if (u.phase.load(.acquire) == .ready) u.version_buf[0..u.version_len] else u.current;
+    }
+
+    /// From the check's thread: `version`, unpacked at `staged`, to adopt.
+    pub fn stage(u: *Updater, version: []const u8, staged: []const u8) !void {
+        if (staged.len > u.next_staged_buf.len or version.len > u.next_version_buf.len) return error.NameTooLong;
+        @memcpy(u.next_staged_buf[0..staged.len], staged);
+        u.next_staged_len = staged.len;
+        @memcpy(u.next_version_buf[0..version.len], version);
+        u.next_version_len = version.len;
+    }
+
+    /// On the main thread: the version a check staged waits now, in place of
+    /// one that waited before (whose files go).
+    pub fn adopt(u: *Updater) void {
+        if (u.phase.load(.acquire) == .ready) {
+            var buf: [1024]u8 = undefined;
+            if (std.fmt.bufPrint(&buf, "{s}{c}updates{c}{s}", .{ u.cache, std.fs.path.sep, std.fs.path.sep, u.version_buf[0..u.version_len] })) |old| {
+                std.Io.Dir.cwd().deleteTree(u.io, old) catch {};
+            } else |_| {}
+        }
+        @memcpy(u.version_buf[0..u.next_version_len], u.next_version_buf[0..u.next_version_len]);
+        u.version_len = u.next_version_len;
+        @memcpy(u.staged_buf[0..u.next_staged_len], u.next_staged_buf[0..u.next_staged_len]);
+        u.staged_len = u.next_staged_len;
+        u.phase.store(.ready, .release);
+    }
+
     /// Installs the ready version and opens it once this process is gone.
     /// On true, quit the app (`App.quit`).
     pub fn restart(u: *Updater) bool {
-        if (comptime !mac) return false;
         if (u.phase.load(.acquire) != .ready) return false;
         u.install() catch |e| {
             std.log.info("nanoui: update not installed: {t}", .{e});
             return false;
         };
-        relaunch(u.io, u.bundle);
+        if (comptime mac) relaunch(u.io, u.bundle) else portable.relaunch(u);
         return true;
     }
 
@@ -147,13 +203,11 @@ pub const Updater = struct {
 
     fn tick(ctx: ?*anyopaque) callconv(.c) void {
         const u: *Updater = @ptrCast(@alignCast(ctx));
-        // Once installed or waiting, there's nothing more to look for.
-        switch (u.phase.load(.acquire)) {
-            .ready, .installed => return,
-            else => {},
-        }
+        // Once installed, there's nothing more to look for; while one
+        // waits, a newer one may come.
+        if (u.phase.load(.acquire) == .installed) return;
         u.checkNow();
-        objc.dispatchAfter(u.options.every_ms * std.time.ns_per_ms, u, tick);
+        App.after(u.options.every_ms, u, tick);
     }
 
     fn work(u: *Updater) void {
@@ -163,22 +217,25 @@ pub const Updater = struct {
             std.log.info("nanoui: no update: {t}", .{e});
             break :blk false;
         };
-        u.phase.store(if (got) .ready else .idle, .release);
-        if (got) objc.dispatchMain(u, changed);
+        if (got) App.onMain(u, adopted) else u.working.store(false, .release);
     }
 
-    fn changed(ctx: ?*anyopaque) callconv(.c) void {
+    fn adopted(ctx: ?*anyopaque) callconv(.c) void {
         const u: *Updater = @ptrCast(@alignCast(ctx));
+        u.adopt();
+        u.working.store(false, .release);
         if (u.options.changed) |cb| cb.func(cb.ctx);
     }
 
     /// Finds, downloads and verifies a newer version: true once it's staged.
     fn fetch(u: *Updater, a: std.mem.Allocator) !bool {
+        if (comptime !mac) return portable.fetch(u, a);
         const updates = try std.fs.path.join(a, &.{ u.cache, "updates" });
         const manifest = try run(a, u.io, &.{ "/usr/bin/curl", "-fsSL", "--max-time", "30", try url(a, u.feed, "manifest.json") });
         const release = try parseManifest(a, manifest, u.options.asset);
-        if (!newer(release.version, u.current)) {
-            std.Io.Dir.cwd().deleteTree(u.io, updates) catch {};
+        if (!newer(release.version, u.baseline())) {
+            // Nothing waits: what an older check left goes.
+            if (u.phase.load(.acquire) != .ready) std.Io.Dir.cwd().deleteTree(u.io, updates) catch {};
             return false;
         }
         const team = parseTeam(try runErr(a, u.io, &.{ "/usr/bin/codesign", "-dv", "--verbose=2", u.bundle })) orelse return error.Unsigned;
@@ -210,15 +267,12 @@ pub const Updater = struct {
         const v = try run(a, u.io, &.{ "/usr/bin/plutil", "-extract", "CFBundleShortVersionString", "raw", "-o", "-", plist });
         if (!std.mem.eql(u8, std.mem.trim(u8, v, " \n"), release.version)) return error.WrongVersion;
 
-        if (staged.len > u.staged_buf.len) return error.NameTooLong;
-        @memcpy(u.staged_buf[0..staged.len], staged);
-        u.staged_len = staged.len;
-        @memcpy(u.version_buf[0..release.version.len], release.version);
-        u.version_len = release.version.len;
+        try u.stage(release.version, staged);
         return true;
     }
 
     fn install(u: *Updater) !void {
+        if (comptime !mac) return portable.install(u);
         const staged = u.staged_buf[0..u.staged_len];
         try swap(u.gpa, u.io, staged, u.bundle);
         u.phase.store(.installed, .release);

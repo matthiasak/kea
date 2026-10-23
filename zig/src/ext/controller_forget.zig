@@ -286,7 +286,7 @@ const Forget = struct {
         const pool = objc.Pool.push();
         defer pool.pop();
         if (j.web) |w| {
-            objc.msg(void, w, "setNavigationDelegate:", .{@as(?objc.Object, null)});
+            @import("../web/config.zig").teardownWebView(w);
             objc.release(w);
             j.web = null;
         }

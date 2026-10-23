@@ -57,6 +57,14 @@ pub const Regex = struct {
         objc.release(r.re);
     }
 
+    pub fn contains(r: Regex, text: []const u8) bool {
+        const pool = objc.Pool.push();
+        defer pool.pop();
+        const s = str(text) orelse return false;
+        const m = objc.msg(NSRange, r.re, "rangeOfFirstMatchInString:options:range:", .{ s, @as(objc.NSUInteger, 0), whole(s) });
+        return m.location != not_found;
+    }
+
     /// Every match, whole, in order; on `a`.
     pub fn matches(r: Regex, a: std.mem.Allocator, text: []const u8) ![][]const u8 {
         const pool = objc.Pool.push();

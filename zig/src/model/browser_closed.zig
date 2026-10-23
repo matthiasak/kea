@@ -62,7 +62,7 @@ pub fn close(self: *Browser, tab: *Tab) void {
             if (any == null or t.touched > any.?.touched) any = t;
             if (t.pin == null and (loose == null or t.touched > loose.?.touched)) loose = t;
         }
-        if (loose orelse any) |back| self.select(back) else self.newTab();
+        if (loose orelse any) |back| @import("browser_tabs.zig").selectEx(self, back, false) else self.newTab();
         self.writeSession(true);
         return self.redraw();
     }
@@ -92,7 +92,7 @@ pub fn close(self: *Browser, tab: *Tab) void {
     if (self.active_id == id) {
         // The neighbour on the right, or the last one: through select, so
         // one never built yet wakes.
-        self.select(partner orelse self.tabs.items[@min(index, self.tabs.items.len - 1)]);
+        @import("browser_tabs.zig").selectEx(self, partner orelse self.tabs.items[@min(index, self.tabs.items.len - 1)], false);
     }
     self.rememberSession();
     self.redraw();
@@ -108,7 +108,7 @@ pub fn closeFront(self: *Browser) void {
 
 /// Everything but this one (and its pair's other page); pins are put down.
 pub fn closeOthers(self: *Browser, keep: *Tab) void {
-    self.select(keep);
+    @import("browser_tabs.zig").selectEx(self, keep, false);
     const partner = self.partnerOf(keep);
     var ids: std.ArrayList(u64) = .empty;
     defer ids.deinit(self.gpa);

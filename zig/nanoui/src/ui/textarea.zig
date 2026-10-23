@@ -148,8 +148,8 @@ pub fn textArea(c: *Context, buffer: *tf.TextBuffer, opts: AreaOptions) tf.Resul
                 .copy, .cut => if (e.caret != e.anchor) {
                     c.copy_done = true;
                 },
-                .insert_newline => {
-                    if (newline) tf.apply(buffer, e, .{ .insert = "\n" }, field, c.clipboard, &result) else result.submitted = true;
+                .insert_newline, .insert_line_break => {
+                    if (op.command == .insert_line_break or newline) tf.apply(buffer, e, .{ .insert = "\n" }, field, c.clipboard, &result) else result.submitted = true;
                     continue;
                 },
                 .move_up, .move_down, .select_up, .select_down => |m| {

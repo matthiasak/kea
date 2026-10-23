@@ -56,24 +56,36 @@ pub const icon_names = [_][]const u8{
 pub fn read(store: *Store) std.json.Parsed([]Space) {
     var p = store.load([]Space, file) orelse
         (json.decode([]Space, store.gpa, "[]") catch @panic("OOM"));
-    const saved = p.value;
-    const out = p.arena.allocator().alloc(Space, saved.len + 1) catch @panic("OOM");
-    out[0] = .{ .id = Uuid.first, .name = "Personal", .colour = 0 };
-    var n: usize = 1;
-    for (saved) |s| {
-        if (s.isFirst()) out[0] = s else {
-            out[n] = s;
-            n += 1;
-        }
-    }
-    p.value = out[0..n];
+    p.value = normalize(p.arena.allocator(), p.value, false);
     return p;
 }
 
-/// Written at once, then every window's list follows.
+fn normalize(a: std.mem.Allocator, saved: []const Space, copy_strings: bool) []Space {
+    const out = a.alloc(Space, saved.len + 1) catch @panic("OOM");
+    out[0] = .{ .id = Uuid.first, .name = if (copy_strings) (a.dupe(u8, "Personal") catch @panic("OOM")) else "Personal", .colour = 0 };
+    var n: usize = 1;
+    for (saved) |s| {
+        const item = if (copy_strings) (json.clone(a, s) catch @panic("OOM")) else s;
+        if (s.isFirst()) out[0] = item else {
+            out[n] = item;
+            n += 1;
+        }
+    }
+    return out[0..n];
+}
+
+/// Written to disk in the background, while every window's list follows at once.
 pub fn write(kea: *Kea, list: []const Space) void {
-    kea.store.save(file, list, true);
-    kea.spacesChanged();
+    const arena = kea.gpa.create(std.heap.ArenaAllocator) catch @panic("OOM");
+    arena.* = .init(kea.gpa);
+    const next: std.json.Parsed([]Space) = .{ .arena = arena, .value = normalize(arena.allocator(), list, true) };
+    kea.store.save(file, list, false);
+    kea.spaces.deinit();
+    kea.spaces = next;
+    for (kea.browsers.items) |b| {
+        if (kea.spaceIndex(b.space_id) == null) b.switchSpace(Uuid.first);
+        b.redraw();
+    }
 }
 
 // MARK: tests

@@ -23,6 +23,9 @@ pub const Options = struct {
     on_active: ?*const fn (ctx: ?*anyopaque, active: bool) void = null,
 };
 
+/// GTK 4's main loop, while it runs.
+var main_loop: ?*anyopaque = null;
+
 pub const App = struct {
     gpa: std.mem.Allocator,
     io: std.Io,
@@ -35,6 +38,8 @@ pub const App = struct {
     running: bool = false,
     stopping: bool = false,
     debug: bool = false,
+    /// `NANOUI_RENDERER=cpu`: draw native UI on the CPU even where OpenGL is.
+    cpu_only: bool = false,
 
     pub fn create(init: std.process.Init, options: Options) !*App {
         const gpa = init.gpa;
@@ -47,11 +52,14 @@ pub const App = struct {
             .options = options,
             .flags = flags,
             .debug = init.environ_map.get("NANOUI_DEBUG") != null,
+            .cpu_only = std.mem.eql(u8, init.environ_map.get("NANOUI_RENDERER") orelse "", "cpu"),
         };
         const headless = flags.snapshot != null or flags.generate_dir != null;
         if (!headless) {
             if (!gtk.load()) return error.GtkMissing;
-            if (gtk.api.gtk_init_check(null, null) == 0) return error.NoDisplay;
+            const ok = if (gtk.v4) gtk.v4api.gtk_init_check() else gtk.v3.gtk_init_check(null, null);
+            if (ok == 0) return error.NoDisplay;
+            if (self.debug) std.debug.print("nanoui: GTK {d}\n", .{@as(u8, if (gtk.v4) 4 else 3)});
             self.gui = true;
         }
         return self;
@@ -95,15 +103,35 @@ pub const App = struct {
         if (self.flags.snapshot) |path| return dev.snapshot(self, path);
         if (self.stopping or !self.gui) return;
         self.running = true;
-        gtk.api.gtk_main();
+        if (gtk.v4) {
+            // GTK 4 has no gtk_main: GLib's loop, quit by `quit`.
+            const loop = gtk.api.g_main_loop_new(null, 0);
+            main_loop = loop;
+            gtk.api.g_main_loop_run(loop);
+            main_loop = null;
+            gtk.api.g_main_loop_unref(loop);
+        } else gtk.v3.gtk_main();
         self.running = false;
     }
 
     pub fn quit(self: *App) void {
         if (self.stopping) return;
         self.stopping = true;
-        if (self.running) gtk.api.gtk_main_quit();
+        if (!self.running) return;
+        if (gtk.v4) {
+            if (main_loop) |loop| gtk.api.g_main_loop_quit(loop);
+        } else gtk.v3.gtk_main_quit();
     }
+
+    /// From any thread: calls `func(ctx)` on the main thread soon (GLib's
+    /// main context takes sources from any thread).
+    pub fn onMain(ctx: ?*anyopaque, func: *const fn (?*anyopaque) callconv(.c) void) void {
+        after(0, ctx, func);
+    }
+
+    /// Files the system asks the app to open: on macOS only; here a file
+    /// is named on the command line, which the app reads itself.
+    pub fn onOpenFiles(_: *App, _: *anyopaque, _: *const fn (ctx: *anyopaque, paths: []const []const u8) void) void {}
 
     /// Calls `func(ctx)` on the main thread after `ms` milliseconds.
     pub fn after(ms: u64, ctx: ?*anyopaque, func: *const fn (?*anyopaque) callconv(.c) void) void {

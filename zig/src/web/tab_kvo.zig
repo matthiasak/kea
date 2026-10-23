@@ -65,19 +65,29 @@ fn observe(self: objc.Object, _: objc.SEL, path: ?objc.Object, object: ?objc.Obj
     defer pool.pop();
     const key = objc.fromNSString(path);
     if (std.mem.eql(u8, key, "title")) {
-        t.setTitle(objc.fromNSString(objc.msg(?objc.Object, wv, "title", .{})));
+        const next = objc.fromNSString(objc.msg(?objc.Object, wv, "title", .{}));
+        if (std.mem.eql(u8, t.page_title, next)) return;
+        t.setTitle(next);
         return t.changed(.title);
     }
     if (std.mem.eql(u8, key, "URL")) return moved(t, wv);
     if (std.mem.eql(u8, key, "loading")) {
-        t.loading = flag(wv, "isLoading");
+        const next = flag(wv, "isLoading");
+        if (t.loading == next) return;
+        t.loading = next;
     } else if (std.mem.eql(u8, key, "canGoBack")) {
-        t.can_go_back = flag(wv, "canGoBack");
+        const next = flag(wv, "canGoBack");
+        if (t.can_go_back == next) return;
+        t.can_go_back = next;
     } else if (std.mem.eql(u8, key, "canGoForward")) {
-        t.can_go_forward = flag(wv, "canGoForward");
+        const next = flag(wv, "canGoForward");
+        if (t.can_go_forward == next) return;
+        t.can_go_forward = next;
     } else if (std.mem.eql(u8, key, audio)) {
         const new = if (change) |c| objc.msg(?objc.Object, c, "objectForKey:", .{objc.nsString("new")}) else null;
-        t.noisy = if (new) |n| objc.msg(objc.BOOL, n, "respondsToSelector:", .{objc.sel("boolValue")}) and objc.msg(objc.BOOL, n, "boolValue", .{}) else false;
+        const next = if (new) |n| objc.msg(objc.BOOL, n, "respondsToSelector:", .{objc.sel("boolValue")}) and objc.msg(objc.BOOL, n, "boolValue", .{}) else false;
+        if (t.noisy == next) return;
+        t.noisy = next;
     }
     // The capture states: the row's recording mark is an extension's
     // (ext/capture_watch.zig `marks`, RecordingIndicator.update); a page's
@@ -92,7 +102,12 @@ fn moved(t: *Tab, wv: objc.Object) void {
     if (fresh.len == 0 or std.mem.eql(u8, fresh, "about:blank")) return;
     // The page under a held address coming back is no move (ext/auth.zig).
     if (@import("../ext/auth.zig").heldStays(t, fresh)) return;
-    if (t.committed) |now| if (sameOrigin(now, fresh)) t.own(&t.committed, fresh);
+    var committed_changed = false;
+    if (t.committed) |now| if (sameOrigin(now, fresh) and !std.mem.eql(u8, now, fresh)) {
+        t.own(&t.committed, fresh);
+        committed_changed = true;
+    };
+    if (!committed_changed and t.address != null and std.mem.eql(u8, t.address.?, fresh)) return;
     t.own(&t.address, fresh);
     t.changed(.address);
 }

@@ -358,3 +358,29 @@ test "moving a floating tab lands it" {
     try t.expect(!app.float.showing());
     try t.expectEqual(moving.id, other.active_id);
 }
+
+test "background tabs open in click order next to active tab and visit(url, true) stays in background" {
+    var f: Fixture = undefined;
+    try f.init(t.allocator, .{});
+    defer f.deinit();
+    const b = f.browser;
+    const active = b.activeTab().?;
+    active.own(&active.address, "https://base.example/");
+    const trailing = b.open("https://trailing.example/", .{ .foreground = false, .at_end = true });
+    _ = trailing;
+    try t.expectEqual(active.id, b.active_id);
+
+    const t1 = b.open("https://one.example/", .{ .foreground = false, .from = active, .may_wait = true });
+    const t2 = b.open("https://two.example/", .{ .foreground = false, .from = active, .may_wait = true });
+    const t3 = b.open("https://three.example/", .{ .foreground = false, .from = active, .may_wait = true });
+    try t.expectEqual(active.id, b.active_id);
+    try t.expectEqual(active, b.tabs.items[0]);
+    try t.expectEqual(t1, b.tabs.items[1]);
+    try t.expectEqual(t2, b.tabs.items[2]);
+    try t.expectEqual(t3, b.tabs.items[3]);
+
+    // Cmd+Click bookmark (`visit(url, true)`) opens in the background after t3.
+    b.visit("https://bookmark.example/", true);
+    try t.expectEqual(active.id, b.active_id);
+    try t.expectEqualStrings("https://bookmark.example/", url(b.tabs.items[4]));
+}

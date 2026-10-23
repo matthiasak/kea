@@ -99,3 +99,56 @@ test "virtual chat list updates when starring or renaming a middle chat" {
     try t.expect(f.tester.hasText("Starred"));
     try t.expect(f.tester.hasText("Renamed third chat"));
 }
+
+test "Esc keeps Ubi Chat open, edge drag expands past 720, attachments send on Return, and 120 Hz power gate works" {
+    var f: Fixture = undefined;
+    try f.init(gpa, .{ .width = 1440, .height = 900 });
+    defer f.deinit();
+    const b = f.browser;
+    ready(b);
+    b.toggleChat();
+    f.tester.settle(1);
+    const a = b.assisting orelse return error.NoChat;
+
+    // Pressing Esc unfocuses composer / keeps Ubi Chat open (`b.assisting != null`).
+    _ = f.press("\x1b", 53, .{});
+    f.tester.settle(1);
+    try t.expect(b.assisting != null);
+
+    // Dragging Ubi Chat's edge handle expands `chat_width` past the old 720 cap (to ~900).
+    const edge = 1440 - b.prefs.chat_width + 4;
+    f.tester.drag(edge, 400, 1440 - 900, 400);
+    f.tester.settle(1);
+    try t.expect(b.prefs.chat_width >= 880);
+
+    // Attaching a buffer without typing text enables Send and submits on Return.
+    a.addAttachment("snippet.zig", "text/plain", "const x = 42;", false);
+    f.tester.settle(1);
+    try t.expect(f.tester.hasText("snippet.zig"));
+    a.submit();
+    f.tester.settle(1);
+    try t.expectEqual(@as(usize, 1), a.chat.turns.len);
+    try t.expect(a.chat.turns[0].shot);
+
+    // 120 Hz power gate (`fast_pages_power` + `frame_rate.power_override`).
+    const fr = @import("kea").frame_rate;
+    defer fr.power_override = null;
+    b.prefs.set("fast_pages", true);
+    b.prefs.set("fast_pages_power", true);
+    fr.power_override = true;
+    try t.expect(fr.effectiveFast(f.kea));
+    fr.power_override = false;
+    try t.expect(!fr.effectiveFast(f.kea));
+    b.prefs.set("fast_pages_power", false);
+    try t.expect(fr.effectiveFast(f.kea));
+
+    // Ubi Chat ModelPicker defaults: Thinking On, Effort High, Web Search On; clicking effort button cycles High -> Max -> Low.
+    try t.expect(b.prefs.ai_thinking);
+    try t.expectEqual(.high, b.prefs.ai_effort);
+    try t.expect(b.prefs.ai_web_search);
+    try t.expect(f.tester.hasText("High"));
+    try f.tester.clickText("High");
+    f.tester.settle(1);
+    try t.expectEqual(.max, b.prefs.ai_effort);
+    try t.expect(f.tester.hasText("Max"));
+}

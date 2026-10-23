@@ -1,0 +1,22 @@
+//! {{title}}'s state and its view. The view is a function of the state,
+//! drawn again on every input: a button reports its click as it's drawn,
+//! and changing the state there is all it takes.
+const std = @import("std");
+const nanoui = @import("nanoui");
+const ui = nanoui.ui;
+
+pub const State = struct {
+    count: i64 = 0,
+
+    pub fn view(s: *State, c: *ui.Context) void {
+        const root = ui.div(c).column().sizeFull().itemsCenter().justifyCenter().gap(16);
+        defer root.end();
+        ui.text(c, "{{title}}", .{ .size = 15, .color = c.theme.muted });
+        ui.text(c, c.print("{d}", .{s.count}), .{ .size = 56, .weight = .bold });
+        const buttons = ui.div(c).row().gap(8);
+        defer buttons.end();
+        if (ui.button(c, "−", .{ .size = 16 }).clicked) s.count -= 1;
+        if (ui.button(c, "Increment", .{ .variant = .primary, .size = 16 }).clicked) s.count += 1;
+        if (ui.button(c, "Reset", .{ .variant = .ghost, .size = 16, .disabled = s.count == 0 }).clicked) s.count = 0;
+    }
+};

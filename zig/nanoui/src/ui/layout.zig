@@ -67,7 +67,7 @@ pub fn measure(c: *Context, index: u32, avail_w: f32) types.Size {
             } else content = .{ .w = ic.size, .h = ic.size };
         },
         // Sized by its style (the widget gives the size).
-        .image => {},
+        .image, .texture, .canvas => {},
         .none => {
             var child = n.first_child;
             var count: f32 = 0;
@@ -192,6 +192,13 @@ pub fn arrange(c: *Context, index: u32, rect_in: types.Rect) void {
     while (child != none) : (child = c.node(child).next) {
         const ch = c.node(child);
         if (ch.style.absolute) {
+            if (ch.style.fixed) {
+                // From the window's corner, whatever scrolls.
+                const w = if (ch.style.width == .fill) c.size.w else ch.measured.w;
+                const h = if (ch.style.height == .fill) c.size.h else ch.measured.h;
+                arrange(c, child, .{ .x = 0, .y = 0, .w = w, .h = h });
+                continue;
+            }
             const w = if (ch.style.width == .fill) inner.w else ch.measured.w;
             const h = if (ch.style.height == .fill) inner.h else ch.measured.h;
             arrange(c, child, .{ .x = inner.x - scroll_x, .y = inner.y - scroll_y, .w = w, .h = h });

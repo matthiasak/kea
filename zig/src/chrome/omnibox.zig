@@ -169,6 +169,9 @@ fn applyKeys(ctx: ?*anyopaque, retry: bool) void {
     const t = Tab.alive(@intFromPtr(ctx)) orelse return;
     const b = t.browser orelse return;
     if (b.fieldShowing() or b.editing_tab != null) return;
+    if (b.window) |w| if (w.surface) |s| {
+        if (s.ctx.focus != 0 or s.ctx.selection.dragging or s.ctx.selection.text.items.len > 0) return;
+    };
     const wv = t.web orelse return;
     const window = objc.msg(?objc.Object, wv, "window", .{}) orelse {
         if (retry) objc.dispatchAfter(50 * std.time.ns_per_ms, ctx, giveKeysRetry);

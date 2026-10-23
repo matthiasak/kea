@@ -32,8 +32,29 @@ pub const State = struct {
     blocks_cache: std.AutoHashMapUnmanaged(u64, []const markdown.Block) = .empty,
     inlines_cache: std.AutoHashMapUnmanaged(u64, inline_.Shown) = .empty,
     diagrams_cache: std.AutoHashMapUnmanaged(u64, ?mermaid.Diagram) = .empty,
+    boxes: std.AutoHashMapUnmanaged(u64, BoxState) = .empty,
 
     pub const Picture = struct { bytes: []u8, used: f64 };
+    pub const BoxState = struct {
+        scale: f32 = 1.0,
+        height: f32 = 0,
+        pan_x: f32 = 0,
+        wrapped: bool = false,
+        col_scale: f32 = 1.0,
+        drag_start: f32 = 0,
+        drag_base: f32 = 0,
+    };
+
+    pub fn boxState(s: *State, gpa: std.mem.Allocator, id: u64) *BoxState {
+        const gop = s.boxes.getOrPut(gpa, id) catch {
+            const S = struct {
+                var spare: BoxState = .{};
+            };
+            return &S.spare;
+        };
+        if (!gop.found_existing) gop.value_ptr.* = .{};
+        return gop.value_ptr;
+    }
 
     pub fn deinit(s: *State, gpa: std.mem.Allocator) void {
         var it = s.pictures.valueIterator();
@@ -44,12 +65,19 @@ pub const State = struct {
         s.blocks_cache.deinit(gpa);
         s.inlines_cache.deinit(gpa);
         s.diagrams_cache.deinit(gpa);
+        s.boxes.deinit(gpa);
         if (s.cache_arena) |*ca| ca.deinit();
         s.* = .{};
     }
 
-    pub fn clearCache(s: *State) void {
-        if (s.cache_arena) |*ca| _ = ca.reset(.retain_capacity);
+    pub fn clearCache(s: *State, gpa: std.mem.Allocator) void {
+        var it = s.pictures.valueIterator();
+        while (it.next()) |v| gpa.free(v.bytes);
+        s.pictures.clearRetainingCapacity();
+        s.sources.clearRetainingCapacity();
+        s.copied.clearRetainingCapacity();
+        s.boxes.clearRetainingCapacity();
+        if (s.cache_arena) |*ca| _ = ca.reset(.{ .retain_with_limit = 256 * 1024 });
         s.blocks_cache.clearRetainingCapacity();
         s.inlines_cache.clearRetainingCapacity();
         s.diagrams_cache.clearRetainingCapacity();
@@ -93,7 +121,7 @@ pub fn cachedBlocks(st: *State, gpa: std.mem.Allocator, text: []const u8, cache:
     const k = textKey(text);
     if (st.blocks_cache.get(k)) |b| return b;
     if (!cache) return markdown.blocks(scratch, text) catch null;
-    if (st.blocks_cache.count() >= 512) st.clearCache();
+    if (st.blocks_cache.count() >= 512) st.clearCache(gpa);
     const a = st.arenaAlloc(gpa);
     const parsed = markdown.blocks(a, text) catch return null;
     st.blocks_cache.put(gpa, k, parsed) catch {};
@@ -213,9 +241,30 @@ fn mermaidCodeBlock(x: *const Ctx, language: []const u8, text: []const u8) void 
     const i = c.open(.{ .gap = 8, .width = .fill, .padding = .all(10), .background = p.wash, .radius = 10, .border = p.hairline }, null);
     defer c.end();
     const id = c.node(i).id;
+    const box = x.st.boxState(x.b.gpa, id);
+    const box_it = c.interact(i, .{});
+    if (box_it.hovered and c.input.zoom != 1.0) {
+        box.scale = std.math.clamp(box.scale * c.input.zoom, 0.5, 4.0);
+        c.changed = true;
+    }
     ui.row(c, .{ .gap = 6, .width = .fill, .align_items = .center });
     ui.text(c, language, .{ .size = 11 * z, .color = p.muted });
     ui.spacer(c);
+    if (!x.o.drawn) {
+        if (controls.door(c, p, "minus.magnifyingglass", .{ .help = "Shrink diagram" }).clicked) {
+            box.scale = std.math.clamp(box.scale - 0.25, 0.5, 4.0);
+            c.changed = true;
+        }
+        const pct: u32 = @intFromFloat(@round(box.scale * 100.0));
+        if (plate.quick(c, p, c.print("{d}%", .{pct}), null).clicked) {
+            box.scale = 1.0;
+            c.changed = true;
+        }
+        if (controls.door(c, p, "plus.magnifyingglass", .{ .help = "Stretch diagram" }).clicked) {
+            box.scale = std.math.clamp(box.scale + 0.25, 0.5, 4.0);
+            c.changed = true;
+        }
+    }
     if (controls.door(c, p, "chevron.left.forwardslash.chevron.right", .{ .help = "Show Code" }).clicked) {
         x.st.sources.put(x.b.gpa, id, {}) catch {};
         c.changed = true;
@@ -231,9 +280,53 @@ fn mermaidCodeBlock(x: *const Ctx, language: []const u8, text: []const u8) void 
         c.changed = true;
     }
     ui.end(c);
-    if (!x.o.drawn) ui.row(c, .{ .width = .fill, .scroll_x = true, .scroll_bar = false });
-    defer if (!x.o.drawn) ui.end(c);
-    ui.row(c, .{ .width = if (x.o.drawn) .fill else .auto, .justify = .center });
+    if (!x.o.drawn) {
+        const sc = c.open(.{ .direction = .row, .width = .fill, .scroll_x = true, .scroll_bar = true }, null);
+        const sc_id = c.node(sc).id;
+        const sc_it = c.interact(sc, .{});
+        if (sc_it.pressed) {
+            if (box.drag_start == 0) {
+                box.drag_start = c.input.mouse.x;
+                box.drag_base = c.scroll_x.get(sc_id) orelse 0;
+            }
+            c.setScroll(sc_id, .x, @max(0, box.drag_base - (c.input.mouse.x - box.drag_start)));
+            c.cursor = .closed_hand;
+            c.changed = true;
+        } else {
+            box.drag_start = 0;
+            if (sc_it.hovered) c.cursor = .open_hand;
+        }
+        ui.row(c, .{ .width = .auto, .justify = .center });
+        _ = ui.image(c, .{
+            .key = c.print("mermaid-{x}", .{pkey}),
+            .bytes = bytes,
+            .max_width = std.math.inf(f32),
+            .max_height = std.math.inf(f32),
+            .radius = 0,
+            .scale = 2.0 / box.scale,
+        });
+        ui.end(c);
+        c.end();
+        const bar = c.open(.{ .width = .fill, .height = .{ .px = 6 }, .align_items = .center, .justify = .center }, null);
+        const bar_it = c.interact(bar, .{});
+        c.addA11y(bar, .splitter, "Stretch diagram", "", false, true);
+        if (bar_it.hovered or bar_it.pressed) c.cursor = .resize_up_down;
+        if (bar_it.double_clicked) {
+            box.scale = 1.0;
+            c.changed = true;
+        } else if (bar_it.pressed) {
+            if (box.pan_x == 0) {
+                box.pan_x = c.input.mouse.y;
+                box.drag_base = box.scale;
+            }
+            box.scale = std.math.clamp(box.drag_base + (c.input.mouse.y - box.pan_x) / 160.0, 0.5, 4.0);
+            c.changed = true;
+        } else box.pan_x = 0;
+        _ = c.leaf(.{ .width = .{ .px = 32 }, .height = .{ .px = 3 }, .radius = 1.5, .background = if (bar_it.hovered or bar_it.pressed) p.muted else p.hairline }, .none, null);
+        c.end();
+        return;
+    }
+    ui.row(c, .{ .width = .fill, .justify = .center });
     defer ui.end(c);
     _ = ui.image(c, .{
         .key = c.print("mermaid-{x}", .{pkey}),
@@ -252,38 +345,86 @@ fn table(x: *const Ctx, header: []const []const u8, rows: []const []const []cons
     const c = x.c;
     const p = x.p;
     const a = c.alloc();
-    const head_style: ui.TextStyle = .{ .size = 12.5 * x.o.zoom, .weight = .semibold, .color = p.ink };
-    const cell_style: ui.TextStyle = .{ .size = 12.5 * x.o.zoom, .color = p.ink };
+    const z = x.o.zoom;
+    const outer = c.open(.{ .gap = 6, .width = if (x.o.drawn) .auto else .fill, .padding = .all(10), .background = p.wash, .radius = 8, .border = p.hairline, .selectable = true }, null);
+    defer c.end();
+    const id = c.node(outer).id;
+    const box = x.st.boxState(x.b.gpa, id);
+    const head_style: ui.TextStyle = .{ .size = 12.5 * z, .weight = .semibold, .color = p.ink };
+    const cell_style: ui.TextStyle = .{ .size = 12.5 * z, .color = p.ink };
     var columns = header.len;
     for (rows) |r| columns = @max(columns, r.len);
     const widths = a.alloc(f32, columns) catch return;
     @memset(widths, 0);
-    for (header, 0..) |cell, i| widths[i] = @max(widths[i], measure(x, cell, head_style));
+    const max_col: f32 = 280 * z * box.col_scale;
+    for (header, 0..) |cell, i| widths[i] = @max(widths[i], @min(max_col, @ceil(measure(x, cell, head_style) * box.col_scale)));
     for (rows) |r| for (r, 0..) |cell, i| {
-        widths[i] = @max(widths[i], measure(x, cell, cell_style));
+        widths[i] = @max(widths[i], @min(max_col, @ceil(measure(x, cell, cell_style) * box.col_scale)));
     };
-    var total: f32 = 14 * @as(f32, @floatFromInt(columns -| 1));
-    for (widths) |w| total += w;
+    const gaps: f32 = 14 * @as(f32, @floatFromInt(columns -| 1));
+    var natural: f32 = 0;
+    for (widths) |w| natural += w;
+    if (!x.o.drawn) if (c.rects.get(id)) |r| {
+        const avail = @max(0, r.w - 20 - gaps);
+        if (natural > 0 and natural < avail) {
+            const stretch = avail / natural;
+            for (widths) |*w| w.* = @round(w.* * stretch);
+            natural = 0;
+            for (widths) |w| natural += w;
+        }
+    };
+    const total = natural + gaps;
 
-    ui.column(c, .{ .width = if (x.o.drawn) .auto else .fill, .padding = .all(10), .background = p.wash, .radius = 8 });
-    defer ui.end(c);
-    if (!x.o.drawn) ui.row(c, .{ .width = .fill, .scroll_x = true, .scroll_bar = false });
-    defer if (!x.o.drawn) ui.end(c);
+    if (!x.o.drawn) {
+        const sc = c.open(.{ .direction = .row, .width = .fill, .scroll_x = true, .scroll_bar = true }, null);
+        const sc_id = c.node(sc).id;
+        const sc_it = c.interact(sc, .{});
+        if (sc_it.pressed and c.selection.hit == null and !c.selection.dragging) {
+            if (box.drag_start == 0) {
+                box.drag_start = c.input.mouse.x;
+                box.drag_base = c.scroll_x.get(sc_id) orelse 0;
+            }
+            c.setScroll(sc_id, .x, @max(0, box.drag_base - (c.input.mouse.x - box.drag_start)));
+            c.changed = true;
+        } else box.drag_start = 0;
+    }
     ui.column(c, .{ .gap = 6 });
-    defer ui.end(c);
     gridRow(x, header, widths, head_style);
     // `Divider()`: the system separator, not a Kea grey.
     _ = c.leaf(.{ .width = .{ .px = total }, .height = .{ .px = 1 }, .background = @import("../design/menu.zig").separatorColor(c.theme.dark) }, .none, null);
     for (rows) |r| gridRow(x, r, widths, cell_style);
+    ui.end(c);
+    if (!x.o.drawn) {
+        c.end();
+        const bar = c.open(.{ .width = .fill, .height = .{ .px = 6 }, .align_items = .center, .justify = .center }, null);
+        const bar_it = c.interact(bar, .{});
+        c.addA11y(bar, .splitter, "Stretch table", "", false, true);
+        if (bar_it.hovered or bar_it.pressed) c.cursor = .resize_left_right;
+        if (bar_it.double_clicked) {
+            box.col_scale = 1.0;
+            c.changed = true;
+        } else if (bar_it.pressed) {
+            if (box.pan_x == 0) {
+                box.pan_x = c.input.mouse.x;
+                box.drag_base = box.col_scale;
+            }
+            box.col_scale = std.math.clamp(box.drag_base + (c.input.mouse.x - box.pan_x) / 200.0, 0.6, 3.0);
+            c.changed = true;
+        } else box.pan_x = 0;
+        _ = c.leaf(.{ .width = .{ .px = 32 }, .height = .{ .px = 3 }, .radius = 1.5, .background = if (bar_it.hovered or bar_it.pressed) p.muted else p.hairline }, .none, null);
+        c.end();
+    }
 }
 
 fn gridRow(x: *const Ctx, cells: []const []const u8, widths: []const f32, style: ui.TextStyle) void {
     const c = x.c;
     ui.row(c, .{ .gap = 14 });
     defer ui.end(c);
+    var st = style;
+    st.wrap = true;
     for (cells, 0..) |cell, i| {
         ui.column(c, .{ .width = .{ .px = widths[i] } });
-        rich(x, cell, style, false);
+        rich(x, cell, st, true);
         ui.end(c);
     }
 }
@@ -343,7 +484,7 @@ fn follow(x: *const Ctx, i: u32, shown: inline_.Shown, spans: []const ui.Span, s
         const shy = if (x.b.assisting) |a| a.shy else false;
         // A private chat's links open private, out of a private tab; none: shut.
         const from = if (shy) shyTab(x.b) orelse return else x.b.activeTab();
-        _ = x.b.open(u, .{ .foreground = true, .from = from });
+        _ = x.b.open(u, .{ .foreground = !c.input.cmd or c.input.shift, .from = from, .may_wait = c.input.cmd and !c.input.shift });
         c.changed = true;
     };
 }
@@ -427,6 +568,7 @@ const Segments = struct {
 /// monospaced on wash (the assignment's; Swift's has no fill), strikethrough
 /// struck, a web link in the accent, underlined.
 fn toSpans(x: *const Ctx, shown: inline_.Shown) ![]const ui.Span {
+    if (shown.runs.len == 0) return &.{};
     const out = try x.c.alloc().alloc(ui.Span, shown.runs.len);
     for (shown.runs, out) |r, *sp| {
         const web = r.flags.link and for (shown.links) |l| {

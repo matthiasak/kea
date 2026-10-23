@@ -19,13 +19,13 @@ const ctx_mod = @import("context.zig");
 
 pub const Context = ctx_mod.Context;
 /// Springs and timed curves (`spring`, `springFrom`, `tween`).
-pub const motion = @import("motion.zig");
-pub const Spring = motion.Spring;
-pub const Curve = motion.Curve;
-pub const spring = motion.spring;
-pub const springFrom = motion.springFrom;
-pub const tween = motion.tween;
-pub const jump = motion.jump;
+const motion_legacy = @import("motion.zig");
+pub const Spring = motion_legacy.Spring;
+pub const Curve = motion_legacy.Curve;
+pub const spring = motion_legacy.spring;
+pub const springFrom = motion_legacy.springFrom;
+pub const tween = motion_legacy.tween;
+pub const jump = motion_legacy.jump;
 pub const Interaction = ctx_mod.Interaction;
 pub const FrameStats = ctx_mod.FrameStats;
 pub const frame_log = @import("frame_log.zig");
@@ -73,6 +73,13 @@ pub const scroll = widgets.scroll;
 pub const spacer = widgets.spacer;
 pub const divider = widgets.divider;
 pub const image = widgets.image;
+pub const texture = widgets.texture;
+/// A box to draw lines, triangles, polygons and circles in (draw.zig).
+pub const canvas = @import("draw.zig").canvas;
+pub const Canvas = @import("draw.zig").Canvas;
+pub const Stroke = @import("draw.zig").Stroke;
+pub const triangulate = @import("draw.zig").triangulate;
+pub const Texture = @import("gpu.zig").Texture;
 pub const ImageOptions = widgets.ImageOptions;
 pub const text = widgets.text;
 pub const textf = widgets.textf;
@@ -96,6 +103,8 @@ pub const textField = textfield.textField;
 pub const TextFieldOptions = textfield.Options;
 pub const TextBuffer = textfield.TextBuffer;
 pub const TextFieldResult = textfield.Result;
+/// Declarative, interruptible animation (springs, tweens, presence).
+pub const motion = @import("motion/motion.zig");
 pub const div = @import("div.zig").div;
 pub const Div = @import("div.zig").Div;
 pub const list = @import("list.zig").list;
@@ -146,15 +155,26 @@ test {
     _ = textfield;
     _ = @import("tests.zig");
     _ = @import("tests_keymap.zig");
+    _ = @import("tests_multiline.zig");
+    _ = @import("tests_texture.zig");
+    _ = @import("tests_canvas.zig");
+    _ = @import("triangulate.zig");
+    _ = @import("tests_layer.zig");
+    _ = @import("tests_safe_area.zig");
+    _ = @import("motion/motion.zig");
     _ = @import("keymap.zig");
     _ = @import("undo.zig");
     _ = @import("tests_cursor.zig");
     // CoreText's fast path, on macOS.
-    if (!@import("text.zig").portable) _ = @import("shaper.zig");
+    if (!@import("text.zig").portable) {
+        _ = @import("shaper.zig");
+        _ = @import("tests_wrap.zig");
+    }
     _ = @import("raster.zig");
     _ = @import("tests_raster.zig");
     _ = @import("glass.zig");
     _ = @import("tests_glass.zig");
+    if (@import("builtin").os.tag == .linux) _ = @import("tests_opengl.zig");
     _ = @import("tt/raster.zig");
     _ = @import("tt/tests.zig");
     _ = @import("png.zig");

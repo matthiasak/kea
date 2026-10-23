@@ -94,7 +94,9 @@ pub fn open(kea: *Kea, panel: SidePanel, browser: ?*Browser) ?*PanelWindow {
     };
     self.window = win;
     const ns = win.nswindow;
-    objc.msg(void, ns, "setStyleMask:", .{@as(objc.NSUInteger, 1 | 2 | 8)}); // titled, closable, resizable
+    objc.msg(void, ns, "setStyleMask:", .{@as(objc.NSUInteger, 1 | 2 | 4 | 8 | (1 << 15))}); // titled, closable, miniaturizable, resizable, fullSizeContentView
+    objc.msg(void, ns, "setTitlebarAppearsTransparent:", .{objc.YES});
+    objc.msg(void, ns, "setTitleVisibility:", .{@as(objc.NSInteger, 1)});
     objc.msg(void, ns, "setHidesOnDeactivate:", .{objc.NO});
     objc.msg(void, ns, "setMinSize:", .{objc.CGSize{ .width = 280, .height = 360 }});
     objc.msg(void, ns, "setFrame:display:", .{ spot, objc.YES });

@@ -175,11 +175,24 @@ fn eachTab(kea: *Kea, ctx: anytype, comptime f: fn (@TypeOf(ctx), *Tab) bool) ?*
     return null;
 }
 
+fn baseUrl(u: []const u8) []const u8 {
+    const end = std.mem.indexOfAny(u8, u, "?#") orelse u.len;
+    return std.mem.trimEnd(u8, u[0..end], "/");
+}
+
 /// An open, built tab showing `page_url` that isn't private.
 pub fn openTab(kea: *Kea, page_url: []const u8) ?*Tab {
-    return eachTab(kea, page_url, struct {
+    if (eachTab(kea, page_url, struct {
         fn f(want: []const u8, t: *Tab) bool {
             return !isPrivatePage(t) and t.web != null and std.mem.eql(u8, t.url(), want);
+        }
+    }.f)) |exact| return exact;
+    return eachTab(kea, page_url, struct {
+        fn f(want: []const u8, t: *Tab) bool {
+            if (isPrivatePage(t) or t.web == null) return false;
+            const tu = t.url();
+            if (tu.len == 0 or want.len == 0) return false;
+            return std.mem.eql(u8, baseUrl(tu), baseUrl(want)) or std.mem.startsWith(u8, tu, want);
         }
     }.f);
 }
@@ -323,4 +336,9 @@ test "a chat's name from the model's reply" {
     try std.testing.expect(title("\"…\"") != null);
     // Foundation's newlines and spaces, not only ASCII's.
     try std.testing.expectEqualStrings("Kea facts", title("\u{3000}\u{2028}\u{00A0}Kea facts\u{2029}and more").?);
+}
+
+test "baseUrl strips query, fragment, and trailing slash for SPA openTab matching" {
+    try std.testing.expectEqualStrings("https://app.example.com/dashboard", baseUrl("https://app.example.com/dashboard/?tab=metrics#chart"));
+    try std.testing.expectEqualStrings("https://app.example.com/dashboard", baseUrl("https://app.example.com/dashboard"));
 }

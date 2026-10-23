@@ -185,6 +185,7 @@ pub const StageHost = struct {
 
     fn detach(self: *StageHost, wv: objc.Object) void {
         if (objc.msg(?objc.Object, wv, "superview", .{}) == self.stage_view) {
+            objc.msg(void, wv, "setHidden:", .{objc.YES});
             objc.msg(void, wv, "removeFromSuperview", .{});
             self.dirty = true;
         }

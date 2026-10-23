@@ -554,7 +554,6 @@ pub const Browser = struct {
     pub fn redraw(self: *Browser) void {
         if (self.kea.ext) |e| @import("../ext/controller_follow.zig").followRow(e, self);
         const w = self.window orelse return;
-        self.syncStageHost();
         if (w.surface) |s| s.requestFrame();
     }
 

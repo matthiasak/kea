@@ -21,6 +21,8 @@ pub const Entry = struct {
     serial: usize,
     tag: u32 = 0,
     fading_out: bool = false,
+    radius: f32 = -1,
+    ground: ui.Color = .{ .r = -1, .g = 0, .b = 0, .a = 0 },
 };
 
 var next_serial: usize = 0;
@@ -82,7 +84,6 @@ pub const StagePictures = struct {
     }
 
     pub fn getEntry(self: *StagePictures, key: u64) ?*Entry {
-        self.prune();
         for (self.entries.items) |*e| {
             if (e.key == key) return e;
         }
@@ -121,12 +122,16 @@ pub const StagePictures = struct {
             self.clear();
             self.stage_view = stage_view;
         }
+        self.prune();
         next_serial +%= 1;
         if (next_serial == 0) next_serial = 1;
         const serial = next_serial;
+        const cached_radius: f32 = if (border == null) radius else -1;
         const view = if (self.getEntry(key)) |e| blk: {
             e.serial = serial;
             e.fading_out = false;
+            e.radius = cached_radius;
+            e.ground = ground;
             if (objc.msg(?objc.Object, e.view, "layer", .{})) |l| objc.msg(void, l, "removeAllAnimations", .{});
             break :blk e.view;
         } else blk: {
@@ -134,7 +139,7 @@ pub const StagePictures = struct {
             objc.msg(void, v, "setImageScaling:", .{@as(objc.NSUInteger, 2)}); // NSImageScaleNone
             objc.msg(void, v, "setImageAlignment:", .{@as(objc.NSUInteger, 2)}); // NSImageAlignTopLeft
             objc.msg(void, v, "setWantsLayer:", .{objc.YES});
-            self.entries.append(gpa, .{ .key = key, .view = v, .serial = serial }) catch {
+            self.entries.append(gpa, .{ .key = key, .view = v, .serial = serial, .radius = cached_radius, .ground = ground }) catch {
                 objc.release(v);
                 return;
             };
@@ -216,7 +221,11 @@ pub const StagePictures = struct {
                 if (objc.msg(?objc.Object, e.view, "image", .{})) |img| sizeImageToFill(img, rect);
             }
         }
-        styleLayer(e.view, radius, ground, null);
+        if (e.radius != radius or !std.meta.eql(e.ground, ground)) {
+            e.radius = radius;
+            e.ground = ground;
+            styleLayer(e.view, radius, ground, null);
+        }
         bringToFront(stage_view, e.view);
     }
 

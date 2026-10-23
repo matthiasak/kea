@@ -254,12 +254,16 @@ pub const Organizing = struct {
     ctx: *anyopaque,
     then: *const fn (*anyopaque, Outcome) void,
     /// The caller's hold on it, emptied when it is let go (`picks.organizeTask`).
-    slot: *?*Organizing,
+    slot: ?*?*Organizing,
     asking: Asking,
 
     /// Stopped: `then` never comes.
     pub fn cancel(o: *Organizing) void {
         o.dead = true;
+        if (o.slot) |s| {
+            if (s.* == o) s.* = null;
+            o.slot = null;
+        }
         if (!o.keying) {
             o.asking.cancel();
             o.free();
@@ -267,7 +271,9 @@ pub const Organizing = struct {
     }
 
     fn free(o: *Organizing) void {
-        if (o.slot.* == o) o.slot.* = null;
+        if (o.slot) |s| if (s.* == o) {
+            s.* = null;
+        };
         if (o.key) |k| o.gpa.free(k);
         o.asking.deinit();
         o.arena.deinit();
@@ -276,6 +282,7 @@ pub const Organizing = struct {
 
     fn keyed(raw: *anyopaque, key: ?[]u8) void {
         const o: *Organizing = @ptrCast(@alignCast(raw));
+        if (o.key) |k| o.gpa.free(k);
         o.key = key;
         if (o.dead) return o.free();
         o.keying = false;

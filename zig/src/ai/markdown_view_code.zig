@@ -22,6 +22,7 @@ pub fn block(x: *const view.Ctx, language: []const u8, text: []const u8, closed:
     const i = c.open(.{ .gap = 8, .width = .fill, .padding = .all(10), .background = p.wash, .radius = 10, .border = p.hairline }, null);
     defer c.end();
     const id = c.node(i).id;
+    const box = x.st.boxState(x.b.gpa, id);
     const is_mermaid = std.mem.eql(u8, language, "mermaid");
     const source = x.st.sources.contains(id);
     const diagram = if (is_mermaid and closed and !source) mermaid.diagram(c.alloc(), text) else null;
@@ -29,6 +30,10 @@ pub fn block(x: *const view.Ctx, language: []const u8, text: []const u8, closed:
     ui.row(c, .{ .gap = 6, .width = .fill, .align_items = .center });
     ui.text(c, if (language.len == 0) "Code" else language, .{ .size = 11 * z, .color = p.muted });
     ui.spacer(c);
+    if (!is_mermaid and !x.o.drawn and plate.quick(c, p, if (box.wrapped) "Unwrap" else "Wrap", null).clicked) {
+        box.wrapped = !box.wrapped;
+        c.changed = true;
+    }
     if (is_mermaid) {
         const help = if (source) "Show Diagram" else "Show Code";
         if (controls.door(c, p, if (source) "point.3.connected.trianglepath.dotted" else "chevron.left.forwardslash.chevron.right", .{ .help = help }).clicked) {
@@ -48,10 +53,9 @@ pub fn block(x: *const view.Ctx, language: []const u8, text: []const u8, closed:
     }
     ui.end(c);
 
-    if (!x.o.drawn) ui.row(c, .{ .width = .fill, .scroll_x = true, .scroll_bar = false });
-    defer if (!x.o.drawn) ui.end(c);
     if (diagram) |d| {
-        // `.frame(maxWidth: .infinity)`: centred when it has the width.
+        if (!x.o.drawn) ui.row(c, .{ .width = .fill, .scroll_x = true, .scroll_bar = true });
+        defer if (!x.o.drawn) ui.end(c);
         ui.row(c, .{ .width = if (x.o.drawn) .fill else .auto, .justify = .center });
         defer ui.end(c);
         const bytes = picture(x, text, d) orelse return;
@@ -61,26 +65,60 @@ pub fn block(x: *const view.Ctx, language: []const u8, text: []const u8, closed:
             .max_width = std.math.inf(f32),
             .max_height = std.math.inf(f32),
             .radius = 0,
-            .scale = 2,
+            .scale = 2.0 / box.scale,
         });
         return;
     }
+    const wrap_code = x.o.drawn or box.wrapped;
+    if (!x.o.drawn) {
+        _ = c.open(.{
+            .direction = .column,
+            .width = .fill,
+            .max_height = if (box.height > 0) box.height else std.math.inf(f32),
+            .scroll = box.height > 0,
+            .scroll_x = !wrap_code,
+            .scroll_bar = true,
+        }, null);
+    }
     const shown = if (std.mem.indexOfScalar(u8, text, '\r') != null) lf(c.alloc(), text) catch text else text;
     const spans: []const ui.Span = if (is_mermaid) highlighted(c.alloc(), p, shown) catch &.{} else &.{};
-    const style: ui.TextStyle = .{ .size = 12 * z, .mono = true, .color = p.ink, .wrap = x.o.drawn };
+    const style: ui.TextStyle = .{ .size = 12 * z, .mono = true, .color = p.ink, .wrap = wrap_code };
     // Mermaid's header line is 12 points whatever the zoom (`highlighted`):
     // zoomed, it is a line of its own between what comes before and after.
     const head: ?ui.Span = if (z != 1) for (spans) |sp| {
         if (sp.weight != null) break sp;
     } else null else null;
-    const parts = cut(c.alloc(), shown, spans, head) catch return;
-    ui.column(c, .{ .width = if (x.o.drawn) .fill else .auto, .selectable = true });
-    defer ui.end(c);
+    const parts = cut(c.alloc(), shown, spans, head) catch {
+        if (!x.o.drawn) c.end();
+        return;
+    };
+    ui.column(c, .{ .width = if (wrap_code) .fill else .auto, .selectable = true });
     for (parts) |part| if (part.text) |str| {
         var st = style;
         if (part.fixed) st.size = 12;
-        _ = c.leaf(.{ .width = if (x.o.drawn) .fill else .auto }, .{ .text = .{ .str = str, .style = st, .color = p.ink, .spans = part.spans } }, null);
+        _ = c.leaf(.{ .width = if (wrap_code) .fill else .auto }, .{ .text = .{ .str = str, .style = st, .color = p.ink, .spans = part.spans } }, null);
     };
+    ui.end(c);
+    if (!x.o.drawn) {
+        c.end();
+        const bar = c.open(.{ .width = .fill, .height = .{ .px = 6 }, .align_items = .center, .justify = .center }, null);
+        const bar_it = c.interact(bar, .{});
+        c.addA11y(bar, .splitter, "Stretch code block", "", false, true);
+        if (bar_it.hovered or bar_it.pressed) c.cursor = .resize_up_down;
+        if (bar_it.double_clicked) {
+            box.height = 0;
+            c.changed = true;
+        } else if (bar_it.pressed) {
+            if (box.pan_x == 0) {
+                box.pan_x = c.input.mouse.y;
+                box.drag_base = if (box.height > 0) box.height else 140;
+            }
+            box.height = std.math.clamp(box.drag_base + (c.input.mouse.y - box.pan_x), 60, 1200);
+            c.changed = true;
+        } else box.pan_x = 0;
+        _ = c.leaf(.{ .width = .{ .px = 32 }, .height = .{ .px = 3 }, .radius = 1.5, .background = if (bar_it.hovered or bar_it.pressed) p.muted else p.hairline }, .none, null);
+        c.end();
+    }
 }
 
 const Part = struct { text: ?[]const u8 = null, spans: []const ui.Span = &.{}, fixed: bool = false };

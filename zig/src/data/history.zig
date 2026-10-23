@@ -449,9 +449,18 @@ pub const History = struct {
         self.saving = null;
         // A cap, so the file can't grow without end: what goes is what has
         // been visited least and longest ago.
-        const list = self.best(self.gpa, json.now()) catch return;
+        const t = json.now();
+        const list = self.best(self.gpa, t) catch return;
         defer self.gpa.free(list);
         self.store.save(file_name, list, now);
+        if (self.visits.count() > cap + 128 and list.len == cap) {
+            const cutoff = score(list[cap - 1], t);
+            var i = self.visits.count();
+            while (i > 0 and self.visits.count() > cap) {
+                i -= 1;
+                if (score(self.visits.values()[i].visit, t) < cutoff) self.drop(self.visits.keys()[i]);
+            }
+        }
     }
 
     /// Up to `cap` visits, best score first; on `alloc`, strings borrowed.

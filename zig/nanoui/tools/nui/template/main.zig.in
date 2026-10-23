@@ -1,0 +1,17 @@
+//! {{title}}: one window showing the view in app.zig.
+const std = @import("std");
+const nanoui = @import("nanoui");
+const app_view = @import("app.zig");
+
+pub fn main(init: std.process.Init) !void {
+    const app = try nanoui.App.create(init, .{ .name = "{{title}}" });
+    defer app.destroy();
+    var state: app_view.State = .{};
+    _ = try app.newWindow(.{
+        .title = "{{title}}",
+        .width = 480,
+        .height = 360,
+        .content = .{ .view = .init(&state, app_view.State.view) },
+    });
+    try app.run();
+}

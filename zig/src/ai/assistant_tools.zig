@@ -26,6 +26,7 @@ pub const Round = struct {
     count: usize = 0,
     next_call: usize = 0,
     asked_with_tools: bool = false,
+    asked_with_web_search: bool = false,
 };
 
 pub fn onTool(raw: *anyopaque, ev: sse.ToolEvent) void {
@@ -78,7 +79,11 @@ pub fn ask(r: *Send) void {
     r.round.pending.clearRetainingCapacity();
 
     const use_tools = r.m.prefs.ubi_tools and !r.m.isNoTools(r.provider.id, r.model) and r.round.count < 3;
+    const use_web_search = r.m.prefs.ai_web_search and !r.m.isNoWebSearch(r.provider.id, r.model);
+    const thinking: ?u32 = if (r.m.prefs.ai_thinking) r.m.prefs.ai_effort.budget() else 0;
+    const effort = if (r.m.prefs.ai_thinking) r.m.prefs.ai_effort else null;
     r.round.asked_with_tools = use_tools;
+    r.round.asked_with_web_search = use_web_search;
     r.phase = .streaming;
     r.asking.begin(r.m, .{
         .provider = r.provider,
@@ -87,8 +92,10 @@ pub fn ask(r: *Send) void {
         .messages = msgs,
         .key = r.key,
         .max_tokens = 4096,
-        .thinking = 1024,
+        .thinking = thinking,
+        .effort = effort,
         .tools = use_tools,
+        .web_search = use_web_search,
     });
 }
 
@@ -96,11 +103,19 @@ pub fn ask(r: *Send) void {
 pub fn ended(r: *Send) bool {
     if (r.asking.dropped or r.dead) return false;
     if (r.asking.failure != null) {
-        if (r.asking.http_status == 400 and r.round.count == 0 and r.round.asked_with_tools) {
-            r.m.rememberNoTools(r.provider.id, r.model);
-            if (r.owner()) |self| if (self.live) |*l| l.answer.clearRetainingCapacity();
-            ask(r);
-            return true;
+        if (r.asking.http_status == 400 and r.round.count == 0) {
+            if (r.round.asked_with_web_search) {
+                r.m.rememberNoWebSearch(r.provider.id, r.model);
+                if (r.owner()) |self| if (self.live) |*l| l.answer.clearRetainingCapacity();
+                ask(r);
+                return true;
+            }
+            if (r.round.asked_with_tools) {
+                r.m.rememberNoTools(r.provider.id, r.model);
+                if (r.owner()) |self| if (self.live) |*l| l.answer.clearRetainingCapacity();
+                ask(r);
+                return true;
+            }
         }
         return false;
     }

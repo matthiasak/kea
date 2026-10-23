@@ -15,7 +15,23 @@ pub fn paint(c: *Context, out: *std.ArrayList(metal.Instance)) void {
     if (out.capacity < 4096) out.ensureTotalCapacity(c.gpa, 4096) catch {};
     c.scrollbars.clearRetainingCapacity();
     c.text.images.beginPaint();
-    paintNode(c, out, 0, types.Rect.infinite, 1, false);
+    c.layers.clearRetainingCapacity();
+    paintNode(c, out, 0, types.Rect.infinite, 1, false, 0);
+    // Higher layers over the page, lowest first; within one, in tree order.
+    var done: usize = 0;
+    while (done < c.layers.items.len) {
+        // What waits, by layer; insertion sort keeps tree order among equals.
+        std.sort.insertion(u32, c.layers.items[done..], c, struct {
+            fn lt(ctx: *Context, a: u32, b: u32) bool {
+                return ctx.node(a).style.layer < ctx.node(b).style.layer;
+            }
+        }.lt);
+        const idx = c.layers.items[done];
+        done += 1;
+        c.layer_root = idx;
+        paintNode(c, out, idx, types.Rect.infinite, 1, false, 0);
+    }
+    c.layer_root = std.math.maxInt(u32);
 }
 
 fn snap(v: f32, scale: f32) f32 {
@@ -26,9 +42,42 @@ fn push(c: *Context, out: *std.ArrayList(metal.Instance), inst: metal.Instance) 
     out.append(c.gpa, inst) catch {};
 }
 
-fn paintNode(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, clip: types.Rect, opacity_in: f32, selectable_in: bool) void {
-    const n = c.node(index);
+/// A canvas's shapes, moved to its box and clipped to it; those wholly
+/// outside what shows of it are left out.
+fn paintCanvas(c: *Context, out: *std.ArrayList(metal.Instance), cv: *const @import("draw.zig").Canvas, r: types.Rect, visible: types.Rect, opacity: f32) void {
+    const clip = metal.clip4(visible);
+    out.ensureUnusedCapacity(c.gpa, cv.shapes.items.len) catch return;
+    for (cv.shapes.items) |shape| {
+        var i = shape;
+        i.rect[0] += r.x;
+        i.rect[1] += r.y;
+        if (i.rect[0] > clip[2] or i.rect[1] > clip[3] or i.rect[0] + i.rect[2] < clip[0] or i.rect[1] + i.rect[3] < clip[1]) continue;
+        if (i.kind == metal.Kind.segment or i.kind == metal.Kind.triangle) {
+            i.uv[0] += r.x;
+            i.uv[1] += r.y;
+            i.uv[2] += r.x;
+            i.uv[3] += r.y;
+        }
+        if (i.kind == metal.Kind.triangle) {
+            i.border_color[0] += r.x;
+            i.border_color[1] += r.y;
+        }
+        i.color[3] *= opacity;
+        i.border_color[3] *= if (i.kind == metal.Kind.quad) opacity else 1;
+        i.clip = clip;
+        out.appendAssumeCapacity(i);
+    }
+}
+
+/// `scrolled`: how far the scrolling boxes it's in have scrolled it up.
+fn paintNode(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, clip: types.Rect, opacity_in: f32, selectable_in: bool, scrolled: f32) void {
+    const n = c.node(index).*;
     const st = n.style;
+    // A higher layer is drawn later, over the page.
+    if (st.layer > 0 and index != c.layer_root) {
+        c.layers.append(c.gpa, index) catch {};
+        return;
+    }
     const selectable = (selectable_in or st.selectable) and !st.control;
     const r = n.rect;
     const visible = r.intersect(clip);
@@ -97,7 +146,7 @@ fn paintNode(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, clip:
             .clip = clip4,
         });
         switch (n.content) {
-            .text => |*t| paintText(c, out, index, n, t, clip4, opacity, selectable, moving),
+            .text => |*t| paintText(c, out, index, &n, t, clip4, opacity, selectable, moving),
             .icon => |ic| if (c.text.atlas.symbol(ic.name, ic.size, @intFromEnum(ic.weight))) |sp| {
                 // Centered in its box, which may be larger (a fixed frame).
                 const inner = r.inset(st.padding);
@@ -123,6 +172,16 @@ fn paintNode(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, clip:
                 .kind = metal.Kind.image,
                 .clip = clip4,
             }),
+            .texture => |tx| push(c, out, .{
+                .rect = rect4,
+                .color = .{ 1, 1, 1, tx.opacity * opacity },
+                .uv = tx.uv,
+                .radius = st.radius,
+                .kind = metal.Kind.texture,
+                .border_width = @floatFromInt(tx.slot),
+                .clip = clip4,
+            }),
+            .canvas => |cv| paintCanvas(c, out, cv, r, visible, opacity),
             .none => {},
         }
     }
@@ -136,11 +195,23 @@ fn paintNode(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, clip:
     }
     const first = out.items.len;
     var child = n.first_child;
-    while (child != none) : (child = c.node(child).next) paintNode(c, out, child, child_clip, opacity, selectable);
+    const inner_scrolled = scrolled + if (st.scroll) c.scroll.get(n.id) orelse 0 else 0;
+    while (child != none) : (child = c.node(child).next) paintNode(c, out, child, child_clip, opacity, selectable, inner_scrolled);
     if ((st.clip or st.scroll or st.scroll_x) and st.radius > 0) roundClip(out.items[first..], r, visible, st.radius);
 
-    if (st.scroll or st.scroll_x) @import("scroll.zig").paintScrollbars(c, out, n.*, visible, opacity);
-    if (st.scale != 1) scaleItems(out.items[start..], r, st.scale, st.scale_anchor, clip4);
+    if (st.scroll or st.scroll_x) @import("scroll.zig").paintScrollbars(c, out, n, visible, opacity);
+    if (st.scale != 1) scaleItems(out.items[start..], r, @max(st.scale, 0), st.scale_anchor, clip4);
+    if (st.layout_motion != 0) {
+        // Where the layout put it, scrolling aside: a scroll isn't a move.
+        var placed = r;
+        placed.y += scrolled;
+        const d = @import("motion/layout.zig").shift(c, st.layout_motion, placed);
+        if (d[0] != 0 or d[1] != 0) for (out.items[start..]) |*it| {
+            it.rect[0] += d[0];
+            it.rect[1] += d[1];
+            if (!std.mem.eql(f32, &it.clip, &clip4) and it.clip[0] > -1e5) it.clip = .{ it.clip[0] + d[0], it.clip[1] + d[1], it.clip[2] + d[0], it.clip[3] + d[1] };
+        };
+    }
 
     if (st.spin != 0) c.time_driven = .fast;
     const pulse = if (c.reduce_motion) null else st.pulse;

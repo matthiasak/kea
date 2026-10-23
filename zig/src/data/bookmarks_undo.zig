@@ -42,6 +42,10 @@ pub fn retire(self: *Bookmarks) void {
     };
     // A new change: what was undone can't be redone any more.
     if (h.replaying == .none) drop(&h.redos);
+    if (into.items.len >= 32) {
+        var oldest = into.orderedRemove(0);
+        oldest.arena.deinit();
+    }
     into.append(self.gpa, old) catch {
         var lost = old;
         lost.arena.deinit();

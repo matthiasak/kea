@@ -124,7 +124,7 @@ pub fn picture(c: *ui.Context, p: *const Palette, e: *Extensions, id: []const u8
     if (image) |img| {
         const key = c.print("{s}@{d}", .{ id, size });
         if (ui_icons.png(key, img, size, e.serial, e.actions_changed)) |bytes| {
-            if (ui.image(c, .{ .key = c.print("ext.icon.{s}.{d}.{d}", .{ key, e.serial, e.actions_changed }), .bytes = bytes, .max_width = size, .max_height = size, .radius = 0 })) return;
+            if (ui.image(c, .{ .key = c.print("ext.icon.{s}.{d}.{x}", .{ key, e.serial, @intFromPtr(img) }), .bytes = bytes, .max_width = size, .max_height = size, .radius = 0 })) return;
         }
     }
     _ = c.open(.{ .width = px(size), .height = px(size), .radius = size * 0.28, .background = p.wash, .align_items = .center, .justify = .center }, null);

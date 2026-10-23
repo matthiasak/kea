@@ -48,6 +48,20 @@ pub const App = struct {
     stopping: bool = false,
     /// `NANOUI_DEBUG=1`: log windows' ids and frames, for tools and tests.
     debug: bool = false,
+    /// Files the system asks the app to open (Finder's Open With, `open -a`,
+    /// a file named when it was launched); without it they're ignored.
+    open_files: ?OpenFiles = null,
+
+    pub const OpenFiles = struct {
+        ctx: *anyopaque,
+        /// The files' paths, valid for the call.
+        func: *const fn (ctx: *anyopaque, paths: []const []const u8) void,
+    };
+
+    /// Takes the files the system asks the app to open.
+    pub fn onOpenFiles(self: *App, ctx: *anyopaque, func: *const fn (ctx: *anyopaque, paths: []const []const u8) void) void {
+        self.open_files = .{ .ctx = ctx, .func = func };
+    }
 
     /// Creates the app. Call from `main`, on the main thread.
     pub fn create(init: std.process.Init, options: Options) !*App {
@@ -151,6 +165,7 @@ pub const App = struct {
         // Quit before the loop started: nothing to run.
         if (self.stopping) return;
         self.running = true;
+        if (self.flags.play) |steps| @import("play.zig").start(self, steps);
         objc.msg(void, self.nsapp, "run", .{});
         self.running = false;
     }
@@ -222,6 +237,11 @@ pub const App = struct {
         std.log.info("nanoui: wrote {s}/nanoui.js and nanoui.d.ts", .{dir_path});
     }
 
+    /// From any thread: calls `func(ctx)` on the main thread soon.
+    pub fn onMain(ctx: ?*anyopaque, func: *const fn (?*anyopaque) callconv(.c) void) void {
+        objc.dispatchMain(ctx, func);
+    }
+
     /// Calls `func(ctx)` on the main thread after `ms` milliseconds.
     pub fn after(ms: u64, ctx: ?*anyopaque, func: *const fn (?*anyopaque) callconv(.c) void) void {
         objc.dispatchAfter(ms * std.time.ns_per_ms, ctx, func);
@@ -243,8 +263,10 @@ pub const App = struct {
     }
 
     /// Adds an icon to the menu bar's status area; it lives until removed
-    /// with `Tray.destroy` or the app ends.
+    /// with `Tray.destroy` or the app ends. Not when the app runs hidden.
     pub fn newTray(self: *App, opts: tray_mod.Options) !*tray_mod.Tray {
+        // Headless runs (snapshots, scripts, tests) keep out of the menu bar.
+        if (self.flags.hidden) return error.Hidden;
         const t = try tray_mod.Tray.create(self.gpa, self.options.name, opts);
         errdefer t.destroy();
         try self.trays.append(self.gpa, t);
@@ -283,6 +305,21 @@ fn shouldReopen(self_obj: objc.Object, _: objc.SEL, _: objc.Object, visible: obj
 
 fn openURLs(self_obj: objc.Object, _: objc.SEL, _: objc.Object, urls: objc.Object) callconv(.c) void {
     const app = objc.getZig(App, self_obj) orelse return;
+    if (app.open_files) |handler| {
+        const pool = objc.Pool.push();
+        defer pool.pop();
+        var paths: std.ArrayList([]const u8) = .empty;
+        defer paths.deinit(app.gpa);
+        const n = objc.msg(objc.NSUInteger, urls, "count", .{});
+        var i: objc.NSUInteger = 0;
+        while (i < n) : (i += 1) {
+            const url = objc.msg(objc.Object, urls, "objectAtIndex:", .{i});
+            if (objc.msg(objc.BOOL, url, "isFileURL", .{}) == objc.NO) continue;
+            const path = objc.fromNSString(objc.msg(?objc.Object, url, "path", .{}));
+            if (path.len > 0) paths.append(app.gpa, path) catch {};
+        }
+        if (paths.items.len > 0) handler.func(handler.ctx, paths.items);
+    }
     const f = app.options.on_open_urls orelse return;
     var arena: std.heap.ArenaAllocator = .init(app.gpa);
     defer arena.deinit();

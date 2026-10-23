@@ -198,6 +198,7 @@ pub const Kea = struct {
             self.ext = null;
             e.destroy();
         }
+        @import("../web/frame_rate.zig").teardown(self);
         @import("../web/notifications.zig").forgetKea(self);
         self.browsers.deinit(self.gpa);
         self.browsers = .empty;

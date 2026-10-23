@@ -79,7 +79,9 @@ git pull && ./build.sh
 - **Peek (`Shift-click`) & Little Kea (`⌘O`).** Preview links in a sheet over the page; press `esc` to dismiss or keep them as a tab.
 
 ### Ubi Chat & AI (`⇧⌘Y`)
-- **Multi-resource context.** Automatically reads the visible text of the active tab (toggleable via the eye icon) plus any tabs, bookmarks, or history pages you pin via `@`, `tabs/`, `bookmarks/`, or `history/`.
+- **Multi-resource context & attachments.** Automatically reads the visible text of the active tab (toggleable via the eye icon), attaches a live page screenshot (`⇧⌘4`) or dropped/selected files, and pins any tabs, bookmarks, or history pages via `@`, `tabs/`, `bookmarks/`, or `history/`.
+- **Browser tools & Web search plugins.** Ubi Chat can search your open tabs, history, and bookmarks or read open tabs on demand, and enables built-in web search and URL-context SDK plugins for Gemini (`googleSearch` + `urlContext`), Anthropic (`web_search_20250305`), and OpenRouter (`web`).
+- **Thinking & effort controls.** Toggle **Thinking**, pick the **Thinking Level** (`Low`, `Medium`, `High`, `Max` — default `High`), and toggle **Web Search** directly from the composer's model bar or **Settings › AI**.
 - **Hallucination guard.** Links or domains in an AI answer that weren't in the shared pages are flagged inline (`⚠ Not in the pages shared`).
 - **Local, LAN, or Cloud.**
   - **On this Mac / LAN:** Ollama (`127.0.0.1:11434`), LM Studio (`127.0.0.1:1234`), or **Custom server** (any `http`/`https` OpenAI-compatible server on `localhost`, private RFC1918 IPv4, link-local, `.local`, or `.home.arpa`, with optional API key).

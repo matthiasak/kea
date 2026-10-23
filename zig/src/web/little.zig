@@ -220,11 +220,13 @@ pub fn popupView(b: *Browser, c: *ui.Context) void {
     if (b.window) |w| applyGround(w.nswindow, &b.applied_ground, p.ground);
     const tab = b.activeTab() orelse {
         b.stage.count = 0;
+        b.syncStageHost();
         return;
     };
     // The one page on its stage (`Browser.syncStageHost`).
     b.stage.panes[0] = .{ .tab = tab.id };
     b.stage.count = 1;
+    b.syncStageHost();
     _ = body(c, p, tab, false);
 }
 

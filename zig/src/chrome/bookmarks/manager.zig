@@ -48,6 +48,12 @@ pub fn frame(b: *Browser) void {
         s.manager_seen = false;
         b.bookmarks.stopUndo();
         s.picks.reset(b.gpa);
+        if (s.found_arena) |*fa| {
+            fa.deinit();
+            s.found_arena = null;
+            s.found_hits = &.{};
+            s.found_order = &.{};
+        }
     }
     if (!b.bookmarking) return;
     proposal.frame(b);

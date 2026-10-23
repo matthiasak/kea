@@ -44,16 +44,18 @@ pub const Disk = struct {
     pub fn deinit(self: *Disk) void {
         self.drain();
         dispatch.dispatch_release(self.queue);
+        const ca = std.heap.c_allocator;
         var it = self.newest.keyIterator();
-        while (it.next()) |k| self.gpa.free(k.*);
-        self.newest.deinit(self.gpa);
+        while (it.next()) |k| ca.free(k.*);
+        self.newest.deinit(ca);
     }
 
     /// Writes `bytes` (allocated on `gpa`, freed here) to `path` atomically,
     /// creating its folder. `now` writes on the calling thread: quitting
     /// doesn't wait for a queue.
     pub fn write(self: *Disk, path: []const u8, bytes: []u8, now: bool) void {
-        const job = self.ask(path, bytes) orelse return self.gpa.free(bytes);
+        defer self.gpa.free(bytes);
+        const job = self.ask(path, bytes) orelse return;
         if (now) run(job) else dispatch.dispatch_async_f(self.queue, job, run);
     }
 
@@ -70,28 +72,36 @@ pub const Disk = struct {
 
     fn nothing(_: ?*anyopaque) callconv(.c) void {}
 
-    fn ask(self: *Disk, path: []const u8, bytes: ?[]u8) ?*Job {
-        const job = self.gpa.create(Job) catch return null;
-        const z = self.gpa.dupeSentinel(u8, path, 0) catch {
-            self.gpa.destroy(job);
+    fn ask(self: *Disk, path: []const u8, bytes: ?[]const u8) ?*Job {
+        const ca = std.heap.c_allocator;
+        const job = ca.create(Job) catch return null;
+        const z = ca.dupeSentinel(u8, path, 0) catch {
+            ca.destroy(job);
             return null;
         };
+        const copy = if (bytes) |b| ca.dupe(u8, b) catch {
+            ca.free(z);
+            ca.destroy(job);
+            return null;
+        } else null;
         _ = std.c.pthread_mutex_lock(&self.lock);
         defer _ = std.c.pthread_mutex_unlock(&self.lock);
-        const gop = self.newest.getOrPut(self.gpa, path) catch {
-            self.gpa.free(z);
-            self.gpa.destroy(job);
+        const gop = self.newest.getOrPut(ca, path) catch {
+            if (copy) |b| ca.free(b);
+            ca.free(z);
+            ca.destroy(job);
             return null;
         };
-        if (!gop.found_existing) gop.key_ptr.* = self.gpa.dupe(u8, path) catch {
+        if (!gop.found_existing) gop.key_ptr.* = ca.dupe(u8, path) catch {
             self.newest.removeByPtr(gop.key_ptr);
-            self.gpa.free(z);
-            self.gpa.destroy(job);
+            if (copy) |b| ca.free(b);
+            ca.free(z);
+            ca.destroy(job);
             return null;
         };
         self.count += 1;
         gop.value_ptr.* = self.count;
-        job.* = .{ .disk = self, .path = z, .bytes = bytes, .turn = self.count };
+        job.* = .{ .disk = self, .path = z, .bytes = copy, .turn = self.count };
         return job;
     }
 
@@ -104,17 +114,18 @@ pub const Disk = struct {
     fn run(ctx: ?*anyopaque) callconv(.c) void {
         const job: *Job = @ptrCast(@alignCast(ctx.?));
         const d = job.disk;
+        const ca = std.heap.c_allocator;
         defer {
-            if (job.bytes) |b| d.gpa.free(b);
-            d.gpa.free(job.path);
-            d.gpa.destroy(job);
+            if (job.bytes) |b| ca.free(b);
+            ca.free(job.path);
+            ca.destroy(job);
         }
         _ = std.c.pthread_mutex_lock(&d.io);
         defer _ = std.c.pthread_mutex_unlock(&d.io);
         // Overtaken: something newer of this file was asked for since.
         if (!d.isNewest(job.path, job.turn)) return;
         if (job.bytes) |b| {
-            writeAtomic(d.gpa, job.path, b);
+            writeAtomic(ca, job.path, b);
         } else {
             _ = c.unlink(job.path);
         }

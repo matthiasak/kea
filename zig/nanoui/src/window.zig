@@ -30,6 +30,8 @@ pub const Window = struct {
     on_key: ?Callback = null,
     should_close: ?ShouldClose = null,
     closed: bool = false,
+    /// When a popover last hid itself, losing the keys.
+    resigned_at: f64 = 0,
 
     pub fn create(app: *App, options: Options) !*Window {
         const pool = objc.Pool.push();
@@ -37,12 +39,18 @@ pub const Window = struct {
         const self = try app.gpa.create(Window);
         errdefer app.gpa.destroy(self);
 
+        const popover = options.title_bar == .popover;
         var style: objc.NSUInteger = 1 | 2 | 4; // titled, closable, miniaturizable
         if (options.resizable) style |= 8;
         if (options.title_bar == .hidden) style |= 1 << 15; // full size content view
+        if (popover) style = 1 << 7; // borderless, non-activating panel
         if (options.non_activating) style |= 1 << 7;
         const rect: objc.CGRect = .{ .size = .{ .width = options.width, .height = options.height } };
-        const nswindow = objc.msg(objc.Object, if (options.kind == .panel) objc.alloc("NSPanel") else objc.alloc("NSWindow"), "initWithContentRect:styleMask:backing:defer:", .{
+        // A borderless panel takes keys only if its class says it can.
+        const window_class = if (popover) objc.defineClass(.{ .name = "NanoUIPopover", .superclass = "NSPanel", .methods = &.{
+            .{ .name = "canBecomeKeyWindow", .imp = &yes, .types = "B@:" },
+        } }) else if (options.kind == .panel) objc.class("NSPanel") else objc.class("NSWindow");
+        const nswindow = objc.msg(objc.Object, objc.msg(objc.Object, window_class, "alloc", .{}), "initWithContentRect:styleMask:backing:defer:", .{
             rect, style, @as(objc.NSUInteger, 2), objc.NO,
         });
         if (options.tabbing_disallowed) objc.msg(void, nswindow, "setTabbingMode:", .{@as(objc.NSInteger, 2)}); // NSWindowTabbingModeDisallowed
@@ -92,6 +100,21 @@ pub const Window = struct {
         switch (options.content) {
             .page => |p| self.page = try Page.create(self, p),
             .view => |v| self.surface = try Surface.create(self, v, options.theme),
+        }
+        if (popover) {
+            objc.msg(void, nswindow, "setOpaque:", .{objc.NO});
+            objc.msg(void, nswindow, "setBackgroundColor:", .{objc.msg(objc.Object, objc.class("NSColor"), "clearColor", .{})});
+            objc.msg(void, nswindow, "setHasShadow:", .{objc.YES});
+            objc.msg(void, nswindow, "setLevel:", .{@as(objc.NSInteger, 101)}); // NSPopUpMenuWindowLevel
+            objc.msg(void, nswindow, "setHidesOnDeactivate:", .{objc.NO});
+            // On every space, over full screen apps, out of Exposé.
+            objc.msg(void, nswindow, "setCollectionBehavior:", .{@as(objc.NSUInteger, (1 << 0) | (1 << 3) | (1 << 8))});
+            const content = objc.msg(objc.Object, nswindow, "contentView", .{});
+            objc.msg(void, content, "setWantsLayer:", .{objc.YES});
+            if (objc.msg(?objc.Object, content, "layer", .{})) |layer| {
+                objc.msg(void, layer, "setCornerRadius:", .{@as(f64, 12)});
+                objc.msg(void, layer, "setMasksToBounds:", .{objc.YES});
+            }
         }
 
         if (options.x != null and options.y != null) self.setPosition(options.x.?, options.y.?) else objc.msg(void, nswindow, "center", .{});
@@ -197,6 +220,12 @@ pub const Window = struct {
     pub fn hide(self: *Window) void {
         objc.msg(void, self.nswindow, "orderOut:", .{@as(?objc.Object, null)});
         if (self.surface) |s| s.is_visible = false;
+    }
+
+    /// Whether a popover just hid itself (a click on what opens it, which
+    /// took its keys, should leave it closed, not open it again).
+    pub fn justHidden(self: *Window) bool {
+        return CACurrentMediaTime() - self.resigned_at < 0.3;
     }
 
     pub fn isVisible(self: *Window) bool {
@@ -309,7 +338,8 @@ fn willFullScreen(self_obj: objc.Object, _: objc.SEL, _: objc.Object) callconv(.
 fn fullScreenChanged(self_obj: objc.Object, _: objc.SEL, _: objc.Object) callconv(.c) void {
     const w = objc.getZig(Window, self_obj) orelse return;
     if (w.on_fullscreen) |cb| cb.func(cb.ctx, w);
-    if (w.surface) |s| {
+    const w2 = objc.getZig(Window, self_obj) orelse return;
+    if (w2.surface) |s| {
         s.updateGeometry();
         s.frame();
     }
@@ -317,8 +347,13 @@ fn fullScreenChanged(self_obj: objc.Object, _: objc.SEL, _: objc.Object) callcon
 
 fn keyChanged(self_obj: objc.Object, _: objc.SEL, _: objc.Object) callconv(.c) void {
     const w = objc.getZig(Window, self_obj) orelse return;
+    if (w.title_bar == .popover and !w.isFocused()) {
+        w.hide();
+        w.resigned_at = CACurrentMediaTime();
+    }
     if (w.on_key) |cb| cb.func(cb.ctx, w);
-    if (w.surface) |s| if (s.visible()) s.requestFrame() else s.frame();
+    const w2 = objc.getZig(Window, self_obj) orelse return;
+    if (w2.surface) |s| if (s.visible()) s.requestFrame() else s.frame();
 }
 
 fn shouldClose(self_obj: objc.Object, _: objc.SEL, _: objc.Object) callconv(.c) objc.BOOL {
@@ -326,6 +361,12 @@ fn shouldClose(self_obj: objc.Object, _: objc.SEL, _: objc.Object) callconv(.c) 
     const ask = w.should_close orelse return objc.YES;
     return if (ask.func(ask.ctx, w)) objc.YES else objc.NO;
 }
+
+fn yes(_: objc.Object, _: objc.SEL) callconv(.c) bool {
+    return true;
+}
+
+extern "c" fn CACurrentMediaTime() f64;
 
 fn windowWillClose(self_obj: objc.Object, _: objc.SEL, _: objc.Object) callconv(.c) void {
     const w = objc.getZig(Window, self_obj) orelse return;

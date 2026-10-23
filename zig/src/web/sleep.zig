@@ -85,11 +85,27 @@ fn pressed(ctx: ?*anyopaque) callconv(.c) void {
     const w = watches.getPtr(b) orelse return;
     const event = if (w.pressure) |s| dispatch.dispatch_source_get_data(s) else 0;
     const critical = event & pressure_critical != 0;
+    @import("../chrome/tab_switcher.zig").reset(b);
     if (critical) {
         w.critical_until = json.now() + 60;
-        @import("../chrome/tab_switcher.zig").reset(b);
+        b.kea.favicons.trimMemory(b.kea);
+        sleepCritical(b);
     }
     sleepIdle(b, if (critical) 0 else 5 * 60);
+}
+
+fn sleepCritical(b: *Browser) void {
+    if (!b.prefs.sleeps_tabs) return;
+    const parked = b.parkedTabs(a) catch &.{};
+    defer if (parked.len > 0) a.free(parked);
+    var any = false;
+    for ([_][]const *Tab{ b.tabs.items, parked }) |list| for (list) |t| {
+        if (t.typing or awake(b, t) != null) continue;
+        if (b.stage_host) |sh| if (t.web) |wv| sh.forget(wv);
+        state.sleep(t, null);
+        any = true;
+    };
+    if (any) b.redraw();
 }
 
 /// `sleepIdle(within:)`: every tab gone long enough without a look, the
@@ -193,13 +209,19 @@ fn relay(b: *Browser, outcome: []const u8, arg: usize) void {
     d(b, outcome);
 }
 
-const Ask = struct { done: ?DoneWith, arg: usize };
+const Ask = struct { b: *Browser, done: ?DoneWith, arg: usize };
+
+fn dropAsk(arg: usize) void {
+    const ask: *Ask = @ptrFromInt(arg);
+    defer a.destroy(ask);
+    if (ask.done) |d| if (watches.contains(ask.b)) d(ask.b, "closed", ask.arg);
+}
 
 fn sleepWith(b: *Browser, t: *Tab, done: ?DoneWith, arg: usize) void {
     if (awake(b, t)) |reason| return if (done) |d| d(b, reason, arg);
     const ask = a.create(Ask) catch return;
-    ask.* = .{ .done = done, .arg = arg };
-    state.unsaved(t, typedAnswer, @intFromPtr(ask));
+    ask.* = .{ .b = b, .done = done, .arg = arg };
+    state.unsavedOwned(t, typedAnswer, @intFromPtr(ask), dropAsk);
 }
 
 fn finish(t: *Tab, ask: *Ask, outcome: []const u8) void {
@@ -213,7 +235,7 @@ fn typedAnswer(t: *Tab, typed: bool, _: ?[]u8, arg: usize) void {
     if (typed) return finish(t, ask, "holding something typed");
     const b = t.browser orelse return a.destroy(ask);
     if (awake(b, t)) |reason| return finish(t, ask, reason);
-    state.snapshot(t, pictured, arg);
+    state.snapshotWidthOwned(t, @min(1280, @max(1, b.active_page_frame.w)), pictured, arg, dropAsk);
 }
 
 fn pictured(t: *Tab, _: bool, picture: ?[]u8, arg: usize) void {
@@ -236,13 +258,15 @@ fn pictured(t: *Tab, _: bool, picture: ?[]u8, arg: usize) void {
 // ponytail: covers this Space only; other Spaces' tabs sleep on their own timer.
 pub fn sleepOthers(b: *Browser) void {
     const vis = b.visibleTabIDs();
+    const parked = b.parkedTabs(a) catch &.{};
+    defer if (parked.len > 0) a.free(parked);
     var count: usize = 0;
-    for (b.tabs.items) |t| {
+    for ([_][]const *Tab{ b.tabs.items, parked }) |list| for (list) |t| {
         if (t.id == b.active_id or t.id == vis[0] or t.id == vis[1]) continue;
         if (b.awake(t) != null) continue;
         b.sleep(t, null);
         count += 1;
-    }
+    };
     if (count == 0) return b.announce("No other tabs to put to sleep");
     var buf: [64]u8 = undefined;
     const msg = if (count == 1) "1 tab put to sleep" else std.fmt.bufPrint(&buf, "{d} tabs put to sleep", .{count}) catch "Tabs put to sleep";

@@ -1,130 +1,211 @@
-//! Springs and tweens (`motion.zig`): SwiftUI's spring settles in time
-//! without overshooting much, tweens follow their curves, and Reduce
-//! Motion jumps to the target.
+//! `ui.motion` through the Tester: a box enters from `initial` and settles
+//! at its target, then stops asking for frames; a target changed midway is
+//! taken from where the box is; presence keeps a box drawn while it leaves;
+//! hover and press move it; numbers ease; reduced motion jumps; and a
+//! scaled box draws its pixels where its scale puts them.
 const std = @import("std");
 const testing = std.testing;
-const motion = @import("motion.zig");
-const Context = @import("context.zig").Context;
-const TextSystem = @import("text.zig").TextSystem;
+const ui = @import("ui.zig");
+const motion = ui.motion;
 
-const glide: motion.Spring = .{ .response = 0.34, .damping = 0.82 };
+const Scene = struct {
+    wide: bool = false,
+    show: bool = true,
+    count: f32 = 0,
+    last: motion.Frame = .{},
+    gone: bool = false,
+    shown: f32 = 0,
 
-/// A context whose frames are stepped by hand (motion never draws text).
-fn context(ts: *TextSystem) Context {
-    return Context.init(testing.allocator, ts);
-}
-
-fn nextFrame(c: *Context) void {
-    c.frame += 1;
-    c.animating = false;
-}
-
-test "spring (0.34,0.82) settles within 0.8 s and overshoots < 2 %" {
-    var ts: TextSystem = undefined;
-    var c = context(&ts);
-    defer c.deinit();
-    try testing.expectEqual(@as(f32, 0), motion.spring(&c, 1, 0, 0, glide));
-    var peak: f32 = 0;
-    var settled: ?u32 = null;
-    var frames: u32 = 0;
-    while (frames < 120) {
-        nextFrame(&c);
-        frames += 1;
-        const v = motion.spring(&c, 1, 0, 1, glide);
-        peak = @max(peak, v);
-        if (!c.animating and settled == null) settled = frames;
+    fn view(s: *Scene, c: *ui.Context) void {
+        const root = ui.div(c).column().sizeFull().p(20).gap(10).bg(.white);
+        defer root.end();
+        s.last = motion.frame(c, .{
+            .target = .{ .width = if (s.wide) 300 else 100 },
+            .initial = .{ .y = 12, .opacity = 0 },
+            .hover = .{ .scale = 1.1 },
+            .transition = .{ .spring = .{} },
+        });
+        {
+            const card = ui.div(c).h(40).bg(.hex(0x3366ff)).control().motion(s.last);
+            defer card.end();
+            ui.text(c, "card", .{ .size = 12 });
+        }
+        s.gone = true;
+        if (motion.present(c, "toast", s.show, .{ .initial = .{ .opacity = 0 }, .exit = .{ .opacity = 0, .y = 20 }, .transition = .{ .tween = .{ .duration = 0.2 } } })) |f| {
+            s.gone = false;
+            const t = ui.div(c).p(8).bg(.hex(0x222222)).motion(f);
+            defer t.end();
+            ui.text(c, "toast", .{ .size = 12, .color = .white });
+        }
+        s.shown = motion.number(c, "count", s.count, .{ .tween = .{ .duration = 0.5, .ease = .linear } });
     }
-    try testing.expect(peak > 1); // underdamped: it does overshoot
-    try testing.expect(peak < 1.02);
-    try testing.expect(@as(f32, @floatFromInt(settled.?)) * c.dt <= 0.8);
-    try testing.expectEqual(@as(f32, 1), motion.spring(&c, 1, 0, 1, glide));
+};
+
+test "a box enters from initial, settles at its target, then draws no more frames" {
+    var s: Scene = .{};
+    var t: ui.Tester = undefined;
+    try t.init(testing.allocator, .init(&s, Scene.view), .{ .width = 400, .height = 300 });
+    defer t.deinit();
+    t.frame();
+    // The first frame is where `initial` puts it.
+    try testing.expect(s.last.opacity < 0.2 and s.last.y > 10);
+    try testing.expect(t.ctx.animating);
+    t.settle(3);
+    try testing.expectApproxEqAbs(@as(f32, 1), s.last.opacity, 1e-3);
+    try testing.expectApproxEqAbs(@as(f32, 0), s.last.y, 1e-2);
+    try testing.expectEqual(@as(?f32, 100), s.last.width);
+    try testing.expect(!t.ctx.animating and !s.last.animating);
+    const card = t.findText("card").?;
+    try testing.expectApproxEqAbs(@as(f32, 20), card.x, 0.5);
 }
 
-test "springFrom starts at from" {
-    var ts: TextSystem = undefined;
-    var c = context(&ts);
-    defer c.deinit();
-    try testing.expectEqual(@as(f32, 0.97), motion.springFrom(&c, 2, 0, 0.97, 1, glide));
-    try testing.expect(c.animating);
-    nextFrame(&c);
-    const v = motion.springFrom(&c, 2, 0, 0.97, 1, glide);
-    try testing.expect(v > 0.97 and v < 1);
-    // Asked again in the same frame (a view built twice): no step.
-    try testing.expectEqual(v, motion.springFrom(&c, 2, 0, 0.97, 1, glide));
+test "a target changed midway is taken from where the box is" {
+    var s: Scene = .{};
+    var t: ui.Tester = undefined;
+    try t.init(testing.allocator, .init(&s, Scene.view), .{ .width = 400, .height = 300 });
+    defer t.deinit();
+    t.settle(3);
+    s.wide = true;
+    t.advance(0.08);
+    const mid = s.last.width.?;
+    try testing.expect(mid > 100 and mid < 300);
+    // Back again: it turns from there, without a jump.
+    s.wide = false;
+    t.frame();
+    try testing.expect(@abs(s.last.width.? - mid) < 25);
+    t.settle(3);
+    try testing.expectApproxEqAbs(@as(f32, 100), s.last.width.?, 1e-2);
 }
 
-/// Runs a tween from 0 toward 1 over 1 s for `seconds`; its value then.
-fn tweenFor(c: *Context, curve: motion.Curve, seconds: f32) f32 {
-    _ = motion.tween(c, 3, 0, 0, 1, curve);
-    var v: f32 = 0;
-    const frames: u32 = @intFromFloat(@round(seconds / c.dt));
-    for (0..frames) |_| {
-        nextFrame(c);
-        v = motion.tween(c, 3, 0, 1, 1, curve);
+test "presence: a box leaving stays drawn until its exit settles" {
+    var s: Scene = .{};
+    var t: ui.Tester = undefined;
+    try t.init(testing.allocator, .init(&s, Scene.view), .{ .width = 400, .height = 300 });
+    defer t.deinit();
+    t.settle(3);
+    try testing.expect(t.hasText("toast"));
+    s.show = false;
+    t.advance(0.1);
+    try testing.expect(t.hasText("toast") and !s.gone);
+    t.settle(1);
+    try testing.expect(!t.hasText("toast") and s.gone);
+    // Shown again, it enters again.
+    s.show = true;
+    t.frame();
+    try testing.expect(t.hasText("toast"));
+}
+
+test "hover scales the card; a number eases; reduced motion jumps" {
+    var s: Scene = .{};
+    var t: ui.Tester = undefined;
+    try t.init(testing.allocator, .init(&s, Scene.view), .{ .width = 400, .height = 300 });
+    defer t.deinit();
+    t.settle(3);
+    const card = t.findText("card").?;
+    t.moveTo(card.x + 2, card.y + 2);
+    t.settle(3);
+    try testing.expectApproxEqAbs(@as(f32, 1.1), s.last.scale, 1e-3);
+    t.moveTo(390, 290);
+    t.settle(3);
+    try testing.expectApproxEqAbs(@as(f32, 1), s.last.scale, 1e-3);
+
+    s.count = 10;
+    t.advance(0.25);
+    try testing.expect(s.shown > 3 and s.shown < 7);
+    t.settle(2);
+    try testing.expectEqual(@as(f32, 10), s.shown);
+
+    t.ctx.reduced_motion = true;
+    s.wide = true;
+    t.frame();
+    try testing.expectEqual(@as(?f32, 300), s.last.width);
+}
+
+const Scaled = struct {
+    k: f32,
+    fn view(s: *Scaled, c: *ui.Context) void {
+        const root = ui.div(c).column().sizeFull().p(0).bg(.white);
+        defer root.end();
+        const b = ui.div(c).w(40).h(40).bg(.hex(0xff0000)).scale(s.k);
+        b.end();
     }
-    return v;
+};
+
+fn red(px: anytype, x: usize, y: usize) bool {
+    const i = (y * px.width + x) * 4;
+    return px.bytes[i + 2] > 200 and px.bytes[i + 1] < 60;
 }
 
-test "tween ease_out at half time is > 0.5 of the way" {
-    var ts: TextSystem = undefined;
-    var c = context(&ts);
-    defer c.deinit();
-    const v = tweenFor(&c, .ease_out, 0.5);
-    try testing.expect(v > 0.5 and v < 1);
-    try testing.expect(c.animating);
+test "a scaled box draws about its center" {
+    var s: Scaled = .{ .k = 0.5 };
+    var t: ui.Tester = undefined;
+    try t.init(testing.allocator, .init(&s, Scaled.view), .{ .width = 60, .height = 60, .scale = 1 });
+    defer t.deinit();
+    t.frame();
+    const px = try t.render(testing.allocator);
+    defer px.deinit(testing.allocator);
+    // 40 × 40 at the origin, halved about (20, 20): from 10 to 30.
+    try testing.expect(!red(px, 5, 5) and red(px, 12, 12) and red(px, 28, 28) and !red(px, 33, 33));
 }
 
-test "tween bezier (0.22,1,0.36,1) at quarter time is > 0.6 of the way" {
-    var ts: TextSystem = undefined;
-    var c = context(&ts);
-    defer c.deinit();
-    const v = tweenFor(&c, .{ .bezier = .{ 0.22, 1, 0.36, 1 } }, 0.25);
-    try testing.expect(v > 0.6 and v < 1);
-    // The curve's ends are its ends.
-    try testing.expectEqual(@as(f32, 0), motion.ease(.{ .bezier = .{ 0.22, 1, 0.36, 1 } }, 0));
-    try testing.expectApproxEqAbs(@as(f32, 1), motion.ease(.ease_in_out, 1), 1e-4);
-}
-
-test "reduce_motion returns target immediately" {
-    var ts: TextSystem = undefined;
-    var c = context(&ts);
-    defer c.deinit();
-    _ = motion.tween(&c, 4, 0, 0, 1, .linear);
-    _ = motion.spring(&c, 5, 0, 0, glide);
-    nextFrame(&c);
-    c.reduce_motion = true;
-    try testing.expectEqual(@as(f32, 1), motion.tween(&c, 4, 0, 1, 1, .linear));
-    try testing.expectEqual(@as(f32, 1), motion.spring(&c, 5, 0, 1, glide));
-    try testing.expectEqual(@as(f32, 1), motion.springFrom(&c, 6, 0, 0, 1, glide));
-    try testing.expect(!c.animating);
-    // Their state is dropped.
-    try testing.expectEqual(@as(u32, 0), c.motion.entries.count());
-}
-
-fn analyticSpring(t: f32, s: motion.Spring) f32 {
-    const w: f64 = 2.0 * std.math.pi / @as(f64, s.response);
-    const z: f64 = s.damping;
-    const s1 = @sqrt(1.0 - z * z);
-    const wd = w * s1;
-    const tf: f64 = t;
-    const v = 1.0 - @exp(-z * w * tf) * (@cos(wd * tf) + (z / s1) * @sin(wd * tf));
-    return @floatCast(v);
-}
-
-test "spring matches analytic damped oscillator within 0.5% under jittered dt and hitch" {
-    if (!@hasDecl(motion, "jump")) return;
-    var ts: TextSystem = undefined;
-    var c = context(&ts);
-    defer c.deinit();
-    try testing.expectEqual(@as(f32, 0), motion.spring(&c, 7, 0, 0, glide));
-    var t: f32 = 0;
-    for (0..60) |step| {
-        const dt: f32 = if (step == 20) 0.140 else if (step % 2 == 0) 0.0074 else 0.0093;
-        c.dt = dt;
-        t += dt;
-        nextFrame(&c);
-        const v = motion.spring(&c, 7, 0, 1, glide);
-        const expected = analyticSpring(t, glide);
-        try testing.expectApproxEqAbs(expected, v, 0.005);
+const Swap = struct {
+    flipped: bool = false,
+    spin: motion.Frame = .{},
+    fn view(s: *Swap, c: *ui.Context) void {
+        const root = ui.div(c).column().sizeFull().bg(.white);
+        defer root.end();
+        const order: [2]u24 = if (s.flipped) .{ 0x00ff00, 0xff0000 } else .{ 0xff0000, 0x00ff00 };
+        for (order) |color| {
+            ui.key(c, if (color == 0xff0000) "red" else "green");
+            const f = motion.frame(c, .{ .layout = true, .transition = .{ .tween = .{ .duration = 0.4, .ease = .linear } } });
+            const b = ui.div(c).w(40).h(40).bg(.hex(color)).motion(f);
+            b.end();
+        }
+        s.spin = motion.keyframes(c, .{ .values = &.{ .{ .x = 0 }, .{ .x = 30 } }, .duration = 1, .ease = .linear, .repeat = 1, .yoyo = true });
+        const k = ui.div(c).w(10).h(10).bg(.black).motion(s.spin);
+        k.end();
     }
+};
+
+/// The y of the first instance drawn in `color`.
+fn yOf(t: *ui.Tester, color: u24) ?f32 {
+    const want = ui.Color.hex(color);
+    for (t.instances.items) |it| if (@abs(it.color[0] - want.r) < 0.01 and @abs(it.color[1] - want.g) < 0.01 and @abs(it.color[2] - want.b) < 0.01 and it.color[3] > 0.9) return it.rect[1];
+    return null;
+}
+
+test "layout: boxes the layout moves glide from where they were" {
+    var s: Swap = .{};
+    var t: ui.Tester = undefined;
+    try t.init(testing.allocator, .init(&s, Swap.view), .{ .width = 100, .height = 120 });
+    defer t.deinit();
+    t.frame();
+    t.frame();
+    try testing.expectEqual(@as(?f32, 0), yOf(&t, 0xff0000));
+    s.flipped = true;
+    t.frame();
+    // Laid out below now, but drawn where it was, then gliding down.
+    try testing.expect(yOf(&t, 0xff0000).? < 5);
+    t.advance(0.2);
+    const mid = yOf(&t, 0xff0000).?;
+    try testing.expect(mid > 10 and mid < 30);
+    t.advance(0.5);
+    try testing.expectApproxEqAbs(@as(f32, 40), yOf(&t, 0xff0000).?, 0.01);
+}
+
+test "keyframes play a pass, then back with yoyo, and stop at the end" {
+    var s: Swap = .{};
+    var t: ui.Tester = undefined;
+    try t.init(testing.allocator, .init(&s, Swap.view), .{ .width = 100, .height = 120 });
+    defer t.deinit();
+    t.frame();
+    t.advance(0.5);
+    try testing.expectApproxEqAbs(@as(f32, 15), s.spin.x, 1.5);
+    t.advance(0.5);
+    t.advance(0.25);
+    // The second pass runs back: three quarters of the way to 0... from 30.
+    try testing.expect(s.spin.x > 18 and s.spin.x < 26);
+    t.advance(1);
+    try testing.expectEqual(@as(f32, 0), s.spin.x);
+    try testing.expect(!s.spin.animating);
 }

@@ -140,6 +140,15 @@ pub fn image(c: *Context, opts: ImageOptions) bool {
     return true;
 }
 
+/// A texture the app gives this frame (`gpu.Texture`: a video's frame, as
+/// often as it changes), in a box of `style` (which sizes and places it),
+/// the part `uv` (0 to 1) of it shown, its corners rounded by the style.
+pub fn texture(c: *Context, style: types.Style, source: @import("gpu.zig").Texture, uv: [4]f32, opacity: f32) void {
+    const slot: u32 = @intCast(c.textures.items.len);
+    c.textures.append(c.gpa, source) catch return;
+    _ = c.leaf(style, .{ .texture = .{ .slot = slot, .uv = uv, .opacity = opacity } }, null);
+}
+
 pub fn heading(c: *Context, str: []const u8) void {
     text(c, str, .{ .size = 22, .weight = .bold });
 }

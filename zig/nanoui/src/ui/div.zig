@@ -67,6 +67,12 @@ pub const Div = struct {
         d.style().padding.right = v;
         return d;
     }
+    /// Sets the padding to the safe area (`Context.safe_area`), keeping
+    /// content clear of what the system draws over the window: zero on
+    /// the desktop. It replaces the padding set before, as `p` does.
+    pub fn safeArea(d: Div) Div {
+        return d.set("padding", d.c.safe_area);
+    }
 
     // Size.
     pub fn w(d: Div, v: f32) Div {
@@ -176,6 +182,26 @@ pub const Div = struct {
     }
     pub fn offset(d: Div, x: f32, y: f32) Div {
         return d.set("offset", types.Point{ .x = x, .y = y });
+    }
+    /// Placed from the window's top left (with `absolute`).
+    pub fn fixed(d: Div) Div {
+        _ = d.set("absolute", true);
+        return d.set("fixed", true);
+    }
+    /// Drawn above lower layers, unclipped by its parents (an overlay).
+    pub fn layer(d: Div, v: u8) Div {
+        return d.set("layer", v);
+    }
+    pub fn scale(d: Div, v: f32) Div {
+        return d.set("scale", v);
+    }
+    /// Takes a `ui.motion` frame: its offset, scale and opacity, and the
+    /// size, radius and background it animates. Last, so what it animates
+    /// wins over what was set before.
+    pub fn motion(d: Div, f: @import("motion/motion.zig").Frame) Div {
+        f.apply(d.style());
+        if (f.gestures) d.c.node(d.index).interactive = true;
+        return d;
     }
 
     // Interaction.

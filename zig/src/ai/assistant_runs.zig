@@ -134,7 +134,8 @@ pub const Send = struct {
     seen: std.ArrayList([]const u8) = .empty,
     active_url: ?[]const u8 = null,
     key: ?[]u8 = null,
-    shot_b64: ?[]const u8 = null,
+    images: std.ArrayList(client.Image) = .empty,
+    extra_text: std.ArrayList(u8) = .empty,
     phase: Phase = .reading,
     dead: bool = false,
     fence: [21]u8 = undefined,
@@ -171,15 +172,7 @@ pub const Send = struct {
         const tail = good.items[good.items.len -| keep..];
         r.earlier = try json.clone(a, @as([]const cs.Turn, tail));
         r.pins = try json.clone(a, self.chat.pins);
-        if (self.shot) |jpeg| {
-            defer {
-                self.gpa.free(jpeg);
-                self.shot = null;
-            }
-            const enc = std.base64.standard.Encoder;
-            const dst = try a.alloc(u8, enc.calcSize(jpeg.len));
-            r.shot_b64 = enc.encode(dst, jpeg);
-        }
+        try @import("assistant_more.zig").takeAttachments(self, a, &r.images, &r.extra_text);
     }
 
     pub fn free(r: *Send) void {
@@ -271,7 +264,9 @@ pub const Send = struct {
 
     fn keyed(raw: *anyopaque, key: ?[]u8) void {
         const r: *Send = @ptrCast(@alignCast(raw));
+        if (r.key) |k| r.gpa.free(k);
         r.key = key;
+        if (r.dead) return r.free();
         @import("assistant_tools.zig").ask(r);
     }
 
@@ -285,12 +280,12 @@ pub const Send = struct {
             try out.append(a, .{ .role = .user, .text = t.question });
             try out.append(a, .{ .role = .assistant, .text = t.answer });
         }
-        const imgs: []const client.Image = if (r.shot_b64) |b64| blk: {
-            const one = try a.alloc(client.Image, 1);
-            one[0] = .{ .media_type = "image/jpeg", .b64 = b64 };
-            break :blk one;
-        } else &.{};
-        try out.append(a, .{ .role = .user, .text = try ubi.opening(a, r.reads.items, r.question, fence), .images = imgs });
+        const base_text = try ubi.opening(a, r.reads.items, r.question, fence);
+        const full_text = if (r.extra_text.items.len > 0)
+            try std.mem.concat(a, u8, &.{ base_text, r.extra_text.items })
+        else
+            base_text;
+        try out.append(a, .{ .role = .user, .text = full_text, .images = r.images.items });
         return out.items;
     }
 
@@ -332,6 +327,7 @@ pub const Name = struct {
     model: []const u8,
     prompt: []const u8,
     key: ?[]u8 = null,
+    dead: bool = false,
     asking: Asking,
 
     pub fn start(self: *Assistant, p: ai.Provider, model: []const u8, question: []const u8, answer: []const u8) void {
@@ -347,7 +343,9 @@ pub const Name = struct {
 
     fn keyed(raw: *anyopaque, key: ?[]u8) void {
         const r: *Name = @ptrCast(@alignCast(raw));
+        if (r.key) |k| r.gpa.free(k);
         r.key = key;
+        if (r.dead or r.m.assistant(r.serial) == null) return r.giveUp();
         const one = r.arena.allocator().alloc(client.Message, 1) catch return r.giveUp();
         one[0] = .{ .role = .user, .text = r.prompt };
         r.asking.begin(r.m, .{ .provider = r.provider, .model = r.model, .system = ubi.naming, .messages = one, .key = r.key, .max_tokens = 2048, .thinking = 1024 });
@@ -566,6 +564,8 @@ fn drop(c: *Check) void {
 }
 
 fn checking(raw: ?*anyopaque) callconv(.c) void {
+    const pool = objc.Pool.push();
+    defer pool.pop();
     const c: *Check = @ptrCast(@alignCast(raw.?));
     c.found = strays_mod.strays(c.arena.allocator(), c.answer, c.shared) catch &.{};
     if (c.found.len == 0) return drop(c);

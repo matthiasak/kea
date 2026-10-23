@@ -151,6 +151,9 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette) void {
     if (frame.switchLine(c, p, "Pages at 120 Hz", "Animations and scrolling in pages at up to 120 frames a second on a screen that can, instead of 60 as in Safari. Uses more battery. Open tabs follow when reloaded", prefs.fast_pages))
         frame_rate.setFast(b.kea, !prefs.fast_pages);
     frame.rule(c, p);
+    if (frame.switchLine(c, p, "Only at 120 Hz when connected to power", "Steps back to 60 Hz on battery to save energy", prefs.fast_pages_power))
+        frame_rate.setPowerOnly(b.kea, !prefs.fast_pages_power);
+    frame.rule(c, p);
     _ = frame.prefLine(b, c, p, "holds_history", "Hold a swipe to pick from history", "Swipe back or forward and keep your fingers down: the pages that way appear, and moving up or down picks one to go to");
     frame.rule(c, p);
     _ = frame.prefLine(b, c, p, "float_flicks", "Flick the floating video to a corner", "Two fingers on it send it to the corner or edge they point at, instead of pushing it along; a strong swipe at the side of the screen it is against tucks it in there, a sliver left to bring it back by. Dragging still puts it anywhere");

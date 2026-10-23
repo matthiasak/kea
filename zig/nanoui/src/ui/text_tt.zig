@@ -61,7 +61,7 @@ pub const TextSystem = struct {
     run_faces: std.ArrayList(u32) = .empty,
     layouts: std.AutoHashMapUnmanaged(u64, Layout) = .empty,
     previous: std.AutoHashMapUnmanaged(u64, Layout) = .empty,
-    wraps: std.AutoHashMapUnmanaged(u64, []Line) = .empty,
+    wraps: @import("wrap_cache.zig").WrapCache(Line) = .{},
     family: ?[]const u8 = null,
     mono_family: ?[]const u8 = null,
     /// Every size times this (`Context.setZoom`).
@@ -80,7 +80,6 @@ pub const TextSystem = struct {
         freeLayouts(self.gpa, &self.previous);
         self.layouts.deinit(self.gpa);
         self.previous.deinit(self.gpa);
-        self.clearWraps();
         self.wraps.deinit(self.gpa);
         self.atlas.deinit();
         self.db.deinit();
@@ -106,9 +105,12 @@ pub const TextSystem = struct {
 
     fn dropCaches(self: *TextSystem) void {
         self.fonts.clearRetainingCapacity();
+        self.run_fonts.clearRetainingCapacity();
+        self.run_faces.clearRetainingCapacity();
         freeLayouts(self.gpa, &self.layouts);
         freeLayouts(self.gpa, &self.previous);
-        self.clearWraps();
+        self.wraps.clear(self.gpa);
+        self.atlas.reset();
     }
 
     /// Scales every text by `z`: a change drops every cached font, shaping and wrap.
@@ -125,8 +127,11 @@ pub const TextSystem = struct {
 
     pub fn beginFrame(self: *TextSystem) void {
         self.atlas.reset_during_frame = false;
-        freeLayouts(self.gpa, &self.previous);
-        std.mem.swap(std.AutoHashMapUnmanaged(u64, Layout), &self.layouts, &self.previous);
+        if (self.layouts.count() >= 4096) {
+            freeLayouts(self.gpa, &self.previous);
+            std.mem.swap(std.AutoHashMapUnmanaged(u64, Layout), &self.layouts, &self.previous);
+        }
+        self.wraps.beginFrame(self.gpa);
     }
 
     fn freeLayouts(gpa: std.mem.Allocator, map: *std.AutoHashMapUnmanaged(u64, Layout)) void {
@@ -218,8 +223,11 @@ pub const TextSystem = struct {
         var prev: ?struct { id: u16, g: u16, digit: bool } = null;
         var i: usize = 0;
         while (i < s.len) {
-            const n = @min(utf8.seqLen(s[i]), s.len - i);
-            const cp: u21 = std.unicode.utf8Decode(s[i .. i + n]) catch 0xfffd;
+            // A character cut off at the end (a span ending inside it) is
+            // the replacement character, not a decode of too few bytes.
+            const want = utf8.seqLen(s[i]);
+            const n = @min(want, s.len - i);
+            const cp: u21 = if (n == want) std.unicode.utf8Decode(s[i .. i + n]) catch 0xfffd else 0xfffd;
             var id = f.id;
             var rf = primary;
             var g = rf.font.glyphIndex(if (cp == '\t') ' ' else cp);
@@ -270,25 +278,13 @@ pub const TextSystem = struct {
     pub fn wrapAttributed(self: *TextSystem, s: []const u8, style: types.TextStyle, spans: []const types.Span, max_width: f32) []const Line {
         const styled = rich.styled(spans);
         const k = key(s, style, (@as(u64, @intFromFloat(@max(0, @min(max_width, 1e6)))) + 2) ^ (if (styled) rich.spansHash(spans, 0, s.len) else 0));
-        if (self.wraps.get(k)) |lines| return lines;
+        if (self.wraps.get(self.gpa, k)) |lines| return lines;
         const lay = if (styled) rich.layout(self, s, style, spans, 0) else self.layout(s, style);
         var lines: std.ArrayList(Line) = .empty;
         defer lines.deinit(self.gpa);
         breakLines(self.gpa, &lines, s, lay, @max(1, max_width)) catch {};
         if (lines.items.len == 0) lines.append(self.gpa, .{ .start = 0, .end = 0, .width = 0 }) catch {};
-        if (self.wraps.count() > 2048) self.clearWraps();
-        const owned = lines.toOwnedSlice(self.gpa) catch return &.{};
-        self.wraps.put(self.gpa, k, owned) catch {
-            self.gpa.free(owned);
-            return &.{};
-        };
-        return owned;
-    }
-
-    fn clearWraps(self: *TextSystem) void {
-        var it = self.wraps.valueIterator();
-        while (it.next()) |v| self.gpa.free(v.*);
-        self.wraps.clearRetainingCapacity();
+        return self.wraps.put(self.gpa, k, lines.toOwnedSlice(self.gpa) catch return &.{});
     }
 
     pub fn caretX(self: *TextSystem, s: []const u8, style: types.TextStyle, index: usize) f32 {
@@ -351,4 +347,12 @@ fn breakLines(gpa: std.mem.Allocator, lines: *std.ArrayList(Line), s: []const u8
         start = next_start;
         if (start == s.len and end < s.len and s[end] == '\n') try lines.append(gpa, .{ .start = s.len, .end = s.len, .width = 0 });
     }
+}
+
+test "a character cut off at a string's end is shaped, not decoded short" {
+    var ts = TextSystem.init(std.testing.allocator);
+    defer ts.deinit();
+    // "a→" with the arrow's last byte gone, as a span can end.
+    const w = ts.width("a\xe2\x86", .{ .size = 13 });
+    try std.testing.expect(w > 0);
 }

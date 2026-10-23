@@ -108,6 +108,19 @@ pub fn encode(gpa: std.mem.Allocator, value: anytype) ![]u8 {
 
 /// `encode` with every object's keys sorted, as `outputFormatting = [.sortedKeys]`.
 pub fn encodeSorted(gpa: std.mem.Allocator, value: anytype) ![]u8 {
+    if (comptime !hasDynamicKeys(@TypeOf(value), &.{})) {
+        const Wrapper = struct {
+            v: @TypeOf(value),
+            pub fn jsonStringify(self: @This(), jws: anytype) std.Io.Writer.Error!void {
+                try writeSorted(jws, self.v);
+            }
+        };
+        return std.json.Stringify.valueAlloc(gpa, Wrapper{ .v = value }, .{ .emit_null_optional_fields = false });
+    }
+    return encodeSortedDynamic(gpa, value);
+}
+
+pub fn encodeSortedDynamic(gpa: std.mem.Allocator, value: anytype) ![]u8 {
     const plain = try encode(gpa, value);
     defer gpa.free(plain);
     // Numbers stay as written; only the key order changes.
@@ -115,6 +128,86 @@ pub fn encodeSorted(gpa: std.mem.Allocator, value: anytype) ![]u8 {
     defer tree.deinit();
     sortKeys(&tree.value);
     return std.json.Stringify.valueAlloc(gpa, tree.value, .{});
+}
+
+fn hasDynamicKeys(comptime T: type, comptime seen: []const type) bool {
+    inline for (seen) |S| if (S == T) return false;
+    const next_seen = seen ++ &[_]type{T};
+    return switch (@typeInfo(T)) {
+        .optional => |o| hasDynamicKeys(o.child, next_seen),
+        .pointer => |p| if (p.child == u8) false else hasDynamicKeys(p.child, next_seen),
+        .array => |a| if (a.child == u8) false else hasDynamicKeys(a.child, next_seen),
+        .@"struct" => |s| blk: {
+            if (T == Uuid) break :blk false;
+            if (@hasDecl(T, "jsonStringify")) break :blk true;
+            inline for (s.field_types) |FT| if (hasDynamicKeys(FT, next_seen)) break :blk true;
+            break :blk false;
+        },
+        .@"union" => true,
+        else => false,
+    };
+}
+
+fn sortedFieldNames(comptime T: type) [@typeInfo(T).@"struct".field_names.len][:0]const u8 {
+    comptime {
+        @setEvalBranchQuota(100_000);
+        const raw = @typeInfo(T).@"struct".field_names;
+        var names: [raw.len][:0]const u8 = raw[0..raw.len].*;
+        for (1..names.len) |i| {
+            var j = i;
+            while (j > 0 and keyOrder(names[j], names[j - 1]) == .lt) : (j -= 1) {
+                const tmp = names[j];
+                names[j] = names[j - 1];
+                names[j - 1] = tmp;
+            }
+        }
+        return names;
+    }
+}
+
+fn writeSorted(jws: anytype, value: anytype) std.Io.Writer.Error!void {
+    const T = @TypeOf(value);
+    switch (@typeInfo(T)) {
+        .optional => if (value) |v| try writeSorted(jws, v) else try jws.write(null),
+        .pointer => |p| switch (p.size) {
+            .one => try writeSorted(jws, value.*),
+            .slice => if (p.child == u8) try jws.write(value) else {
+                try jws.beginArray();
+                for (value) |item| try writeSorted(jws, item);
+                try jws.endArray();
+            },
+            else => try jws.write(value),
+        },
+        .array => |a| if (a.child == u8) try jws.write(@as([]const u8, &value)) else {
+            try jws.beginArray();
+            for (value) |item| try writeSorted(jws, item);
+            try jws.endArray();
+        },
+        .@"struct" => |s| {
+            if (T == Uuid or @hasDecl(T, "jsonStringify")) return jws.write(value);
+            if (s.is_tuple) {
+                try jws.beginArray();
+                inline for (s.field_names) |name| try writeSorted(jws, @field(value, name));
+                return jws.endArray();
+            }
+            try jws.beginObject();
+            const names = comptime sortedFieldNames(T);
+            inline for (names) |name| {
+                const field_val = @field(value, name);
+                if (@typeInfo(@TypeOf(field_val)) == .optional) {
+                    if (field_val) |unwrapped| {
+                        try jws.objectField(name);
+                        try writeSorted(jws, unwrapped);
+                    }
+                } else {
+                    try jws.objectField(name);
+                    try writeSorted(jws, field_val);
+                }
+            }
+            try jws.endObject();
+        },
+        else => try jws.write(value),
+    }
 }
 
 fn sortKeys(v: *std.json.Value) void {
@@ -238,12 +331,17 @@ test "a title He said \"hi\" round-trips" {
     try std.testing.expectEqual(@as(f64, 1.5), back.value.last);
 }
 
-test "encodeSorted sorts keys" {
+test "encodeSorted sorts keys and matches dynamic path" {
     const gpa = std.testing.allocator;
     const Turn = struct { zeta: u32 = 1, Beta: u32 = 2, alpha: ?u32 = null, item10: u32 = 10, item9: u32 = 9 };
     const a = try encodeSorted(gpa, Turn{});
     defer gpa.free(a);
     try std.testing.expectEqualStrings("{\"Beta\":2,\"item9\":9,\"item10\":10,\"zeta\":1}", a);
+    const dyn = try encodeSortedDynamic(gpa, Turn{ .alpha = 7 });
+    defer gpa.free(dyn);
+    const fast = try encodeSorted(gpa, Turn{ .alpha = 7 });
+    defer gpa.free(fast);
+    try std.testing.expectEqualStrings(dyn, fast);
     var m: Map(Turn) = .{};
     defer m.deinit(gpa);
     try m.map.put(gpa, "b", .{});
