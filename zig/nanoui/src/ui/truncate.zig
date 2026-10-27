@@ -14,7 +14,7 @@ pub fn fit(c: *Context, index: u32, w: f32) void {
     const t = &n.content.text;
     const room = w - n.style.padding.horizontal();
     if (c.text.width(t.str, t.style) <= room + 0.5) return;
-    t.str = if (t.style.truncate_middle) cutMiddle(c, t.str, t.style, room) else cut(c, t.str, t.style, room);
+    t.str = if (t.style.truncate == .middle) cutMiddle(c, t.str, t.style, room) else cut(c, t.str, t.style, room);
 }
 
 /// The longest prefix of `s` no wider than `avail`, as a byte length.

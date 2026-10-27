@@ -121,8 +121,8 @@ fn row(b: *Browser, c: *ui.Context, p: *const Palette, selector: []const u8, lab
         curtain_js.peek(b, selector);
     }
     ui.column(c, .{ .gap = 2, .grow = 1, .min_width = 0 });
-    ui.text(c, label, .{ .size = 13, .color = p.ink, .truncate = true });
-    if (note) |n| if (n.len > 0) ui.text(c, n, .{ .size = 11.5, .color = p.muted, .truncate = true });
+    ui.text(c, label, .{ .size = 13, .color = p.ink, .truncate = .ellipsis });
+    if (note) |n| if (n.len > 0) ui.text(c, n, .{ .size = 11.5, .color = p.muted, .truncate = .ellipsis });
     ui.end(c);
     _ = c.leaf(.{ .min_width = 8, .width = .{ .px = 8 } }, .none, null);
     ui.column(c, .{ .opacity = h });

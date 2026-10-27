@@ -1,7 +1,7 @@
 //! nanoui's hill-climb: a terminal app that renders benchmark scenes
-//! offscreen with nanoui and with mygo, frame after frame, and compares
-//! their CPU and GPU costs with each other and with earlier runs. No
-//! window opens, nothing takes focus.
+//! offscreen with nanoui and with mygo, and lays them out with Clay, frame
+//! after frame, and compares their CPU and GPU costs with each other and
+//! with earlier runs. No window opens, nothing takes focus.
 //!
 //!   zig build run                          all scenes, nanoui and mygo
 //!   zig build run -- --label "glyph atlas" name this run in the history
@@ -12,13 +12,14 @@ const ui = nanoui.ui;
 const scenes = @import("scenes.zig");
 const report = @import("report.zig");
 const mygo = @import("mygo.zig");
+const clay = @import("clay.zig");
 
 extern "c" fn CACurrentMediaTime() f64;
 
 pub const width = 900;
 pub const height = 640;
 pub const scale = 2;
-const warmup = 30;
+pub const warmup = 30;
 
 pub const Result = struct {
     fw: []const u8,
@@ -33,7 +34,8 @@ pub const Result = struct {
     gpu_ms: f64,
     /// The process's CPU time (user + system) per frame, all included.
     cpu_ms: f64,
-    /// What the GPU draws: nanoui's instances, mygo's scene operations.
+    /// What the GPU draws: nanoui's instances, mygo's scene operations,
+    /// Clay's render commands.
     ops: usize,
     /// nanoui's phases of a frame (medians); mygo reports none.
     build_ms: f64 = 0,
@@ -51,7 +53,7 @@ const Options = struct {
     label: []const u8 = "",
 };
 
-fn cpuSeconds() f64 {
+pub fn cpuSeconds() f64 {
     const ru = std.posix.getrusage(0);
     const tv = struct {
         fn s(t: anytype) f64 {
@@ -61,12 +63,12 @@ fn cpuSeconds() f64 {
     return tv(ru.utime) + tv(ru.stime);
 }
 
-fn medianOf(xs: []f64) f64 {
+pub fn medianOf(xs: []f64) f64 {
     std.mem.sort(f64, xs, {}, std.sort.asc(f64));
     return xs[xs.len / 2];
 }
 
-fn p95Of(xs: []f64) f64 {
+pub fn p95Of(xs: []f64) f64 {
     std.mem.sort(f64, xs, {}, std.sort.asc(f64));
     return xs[xs.len * 95 / 100];
 }
@@ -158,7 +160,7 @@ fn parseArgs(init: std.process.Init) !Options {
             o.scenes = list.items;
             i += 1;
         } else if (std.mem.eql(u8, a, "--help") or std.mem.eql(u8, a, "-h")) {
-            std.debug.print("usage: hillclimb [--scene boxes,text,scroll,dashboard] [--frames N] [--only nanoui|mygo] [--label NAME]\n", .{});
+            std.debug.print("usage: hillclimb [--scene boxes,text,scroll,dashboard] [--frames N] [--only nanoui|mygo|clay] [--label NAME]\n", .{});
             std.process.exit(0);
         } else return error.UnknownArgument;
     }
@@ -189,6 +191,7 @@ pub fn main(init: std.process.Init) !void {
     for (opts.scenes) |scene| {
         var n_best: ?Result = null;
         var m_best: ?Result = null;
+        var c_best: ?Result = null;
         for (0..opts.repeat) |rep| {
             if (want(opts, "nanoui")) {
                 report.status(try std.fmt.allocPrint(arena, "nanoui · {s} · run {d}/{d}…", .{ @tagName(scene), rep + 1, opts.repeat }));
@@ -200,9 +203,14 @@ pub fn main(init: std.process.Init) !void {
                     m_best = better(m_best, r);
                 } else |err| std.debug.print("mygo {s}: {s}\n", .{ @tagName(scene), @errorName(err) });
             }
+            if (want(opts, "clay")) {
+                report.status(try std.fmt.allocPrint(arena, "clay · {s} · run {d}/{d}…", .{ @tagName(scene), rep + 1, opts.repeat }));
+                c_best = better(c_best, try clay.run(gpa, scene, opts.frames));
+            }
         }
         if (n_best) |r| try results.append(arena, r);
         if (m_best) |r| try results.append(arena, r);
+        if (c_best) |r| try results.append(arena, r);
     }
     report.status("");
     const history = report.loadHistory(init) catch &.{};

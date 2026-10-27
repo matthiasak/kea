@@ -183,7 +183,7 @@ fn fetchRow(c: *ui.Context, p: *const Palette, e: *Entry) Act {
     ui.icon(c, icon(e), .{ .size = 14, .color = p.muted });
     ui.end(c);
     ui.column(c, .{ .gap = 4, .grow = 1, .min_width = 0 });
-    ui.text(c, e.label(), .{ .size = 13, .color = p.ink, .truncate_middle = true });
+    ui.text(c, e.label(), .{ .size = 13, .color = p.ink, .truncate = .middle });
     ui.row(c, .{ .gap = 7, .align_items = .center, .width = .fill });
     if (e.fraction) |fraction| {
         // Grey, as the ring in the chrome is.
@@ -192,7 +192,7 @@ fn fetchRow(c: *ui.Context, p: *const Palette, e: *Entry) Act {
         ui.end(c);
     }
     ui.column(c, .{ .grow = 1, .min_width = 0 });
-    ui.text(c, c.print("{s} · {s}", .{ stateLabel(e), bytes(c, e) }), .{ .size = 11.5, .color = p.muted, .tabular = true, .truncate_middle = true });
+    ui.text(c, c.print("{s} · {s}", .{ stateLabel(e), bytes(c, e) }), .{ .size = 11.5, .color = p.muted, .tabular = true, .truncate = .middle });
     ui.end(c);
     ui.end(c);
     if (e.state == .failed) {
@@ -284,9 +284,9 @@ fn keptRow(c: *ui.Context, p: *const Palette, k: Keep, idx: usize) Act {
     ui.icon(c, if (there) "doc" else "doc.badge.ellipsis", .{ .size = 13, .color = if (there) p.muted else p.faint });
     ui.end(c);
     ui.column(c, .{ .gap = 2, .grow = 1, .min_width = 0 });
-    ui.text(c, k.name, .{ .size = 13, .color = if (there) p.ink else p.faint, .truncate_middle = true });
+    ui.text(c, k.name, .{ .size = 13, .color = if (there) p.ink else p.faint, .truncate = .middle });
     const ago = if (cached and kept_cache[idx].ago_len > 0) kept_cache[idx].ago_buf[0..kept_cache[idx].ago_len] else when.said(c.alloc(), k.date);
-    ui.text(c, if (k.from.len == 0) ago else c.print("{s} · {s}", .{ k.from, ago }), .{ .size = 11.5, .color = p.muted, .truncate = true });
+    ui.text(c, if (k.from.len == 0) ago else c.print("{s} · {s}", .{ k.from, ago }), .{ .size = 11.5, .color = p.muted, .truncate = .ellipsis });
     ui.end(c);
     _ = c.leaf(.{ .min_width = 8, .width = px(8) }, .none, null);
     if (hover > 0.001) {

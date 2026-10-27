@@ -379,7 +379,7 @@ fn whose(c: *ui.Context, p: *const Palette, t: *Tab, wanted: bool) void {
     defer ui.end(c);
     ui.row(c, .{ .height = px(22), .padding = .xy(10, 0), .radius = 11, .align_items = .center, .background = p.ground, .border = p.hairline });
     defer ui.end(c);
-    ui.text(c, host orelse "", .{ .size = 11.5, .color = p.muted, .truncate = true });
+    ui.text(c, host orelse "", .{ .size = 11.5, .color = p.muted, .truncate = .ellipsis });
 }
 
 /// The address's host, less a leading "www.".
@@ -424,7 +424,7 @@ fn openTabs(b: *Browser, c: *ui.Context, p: *const Palette, blank: *Tab, at: ui.
         var buf: [4]u8 = undefined;
         const icon = if (b.kea.favicons.icon(t.url())) |ic| mark.Icon{ .key = ic.key, .png = ic.png } else null;
         mark.mark(c, p, icon, t.monogram(&buf), 15, false);
-        ui.text(c, label, .{ .size = 12.5, .color = if (it.hovered) p.ink else p.ink.alpha(0.75), .truncate = true });
+        ui.text(c, label, .{ .size = 12.5, .color = if (it.hovered) p.ink else p.ink.alpha(0.75), .truncate = .ellipsis });
         c.end();
         // Done next frame: the empty page goes, and it is being drawn.
         if (it.clicked) {

@@ -41,7 +41,7 @@ test "glyph weight matches AppKit within 3% across sizes, weights and appearance
                     const pen = g.x * 2.0;
                     const px = @floor(pen);
                     const bin: u8 = @intFromFloat(@min(text_mod.subpixel_bins - 1, @floor((pen - px) * text_mod.subpixel_bins)));
-                    _ = ts.glyph(g, bin);
+                    _ = ts.glyph(g, bin, if (dark) 4 else 0);
                 }
                 const texels = try ts.atlas.read(gpa);
                 defer gpa.free(texels);
@@ -51,7 +51,7 @@ test "glyph weight matches AppKit within 3% across sizes, weights and appearance
                     const pen = g.x * 2.0;
                     const px = @floor(pen);
                     const bin: u8 = @intFromFloat(@min(text_mod.subpixel_bins - 1, @floor((pen - px) * text_mod.subpixel_bins)));
-                    const sp = ts.glyph(g, bin) orelse continue;
+                    const sp = ts.glyph(g, bin, if (dark) 4 else 0) orelse continue;
                     const du = if (dark) 0 else sp.uv[2] - sp.uv[0];
                     const x0: usize = @intFromFloat(@round((sp.uv[0] + du) * as));
                     const y0: usize = @intFromFloat(@round(sp.uv[1] * as));

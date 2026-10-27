@@ -219,8 +219,8 @@ fn line(b: *Browser, c: *ui.Context, p: *const Palette, row: *Row, h: f32) Act {
     const letter = mark.initial(c, row.address);
     mark.mark(c, p, if (icon) |ic| .{ .key = ic.key, .png = ic.png } else null, letter, 16, false);
     ui.column(c, .{ .gap = 2, .grow = 1, .min_width = 0 });
-    ui.text(c, row.title, .{ .size = 13, .color = p.ink, .truncate = true });
-    ui.text(c, row.address, .{ .size = 11.5, .color = p.muted, .truncate_middle = true });
+    ui.text(c, row.title, .{ .size = 13, .color = p.ink, .truncate = .ellipsis });
+    ui.text(c, row.address, .{ .size = 11.5, .color = p.muted, .truncate = .middle });
     ui.end(c);
     _ = c.leaf(.{ .min_width = 8, .width = px(8) }, .none, null);
     ui.row(c, .{ .min_width = 56, .align_items = .center, .justify = .end });

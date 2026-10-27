@@ -1,13 +1,17 @@
-//! A tour of the native UI toolkit: layout, text, and every widget, drawn
-//! by nanoui with Metal.
+//! A tour of the native UI toolkit: layout, text, every widget and motion,
+//! drawn by nanoui (with Metal on macOS and iOS, OpenGL or its CPU renderer
+//! elsewhere).
 const std = @import("std");
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
+const phone = @import("phone.zig");
 
 const Item = struct { title: [64]u8, len: usize, done: bool };
 
 const Gallery = struct {
     page: usize = 0,
+    /// On a phone: the page is open, pushed over the list of pages.
+    open: bool = false,
     notifications: bool = true,
     dark_glass: bool = false,
     sync: bool = true,
@@ -19,6 +23,9 @@ const Gallery = struct {
     filter: ui.TextBuffer = .{},
     items: [64]Item = undefined,
     count: usize = 0,
+    motion: @import("motion.zig").Demo = .{},
+    kit: @import("kit.zig").Demo = .{},
+    glass: @import("glass.zig").Demo = .{},
 
     fn add(g: *Gallery, title: []const u8) void {
         if (g.count == g.items.len or title.len == 0) return;
@@ -29,12 +36,20 @@ const Gallery = struct {
     }
 
     fn view(g: *Gallery, c: *ui.Context) void {
+        if (phone.compact(c)) return phone.view(g, c);
         ui.row(c, .{ .width = .fill, .height = .fill });
         defer ui.end(c);
         g.sidebar(c);
+        g.content(c);
+    }
+
+    /// The page shown, beside the sidebar or pushed on a phone.
+    pub fn content(g: *Gallery, c: *ui.Context) void {
         if (g.page == 3) return g.bigList(c);
-        if (g.page == 4) return g.glass(c);
-        ui.scroll(c, .{ .grow = 1, .height = .fill, .padding = .all(28), .gap = 20 });
+        if (g.page == 4) return g.glass.view(c);
+        if (g.page == 5) return g.motion.page(c);
+        if (g.page == 6) return g.kit.view(c);
+        ui.scroll(c, .{ .grow = 1, .width = .fill, .height = .fill, .padding = .all(if (phone.compact(c)) 16 else 28), .gap = 20 });
         defer ui.end(c);
         switch (g.page) {
             0 => g.controls(c),
@@ -57,16 +72,9 @@ const Gallery = struct {
         });
         defer ui.end(c);
         ui.text(c, "nanoui", .{ .size = 18, .weight = .bold });
-        ui.label(c, "Zig 0.17 · Metal");
+        ui.label(c, c.print("Zig 0.17 · {s}", .{c.renderer}));
         _ = c.leaf(.{ .height = .{ .px = 12 } }, .none, null);
-        const pages = [_][2][]const u8{
-            .{ "Controls", "slider.horizontal.3" },
-            .{ "Tasks", "checklist" },
-            .{ "Typography", "textformat" },
-            .{ "List", "list.bullet" },
-            .{ "Glass", "sparkles" },
-        };
-        for (pages, 0..) |p, i| {
+        for (phone.pages, 0..) |p, i| {
             const selected = g.page == i;
             // GPUI's way: a box styled by a chain of methods.
             var item = ui.div(c).row().wFull().px(10).py(7).gap(8).itemsCenter().rounded(7);
@@ -92,6 +100,11 @@ const Gallery = struct {
             if (ui.button(c, "Primary", .{ .variant = .primary }).clicked) g.clicks += 1;
             if (ui.button(c, "Secondary", .{}).clicked) g.clicks += 1;
             if (ui.button(c, "Ghost", .{ .variant = .ghost }).clicked) g.clicks += 1;
+            if (phone.compact(c)) {
+                // Two rows: a phone is too narrow for one.
+                ui.end(c);
+                ui.row(c, .{ .gap = 8, .align_items = .center });
+            }
             if (ui.button(c, "Delete", .{ .variant = .danger }).clicked) g.clicks = 0;
             _ = ui.button(c, "Disabled", .{ .disabled = true });
             ui.badge(c, c.print("{d} clicks", .{g.clicks}), c.theme.accent);
@@ -108,15 +121,16 @@ const Gallery = struct {
         {
             defer ui.end(c);
             ui.text(c, "Sliders and progress", .{ .weight = .semibold });
+            const slider_w: f32 = if (phone.compact(c)) 170 else 240;
             ui.row(c, .{ .gap = 12, .align_items = .center });
             ui.text(c, "Volume", .{ .color = c.theme.muted });
-            _ = ui.slider(c, &g.volume, .{ .width = .{ .px = 240 } });
+            _ = ui.slider(c, &g.volume, .{ .width = .{ .px = slider_w } });
             ui.textf(c, .{ .mono = true, .size = 12 }, "{d:.0}%", .{g.volume * 100});
             ui.end(c);
-            ui.progress(c, g.volume, .{ .px = 340 });
+            ui.progress(c, g.volume, .{ .px = if (phone.compact(c)) 280 else 340 });
             ui.row(c, .{ .gap = 12, .align_items = .center });
             ui.text(c, "Speed", .{ .color = c.theme.muted });
-            _ = ui.slider(c, &g.speed, .{ .min = 1, .max = 10, .width = .{ .px = 240 } });
+            _ = ui.slider(c, &g.speed, .{ .min = 1, .max = 10, .width = .{ .px = slider_w } });
             ui.textf(c, .{ .mono = true, .size = 12 }, "{d:.1}×", .{g.speed});
             ui.end(c);
         }
@@ -135,7 +149,7 @@ const Gallery = struct {
     fn tasks(g: *Gallery, c: *ui.Context) void {
         ui.heading(c, "Tasks");
         ui.row(c, .{ .gap = 8, .align_items = .center });
-        const r = ui.textField(c, &g.task, .{ .placeholder = "Something to do", .width = .{ .px = 300 } });
+        const r = ui.textField(c, &g.task, .{ .placeholder = "Something to do", .width = .{ .px = if (phone.compact(c)) 240 else 300 } });
         const add_clicked = ui.button(c, "Add", .{ .variant = .primary }).clicked;
         ui.end(c);
         if (r.submitted or add_clicked) {
@@ -194,40 +208,6 @@ const Gallery = struct {
             ui.textf(c, .{ .size = 12, .color = th.muted, .mono = true }, "#{x:0>4}", .{n});
         }
         rows.end();
-    }
-
-    /// Liquid Glass: a toolbar floats over content that scrolls under it,
-    /// with a tinted button on it, and a pane of clear glass beside.
-    fn glass(g: *Gallery, c: *ui.Context) void {
-        const th = c.theme;
-        const page = ui.div(c).grow().hFull().clip();
-        defer page.end();
-        {
-            const content = ui.div(c).column().sizeFull().scrollY().px(28).pt(40).pb(28).gap(14);
-            defer content.end();
-            const hues = [_]u24{ 0xe8453c, 0xf2a93b, 0x3fae5a, 0x2f6fd0, 0x8e44ad, 0x16a3a3 };
-            for (0..18) |i| {
-                const card = ui.div(c).row().wFull().h(64).px(18).gap(12).itemsCenter().rounded(16).bg(.hex(hues[i % hues.len]));
-                defer card.end();
-                ui.icon(c, "photo", .{ .size = 18, .color = .white });
-                ui.textf(c, .{ .size = 15, .weight = .semibold, .color = .white }, "Scroll me under the glass · {d}", .{i + 1});
-            }
-        }
-        {
-            const bar = ui.div(c).absolute().offset(20, 20).w(c.size.w - 240).h(56).row().itemsCenter().gap(10).px(16).rounded(28).glass(.{});
-            defer bar.end();
-            ui.icon(c, "sparkles", .{ .size = 16, .color = th.text });
-            ui.text(c, "Liquid Glass", .{ .size = 15, .weight = .semibold });
-            ui.spacer(c);
-            ui.label(c, c.print("{d} taps", .{g.clicks}));
-            const done = ui.div(c).px(16).py(8).rounded(16).glass(.{ .tint = th.accent }).control();
-            defer done.end();
-            if (done.clicked()) g.clicks += 1;
-            ui.text(c, "Tap", .{ .size = 13, .weight = .semibold, .color = th.accent_text });
-        }
-        const pane = ui.div(c).absolute().offset(c.size.w - 380, 140).w(140).h(140).rounded(36).glass(.{ .style = .clear }).itemsCenter().justifyCenter();
-        defer pane.end();
-        ui.text(c, "Clear", .{ .size = 15, .weight = .semibold, .color = .white });
     }
 
     fn typography(_: *Gallery, c: *ui.Context) void {

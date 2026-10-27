@@ -21,6 +21,7 @@ const frame_log_mod = @import("frame_log.zig");
 pub const FrameLog = frame_log_mod.FrameLog;
 pub const KeysReleased = struct { ctx: ?*anyopaque, func: *const fn (ctx: ?*anyopaque, s: *Surface) void };
 extern "c" fn getenv(name: [*:0]const u8) ?[*:0]const u8;
+const pacing = @import("pacing.zig");
 pub const Surface = struct {
     gpa: std.mem.Allocator,
     window: *Window,
@@ -84,7 +85,9 @@ pub const Surface = struct {
     tip: ?[]const u8 = null,
     frame_log: ?FrameLog = null,
     frame_kind: frame_log_mod.Kind = .input,
-
+    /// Scrolling gathered for the link's next frame, and main's frame log.
+    scroll: pacing.Scroll = .{},
+    pacing_log: pacing.FrameLog = .{},
     pub fn create(window: *Window, view: ui.View, theme_override: ?Theme) !*Surface {
         const gpa = window.app.gpa;
         const self = try gpa.create(Surface);
@@ -123,6 +126,7 @@ pub const Surface = struct {
             const p = std.mem.span(raw);
             if (p.len > 0) self.frame_log = FrameLog.init(gpa, p) catch null;
         }
+        self.pacing_log = .open();
         objc.setZig(nsview, self);
         // A layer-hosting view: the Metal layer is ours.
         objc.msg(void, nsview, "setLayer:", .{renderer.layer});
@@ -160,12 +164,10 @@ pub const Surface = struct {
         self.frame();
         return self;
     }
-
     pub fn destroy(self: *Surface) void {
         self.dead = true;
         if (!self.in_frame) self.finishDestroy();
     }
-
     fn finishDestroy(self: *Surface) void {
         if (!self.torn_down) {
             self.torn_down = true;
@@ -189,6 +191,7 @@ pub const Surface = struct {
             self.text.deinit();
             if (self.atlas_texture) |t| objc.release(t);
             self.renderer.deinit();
+            self.pacing_log.close();
             if (self.frame_log) |*fl| fl.deinit();
         }
         if (!self.tick_scheduled) self.gpa.destroy(self);
@@ -198,7 +201,6 @@ pub const Surface = struct {
         self.in_frame = false;
         if (self.dead) self.finishDestroy();
     }
-
     pub fn recordFrames(self: *Surface, gpa: std.mem.Allocator) !*FrameLog {
         if (self.frame_log == null) self.frame_log = try FrameLog.init(gpa, null);
         return &self.frame_log.?;
@@ -299,6 +301,10 @@ pub const Surface = struct {
         c.reduce_motion = self.reduce_motion;
         c.reduced_motion = self.reduce_motion;
         c.window_focused = if (vis) self.window.isFocused() else true;
+        self.pacing_log.note(now);
+        // What scrolling gathered since the last frame, applied at once.
+        const dy = self.scroll.take();
+        if (dy != 0 and !c.applyScroll(dy) and c.wants_wheel) c.input.scroll = .{ .y = dy };
         const r = frame_mod.run(c, self.view, &self.text, &self.instances, self.size, self.scale, self.theme(), dt, now - self.start_time);
         if (self.dead) return;
         @import("../play.zig").paint(self.gpa, &self.instances);
@@ -345,6 +351,7 @@ pub const Surface = struct {
         });
         self.updateCursor();
         if (!presented) return self.requestFrame();
+        if (dy != 0) c.updateHot();
         self.updatePacing(now, r.hot_changed);
     }
 
@@ -352,7 +359,7 @@ pub const Surface = struct {
         const c = &self.ctx;
         const elapsed = (now - self.start_time) - c.caret_moved_at;
         const recent_typing = c.focused_text != null and c.caret_moved_at > 0 and elapsed >= 0 and elapsed < 0.35;
-        const more = c.animating or hot_changed or c.input.down or recent_typing;
+        const more = c.animating or hot_changed or c.input.down or recent_typing or self.scroll.active(now);
         if (self.display_link != null) {
             if (more) {
                 self.setRate(null);
@@ -476,11 +483,8 @@ pub const Surface = struct {
             if (self.frame_log) |*fl| fl.last_t = 0;
         }
         self.link_fps = fps;
-        const s = self.max_fps;
-        const Range = extern struct { minimum: f32, maximum: f32, preferred: f32 };
-        const range: Range = if (fps == 0) .{ .minimum = s, .maximum = s, .preferred = s } else .{ .minimum = fps, .maximum = fps, .preferred = fps };
         if (self.paced and faster) objc.msg(void, link, "setPaused:", .{objc.YES});
-        objc.msg(void, link, "setPreferredFrameRateRange:", .{range});
+        objc.msg(void, link, "setPreferredFrameRateRange:", .{pacing.range(fps, self.max_fps)});
         if (self.paced and faster) objc.msg(void, link, "setPaused:", .{objc.NO});
     }
 

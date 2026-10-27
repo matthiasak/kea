@@ -207,7 +207,7 @@ pub fn interact(c: *Context, index: u32, opts: struct { focusable: bool = false 
     const left_press = top and c.input.pressed and c.input.button == .left and !c.input.ctrl;
     if (top and c.input.pressed) {
         c.active = id;
-        if (opts.focusable) c.focus = id else if (left_press) c.focus = 0;
+        if (opts.focusable and c.input.button != .right and !c.input.secondary) c.focus = id else if (left_press) c.focus = 0;
     }
     const released = c.input.released and c.active == id and top and !c.selection.moved;
     const clicked = released and c.input.button == .left and !c.input.ctrl;
@@ -222,6 +222,7 @@ pub fn interact(c: *Context, index: u32, opts: struct { focusable: bool = false 
         .right_pressed = right_press,
         .right_clicked = right_press,
         .middle_clicked = released and c.input.button == .middle,
+        .secondary_clicked = hovered and c.input.secondary,
         .focused = c.focus == id,
         .a11y_step = if (c.input.a11y_step) |s| (if (s.id == id) s.dir else 0) else 0,
     };

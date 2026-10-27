@@ -342,7 +342,7 @@ fn siteShortcuts(b: *Browser, c: *ui.Context, p: *const Palette) void {
         ui.end(c);
         ui.text(c, "→", .{ .size = 12.5, .color = p.muted });
         ui.column(c, .{ .grow = 1, .min_width = 0 });
-        ui.text(c, k.template, .{ .size = 12.5, .color = p.ink, .truncate_middle = true });
+        ui.text(c, k.template, .{ .size = 12.5, .color = p.ink, .truncate = .middle });
         ui.end(c);
         const i = c.open(.{ .control = true }, null);
         if (c.interact(i, .{}).clicked) gone = k.id;
@@ -372,6 +372,6 @@ fn field(c: *ui.Context, p: *const Palette, buf: *ui.TextBuffer, placeholder: []
     // After the field: before it, the first key typed shifted the field's
     // id and took its focus away.
     if (buf.text().len == 0)
-        _ = c.leaf(.{ .absolute = true }, .{ .text = .{ .str = placeholder, .style = .{ .size = 12.5, .truncate = true }, .color = p.muted.alpha(0.7) } }, null);
+        _ = c.leaf(.{ .absolute = true }, .{ .text = .{ .str = placeholder, .style = .{ .size = 12.5, .truncate = .ellipsis }, .color = p.muted.alpha(0.7) } }, null);
     return r;
 }

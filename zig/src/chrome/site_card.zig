@@ -562,7 +562,7 @@ fn row(c: *ui.Context, title: []const u8, keys: []const u8, submenu: bool, dark:
 /// The site's name over the lines, as a menu's section header.
 fn header(c: *ui.Context, title: []const u8, dark: bool) void {
     _ = c.open(.{ .height = px(menu.row), .justify = .center, .padding = .{ .left = menu.text, .right = menu.trailing } }, null);
-    ui.text(c, title, .{ .size = 11, .weight = .semibold, .color = menu.secondary(dark), .truncate = true });
+    ui.text(c, title, .{ .size = 11, .weight = .semibold, .color = menu.secondary(dark), .truncate = .ellipsis });
     c.end();
 }
 

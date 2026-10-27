@@ -164,7 +164,7 @@ fn half(b: *Browser, c: *ui.Context, p: *const Palette, t: *Tab, o: HalfOptions)
     if (t.shy) ui.icon(c, "eye.slash", .{ .size = 9, .color = p.muted });
     // The page is asking something, over its half of the stage.
     if (t.question() != null) _ = c.leaf(.{ .width = px(5), .height = px(5), .radius = 2.5, .background = p.muted }, .none, null);
-    if (!o.narrow) ui.text(c, title, .{ .size = if (o.stacked) 12.5 else 12, .color = if (focused) p.ink else p.muted.mix(p.ink, h), .truncate = true });
+    if (!o.narrow) ui.text(c, title, .{ .size = if (o.stacked) 12.5 else 12, .color = if (focused) p.ink else p.muted.mix(p.ink, h), .truncate = .ellipsis });
     _ = c.leaf(.{ .grow = 1, .min_width = 0 }, .none, null);
     const playing = !t.loading and (t.noisy or t.muted);
     if (playing) {

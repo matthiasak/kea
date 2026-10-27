@@ -167,8 +167,8 @@ fn row(c: *ui.Context, p: *const Palette, mark: Mark, name: []const u8, detail: 
     }
     ui.end(c);
     ui.column(c, .{ .gap = 1, .grow = 1 });
-    ui.text(c, name, .{ .size = 12.5, .color = p.ink, .truncate = true });
-    ui.text(c, detail, .{ .size = 10.5, .color = p.muted, .truncate = true });
+    ui.text(c, name, .{ .size = 12.5, .color = p.ink, .truncate = .ellipsis });
+    ui.text(c, detail, .{ .size = 10.5, .color = p.muted, .truncate = .ellipsis });
     ui.end(c);
     return it.clicked;
 }

@@ -91,7 +91,7 @@ fn row(b: *Browser, c: *ui.Context, p: *const Palette, a: *Assistant, st: *State
     if (e.task) {
         ui.icon(c, "list.clipboard", .{ .size = 10, .color = p.muted });
     } else if (e.starred) ui.icon(c, "star.fill", .{ .size = 9, .color = p.muted });
-    ui.text(c, title, .{ .size = 12.5, .color = p.ink, .truncate = true });
+    ui.text(c, title, .{ .size = 12.5, .color = p.ink, .truncate = .ellipsis });
     _ = c.leaf(.{ .grow = 1, .min_width = 0 }, .none, null);
     if (e.task) {
         if (controls.door(c, p, "checkmark", .{ .help = "Mark Done" }).clicked) todo.* = .{ .done = e.id };

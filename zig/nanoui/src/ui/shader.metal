@@ -179,6 +179,40 @@ static float corner_sdf(float2 p, float2 half_size, float r_in) {
 
 static float4 shade(VOut in, Instance i, texture2d<float> atlas, texture2d<float> images, texture2d<float> layer_tex, texture2d<float> frame);
 
+// A dashed border's coverage at `p` (from the box's centre), as GPUI's quad
+// shader lays dashes: twice the border's width long, once it apart, evenly
+// round the whole perimeter clockwise from the top's start, smoothed half a
+// pixel. raster.zig's `dashCover` computes the same.
+static float dash_cover(float2 p, float2 half_size, float r, float w) {
+    float dv = 1.0 / (3.0 * w);
+    float sx = (2.0 * half_size.x - 2.0 * r) * dv;
+    float sy = (2.0 * half_size.y - 2.0 * r) * dv;
+    float cq = r * M_PI_F * 0.5 * dv;
+    float2 q = abs(p) - (half_size - r);
+    float t;
+    if (r > 0.0 && q.x > 0.0 && q.y > 0.0) {
+        float2 v = p - sign(p) * (half_size - r);
+        float ang = atan2(v.y, v.x);
+        if (p.x >= 0.0 && p.y < 0.0) t = sx + (ang + M_PI_F * 0.5) * r * dv;
+        else if (p.x >= 0.0) t = sx + cq + sy + ang * r * dv;
+        else if (p.y >= 0.0) t = 2.0 * sx + 2.0 * cq + sy + (ang - M_PI_F * 0.5) * r * dv;
+        else t = 2.0 * sx + 3.0 * cq + 2.0 * sy + (ang + M_PI_F) * r * dv;
+    } else if ((half_size.y - abs(p.y)) < (half_size.x - abs(p.x))) {
+        t = p.y < 0.0 ? (p.x + half_size.x - r) * dv : sx + 2.0 * cq + sy + (half_size.x - r - p.x) * dv;
+    } else {
+        t = p.x > 0.0 ? sx + cq + (p.y + half_size.y - r) * dv : 2.0 * sx + 3.0 * cq + sy + (half_size.y - r - p.y) * dv;
+    }
+    float max_t = 2.0 * (sx + sy) + 4.0 * cq;
+    if (max_t < 1.0) return 1.0;
+    float period = max_t / floor(max_t);
+    float len = 2.0 / 3.0;
+    float u = t + period * 0.5 - len * 0.5;
+    float centered = u - period * floor(u / period) - period * 0.5;
+    float sd = (abs(centered) - len * 0.5) / dv;
+    float px = max(fwidth(p.x), 0.0001);
+    return saturate(0.5 - sd / px);
+}
+
 // A line: round ends, half a pixel smoothed each side; its dashes cut
 // square, smoothed likewise. raster.zig's `segment` computes the same.
 static float4 line_color(float2 w, Instance i) {
@@ -277,6 +311,8 @@ static float4 shade(VOut in, Instance i, texture2d<float> atlas, texture2d<float
         } else {
             a = atlas.sample(s, in.uv).r * i.color.a;
         }
+        // A truncated line fading out: `border_width` points before `radius`.
+        if (i.border_width > 0.0) a *= clamp((i.radius - in.world.x) / i.border_width, 0.0, 1.0);
         return float4(i.color.rgb * a, a);
     }
 
@@ -337,11 +373,13 @@ static float4 shade(VOut in, Instance i, texture2d<float> atlas, texture2d<float
     } else {
         coverage = 1.0 - smoothstep(-aa, aa, d);
     }
-    float4 c = i.color;
+    // Premultiplied: the border is laid over the fill, not mixed with it.
+    float4 c = float4(i.color.rgb * i.color.a, i.color.a);
     if (i.border_width > 0.0 && i.border_color.a > 0.0) {
         float inner = smoothstep(-i.border_width - aa, -i.border_width + aa, d);
-        c = mix(c, i.border_color, inner);
+        float4 b = float4(i.border_color.rgb * i.border_color.a, i.border_color.a);
+        if (i.uv.x > 0.5) b *= dash_cover(p, half_size, r, i.border_width);
+        c = mix(c, b + c * (1.0 - b.a), inner);
     }
-    float a = c.a * coverage;
-    return float4(c.rgb * a, a);
+    return c * coverage;
 }

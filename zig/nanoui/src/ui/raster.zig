@@ -13,6 +13,8 @@ const glass = @import("glass.zig");
 pub const Mask = struct {
     pixels: []const u8,
     size: u32,
+    native_pixels: []const u8 = &.{},
+    text_params: @import("text_blend.zig").Params = .{},
 };
 
 /// The image atlas: BGRA premultiplied, `size` × `size` (empty: none).
@@ -33,7 +35,8 @@ pub fn draw(out: gpu.Pixels, instances: []const gpu.Instance, mask: Mask, pictur
 /// `out` is kept. Over the pixels of an earlier frame, with the `damage`
 /// between the two, it makes the same pixels as drawing it all.
 pub fn drawRegion(out: gpu.Pixels, instances: []const gpu.Instance, mask: Mask, pictures: Pictures, scale: f32, clear: types.Color, region: [4]usize) void {
-    const px: [4]u8 = .{ unit(clear.b), unit(clear.g), unit(clear.r), 255 };
+    const alpha = if (mask.native_pixels.len > 0) clear.a else 1;
+    const px: [4]u8 = .{ unit(clear.b * alpha), unit(clear.g * alpha), unit(clear.r * alpha), unit(alpha) };
     for (instances) |*inst_chk| if (inst_chk.kind == gpu.Kind.layer_begin) {
         const words: []u32 = @alignCast(std.mem.bytesAsSlice(u32, out.bytes[0 .. out.width * out.height * 4]));
         for (region[1]..region[3]) |y| @memset(words[y * out.width + region[0] .. y * out.width + region[2]], @bitCast(px));
@@ -54,6 +57,7 @@ pub fn drawRegion(out: gpu.Pixels, instances: []const gpu.Instance, mask: Mask, 
         }
         return;
     };
+
     var job: Band = .{ .out = out, .instances = instances, .mask = mask, .pictures = pictures, .scale = scale, .clear = @bitCast(px), .region = region };
     // Glass reads what's drawn beyond its band: the bands meet before each
     // pane, which one thread draws.
@@ -150,7 +154,6 @@ pub fn damage(width: usize, height: usize, old: []const gpu.Instance, new: []con
     }
     return region;
 }
-
 fn same(a: *const gpu.Instance, b: *const gpu.Instance) bool {
     return std.mem.eql(u8, std.mem.asBytes(a), std.mem.asBytes(b));
 }
@@ -159,7 +162,6 @@ fn cover(region: *?[4]usize, b: ?[4]usize) void {
     const add = b orelse return;
     region.* = if (region.*) |r| .{ @min(r[0], add[0]), @min(r[1], add[1]), @max(r[2], add[2]), @max(r[3], add[3]) } else add;
 }
-
 fn drawGroup(out: gpu.Pixels, span: []const gpu.Instance, begin_inst: *const gpu.Instance, end_inst: *const gpu.Instance, mask: Mask, pictures: Pictures, scale: f32, region: [4]usize) void {
     for (span) |*gi| {
         if (gi.kind == gpu.Kind.glass) drawOne(out, gi, mask, pictures, scale, region);
@@ -188,11 +190,9 @@ fn drawGroup(out: gpu.Pixels, span: []const gpu.Instance, begin_inst: *const gpu
         }
     }
 }
-
 fn unit(v: f32) u8 {
     return @intFromFloat(@round(std.math.clamp(v, 0, 1) * 255));
 }
-
 inline fn unrotate(i: *const gpu.Instance, wx: f32, wy: f32) [2]f32 {
     const a = i.xf[0];
     if (a == 0) return .{ wx, wy };
@@ -353,7 +353,6 @@ pub inline fn clipCover(i: *const gpu.Instance, wx: f32, wy: f32, inv: f32) f32 
     const aa = @max(sd[1] * inv, 0.0001) * 0.5;
     return 1 - smoothstep(-aa, aa, sd[0]);
 }
-
 fn quad(out: gpu.Pixels, i: *const gpu.Instance, scale: f32, b: [4]usize) void {
     const hw = i.rect[2] * 0.5;
     const hh = i.rect[3] * 0.5;
@@ -390,13 +389,19 @@ fn quad(out: gpu.Pixels, i: *const gpu.Instance, scale: f32, b: [4]usize) void {
             const aa = @max(sd[1] * inv, 0.0001) * 0.5;
             const coverage = 1 - smoothstep(-aa, aa, sd[0]);
             if (coverage <= 0) continue;
-            var col = c;
+            // Premultiplied: the border is laid over the fill (shader.metal).
+            var col: [4]f32 = .{ c[0] * c[3], c[1] * c[3], c[2] * c[3], c[3] };
             if (has_border) {
                 const t = smoothstep(-bw - aa, -bw + aa, sd[0]);
-                for (0..4) |k| col[k] = c[k] + (bc[k] - c[k]) * t;
+                var edge: [4]f32 = .{ bc[0] * bc[3], bc[1] * bc[3], bc[2] * bc[3], bc[3] };
+                if (i.uv[0] > 0.5) {
+                    const dc = shapes.dashCover(pxl, py, hw, hh, r, bw, inv);
+                    for (&edge) |*e| e.* *= dc;
+                }
+                for (0..4) |k| col[k] += (edge[k] + col[k] * (1 - edge[3]) - col[k]) * t;
             }
-            const a = col[3] * coverage * cut;
-            blend(out.bytes, row + x * 4, col[0] * a, col[1] * a, col[2] * a, a);
+            const m = coverage * cut;
+            blend(out.bytes, row + x * 4, col[0] * m, col[1] * m, col[2] * m, col[3] * m);
         }
     }
 }
@@ -424,7 +429,6 @@ fn sample(mask: Mask, u: f32, v: f32) f32 {
     const bottom = c + (d - c) * tx;
     return (top + (bottom - top) * ty) / 255;
 }
-
 fn glyph(out: gpu.Pixels, i: *const gpu.Instance, mask: Mask, scale: f32, b: [4]usize) void {
     if (mask.size == 0) return;
     const inv = 1 / scale;
@@ -441,7 +445,33 @@ fn glyph(out: gpu.Pixels, i: *const gpu.Instance, mask: Mask, scale: f32, b: [4]
             const ty = (up[1] - i.rect[1]) / i.rect[3];
             const u = i.uv[0] + (i.uv[2] - i.uv[0]) * tx;
             const v = i.uv[1] + (i.uv[3] - i.uv[1]) * ty;
-            const a = sample(mask, u, v) * c[3] * clipCover(i, wx, wy, inv);
+            var opacity = c[3] * clipCover(i, wx, wy, inv);
+            // A truncated line fading out, as the shader fades it.
+            if (i.border_width > 0) opacity *= std.math.clamp((i.radius - wx) / i.border_width, 0, 1);
+            const at = row + x * 4;
+            if (mask.native_pixels.len > 0) {
+                const side: f32 = @floatFromInt(mask.size);
+                const ax: usize = @intFromFloat(std.math.clamp(@floor(u * side), 0, side - 1));
+                const ay: usize = @intFromFloat(std.math.clamp(@floor(v * side), 0, side - 1));
+                const native = mask.native_pixels[(ay * mask.size + ax) * 4 ..][0..4];
+                if (native[3] != 0) {
+                    const lightness = 0.30 * c[0] + 0.59 * c[1] + 0.11 * c[2];
+                    // ClearType requires an opaque destination. Transparent
+                    // pixels retain genuine grayscale coverage and alpha.
+                    if (native[3] == 255 and out.bytes[at + 3] == 255) {
+                        for (0..3) |channel| {
+                            const cov = mask.text_params.coverage(@as(f32, @floatFromInt(native[channel])) / 255, c[channel], lightness, true) * opacity;
+                            const dest = at + 2 - channel; // output is BGRA
+                            out.bytes[dest] = unit(c[channel] * cov + @as(f32, @floatFromInt(out.bytes[dest])) / 255 * (1 - cov));
+                        }
+                        continue;
+                    }
+                    const a = mask.text_params.coverage(sample(mask, u, v), 0.25 * c[0] + 0.5 * c[1] + 0.25 * c[2], lightness, false) * opacity;
+                    blend(out.bytes, at, c[0] * a, c[1] * a, c[2] * a, a);
+                    continue;
+                }
+            }
+            const a = sample(mask, u, v) * opacity;
             blend(out.bytes, row + x * 4, c[0] * a, c[1] * a, c[2] * a, a);
         }
     }
@@ -542,8 +572,6 @@ fn pane(out: gpu.Pixels, i: *const gpu.Instance, scale: f32, b: [4]usize) void {
         }
     }
 }
-
-
 fn shadow(out: gpu.Pixels, i: *const gpu.Instance, scale: f32, b: [4]usize) void {
     const hw = i.rect[2] * 0.5;
     const hh = i.rect[3] * 0.5;
@@ -570,4 +598,3 @@ fn shadow(out: gpu.Pixels, i: *const gpu.Instance, scale: f32, b: [4]usize) void
         }
     }
 }
-

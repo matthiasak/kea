@@ -1,5 +1,6 @@
 //! nanoui: desktop apps in Zig, with native UI drawn on the GPU or a web
-//! frontend in the system webview, after mygo. Native UI runs on iOS too.
+//! frontend in the system webview, after mygo. Native UI runs on iOS and
+//! Android too.
 //!
 //!     pub fn main(init: std.process.Init) !void {
 //!         const app = try nanoui.App.create(init, .{ .name = "Hello" });
@@ -21,6 +22,8 @@ comptime {
 
 /// The platform's implementations, chosen at compile time.
 const mac = builtin.os.tag == .macos;
+/// Android is Linux to Zig; nanoui's own there (`src/android/`).
+const is_android = builtin.abi.isAndroid();
 const plat = switch (builtin.os.tag) {
     .macos => struct {
         pub const app = @import("app.zig");
@@ -31,7 +34,15 @@ const plat = switch (builtin.os.tag) {
         pub const desktop = @import("desktop.zig");
         pub const fdwatch = @import("fdwatch.zig");
     },
-    .linux => struct {
+    .linux => if (is_android) struct {
+        pub const app = @import("android/app.zig");
+        pub const window = @import("android/window.zig");
+        pub const menu = @import("menu_accel.zig");
+        pub const tray = @import("tray_none.zig");
+        pub const dialog = @import("android/dialog.zig");
+        pub const desktop = @import("android/desktop.zig");
+        pub const fdwatch = @import("android/fdwatch.zig");
+    } else struct {
         pub const app = @import("linux/app.zig");
         pub const window = @import("linux/window.zig");
         pub const menu = @import("menu_accel.zig");
@@ -58,8 +69,12 @@ const plat = switch (builtin.os.tag) {
         pub const desktop = @import("windows/desktop.zig");
         pub const fdwatch = @import("windows/fdwatch.zig");
     },
-    else => @compileError("nanoui runs on macOS, iOS, Linux and Windows"),
+    else => @compileError("nanoui runs on macOS, iOS, Android, Linux and Windows"),
 };
+
+/// Android's entry and panic handler, for an app's library's root
+/// (`android.library` in build.zig makes it).
+pub const android = if (is_android) @import("android/main.zig") else struct {};
 
 /// The Objective-C runtime (macOS and iOS).
 pub const objc = if (mac or builtin.os.tag == .ios) @import("objc.zig") else struct {};
@@ -119,6 +134,11 @@ test {
     _ = @import("http.zig");
     // The updater is for desktop apps; iOS updates through the App Store.
     if (builtin.os.tag != .ios) _ = @import("update_portable.zig");
+    if (is_android) {
+        inline for (.{ plat.app, plat.window, plat.dialog, plat.desktop, plat.fdwatch, @import("android/surface.zig"), @import("android/keys.zig"), @import("android/touch.zig"), @import("android/activity.zig"), @import("android/bars.zig"), @import("android/egl.zig"), @import("android/jni.zig") }) |m| std.testing.refAllDecls(m);
+        inline for (.{ plat.app.App, plat.window.Window, plat.desktop.clipboard, plat.desktop.shell, @import("android/surface.zig").Surface }) |T| std.testing.refAllDecls(T);
+        return;
+    }
     if (builtin.os.tag == .ios) {
         inline for (.{ plat.app, plat.window, plat.dialog, plat.desktop, plat.fdwatch, @import("ios/surface.zig"), @import("ios/keys.zig"), @import("ios/touch.zig") }) |m| std.testing.refAllDecls(m);
         inline for (.{ plat.app.App, plat.window.Window, plat.desktop.clipboard, plat.desktop.shell, @import("ios/surface.zig").Surface }) |T| std.testing.refAllDecls(T);
@@ -126,7 +146,10 @@ test {
     }
     if (!mac) {
         inline for (.{ plat.app, plat.window, plat.menu, plat.dialog, plat.desktop, plat.fdwatch, }) |m| std.testing.refAllDecls(m);
-        if (builtin.os.tag == .windows) _ = @import("windows/d3d.zig");
+        if (builtin.os.tag == .windows) {
+            _ = @import("windows/d3d.zig");
+            _ = @import("windows/tests_surface.zig");
+        }
         return;
     }
     // Analyze every declaration, used by an example or not.

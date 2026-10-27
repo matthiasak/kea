@@ -64,7 +64,7 @@ fn item(b: *Browser, c: *ui.Context, p: *const Palette, node: *const Bookmark) v
         outline.siteMark(b, c, p, node, 13);
     if (!bare) {
         ui.column(c, .{ .max_width = 150 });
-        ui.text(c, node.title, .{ .size = 12, .color = p.ink, .truncate = true });
+        ui.text(c, node.title, .{ .size = 12, .color = p.ink, .truncate = .ellipsis });
         ui.end(c);
     }
     if (node.isFolder()) ui.icon(c, "chevron.down", .{ .size = 7.5, .weight = .semibold, .color = p.faint });

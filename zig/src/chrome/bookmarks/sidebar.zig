@@ -13,7 +13,7 @@ const outline = @import("outline.zig");
 /// The header's lead: its name, and Manage.
 pub fn headerLead(b: *Browser, c: *ui.Context, p: *const Palette) void {
     // Narrow, the name gives way first, as SwiftUI shrinks a Text.
-    ui.text(c, "Bookmarks", .{ .size = 12, .weight = .semibold, .color = p.muted, .truncate = true });
+    ui.text(c, "Bookmarks", .{ .size = 12, .weight = .semibold, .color = p.muted, .truncate = .ellipsis });
     _ = c.leaf(.{ .grow = 1, .min_width = 0 }, .none, null);
     if (plate.quick(c, p, "Manage", null).clicked) sheet.show(b, .bookmarking);
 }

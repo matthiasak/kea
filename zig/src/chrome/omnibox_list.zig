@@ -192,8 +192,8 @@ fn row(b: *Browser, c: *ui.Context, p: *const Palette, offer: omni.Offer, picked
         .visited, .known => {},
     }
     // The row reads without the www; the key keeps it.
-    ui.text(c, address.withoutWWW(offer.key), .{ .size = 13, .color = p.ink, .truncate = true });
-    if (offer.title.len > 0) ui.text(c, offer.title, .{ .size = 12, .color = p.muted, .truncate = true });
+    ui.text(c, address.withoutWWW(offer.key), .{ .size = 13, .color = p.ink, .truncate = .ellipsis });
+    if (offer.title.len > 0) ui.text(c, offer.title, .{ .size = 12, .color = p.muted, .truncate = .ellipsis });
     ui.spacer(c);
     return r.it;
 }
@@ -214,7 +214,7 @@ fn siteOfferRow(b: *Browser, c: *ui.Context, p: *const Palette, site: SearchSite
     const label = c.print("Search {s}", .{site.name});
     if (live) c.addA11y(r.index, .row, c.print("{s}, press Tab", .{label}), "", false, true);
     siteIcon(b, c, p, site);
-    ui.text(c, label, .{ .size = 13, .color = p.ink, .truncate = true });
+    ui.text(c, label, .{ .size = 13, .color = p.ink, .truncate = .ellipsis });
     ui.spacer(c);
     controls.keyCap(c, p, "Tab");
     return r.it;

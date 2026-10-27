@@ -166,6 +166,7 @@ pub const TextSystem = struct {
 
     /// A line's height in `style`, its leading applied.
     pub fn lineHeight(self: *TextSystem, style: types.TextStyle) f32 {
+        if (style.line_height > 0) return style.line_height * self.zoom;
         const lh = self.font(style).lineHeight();
         return if (style.leading == 1) lh else @ceil(lh * style.leading);
     }
@@ -206,7 +207,8 @@ pub const TextSystem = struct {
         var h = std.hash.Wyhash.init(extra);
         h.update(s);
         h.update(std.mem.asBytes(&style.size));
-        h.update(&.{ @intFromEnum(style.weight), @intFromBool(style.mono), @intFromBool(style.italic), @intFromBool(style.tabular), @intFromBool(style.rounded) });
+        h.update(std.mem.asBytes(&style.mono_scale));
+        h.update(&.{ @backingInt(style.weight), @intFromBool(style.mono), @intFromBool(style.italic), @intFromBool(style.tabular), @intFromBool(style.rounded) });
         h.update(std.mem.asBytes(&style.tracking));
         return h.final();
     }
@@ -330,11 +332,14 @@ pub const TextSystem = struct {
         return .{ .width = w, .glyphs = glyphs };
     }
 
-    /// The atlas sprite of a shaped glyph at `bin` quarters of a pixel.
-    pub fn glyph(self: *TextSystem, g: Glyph, bin: u8) ?Sprite {
+    /// The atlas sprite of a shaped glyph at `bin` quarters of a pixel,
+    /// its strokes thickened `dilation` levels (`atlas.dilationFor`).
+    pub fn glyph(self: *TextSystem, g: Glyph, bin: u8, dilation: u8) ?Sprite {
         if (g.font >= self.run_fonts.items.len) return null;
-        return self.atlas.glyph(g.font, self.run_fonts.items[g.font], g.glyph, bin);
+        return self.atlas.glyph(g.font, self.run_fonts.items[g.font], g.glyph, bin, dilation);
     }
+
+    pub const dilationFor = @import("atlas.zig").dilationFor;
 
     /// The width of `s` on one line.
     pub fn width(self: *TextSystem, s: []const u8, style: types.TextStyle) f32 {

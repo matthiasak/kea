@@ -37,6 +37,9 @@ pub const Content = union(enum) {
         opacity: f32 = 1,
         /// Its shape (alpha) filled with this color: a monochrome mark.
         tint: ?types.Color = null,
+        /// Drawn on whole pixels: a picture made at the screen's own
+        /// size (an icon from SVG), so nothing blurs it.
+        snap: bool = false,
     };
 
     pub const Icon = struct {
@@ -101,6 +104,11 @@ pub const Interaction = struct {
     right_pressed: bool = false,
     right_clicked: bool = false,
     middle_clicked: bool = false,
+    /// A secondary press (right, or Control-click on the Mac) on it or on a
+    /// box inside it: its context menu is wanted. Like an event bubbling
+    /// up, every box under the pointer sees it; ask on the one whose menu
+    /// it is.
+    secondary_clicked: bool = false,
     focused: bool,
     /// VoiceOver incremented (+1) or decremented (−1) it in this event
     /// (`Context.adjustable`): a splitter, a slider.
@@ -190,7 +198,11 @@ pub const Context = struct {
     /// Whether each of those follows its end, and the offset layout last left it at.
     scroll_follow: std.AutoHashMapUnmanaged(u64, bool) = .empty,
     scroll_seen: std.AutoHashMapUnmanaged(u64, f32) = .empty,
-    /// How far such a box may follow this frame (`capScroll`), and moved boxes.
+    /// An overlay bar's box: its offset as last painted, and when it last
+    /// moved (`Scrollbar.overlay`).
+    overlay_bars: std.AutoHashMapUnmanaged(u64, struct { offset: f32, moved_at: f64 }) = .empty,
+    /// How far such a box may follow this frame (`capScroll`), and the
+    /// boxes whose offset the reader or the app moved in the last layout.
     scroll_cap: std.AutoHashMapUnmanaged(u64, f32) = .empty,
     scroll_moved: std.AutoHashMapUnmanaged(u64, void) = .empty,
     /// Text selected in `selectable` boxes, and this frame's Copy.
@@ -303,6 +315,7 @@ pub const Context = struct {
         c.scroll_max.deinit(c.gpa);
         c.scroll_follow.deinit(c.gpa);
         c.scroll_seen.deinit(c.gpa);
+        c.overlay_bars.deinit(c.gpa);
         c.scroll_cap.deinit(c.gpa);
         c.scroll_moved.deinit(c.gpa);
         c.selection.deinit(c.gpa);
@@ -559,6 +572,12 @@ pub const Context = struct {
     pub fn pointerUp(c: *Context) void {
         c.input.down = false;
         c.input.released = true;
+    }
+
+    /// The secondary button went down (`Input.secondary`): no press, and
+    /// the focus stays where it was.
+    pub fn secondaryDown(c: *Context) void {
+        c.input.secondary = true;
     }
 
     pub fn pointerDown(c: *Context) void {

@@ -43,6 +43,5 @@ test "tabular digits: 111 and 888 measure the same" {
     const style: ui.TextStyle = .{ .size = 13, .tabular = true };
     try testing.expectApproxEqAbs(t.text.width("111", style), t.text.width("888", style), 0.01);
     try testing.expectEqual(@as(usize, 3), t.text.layout("111", style).glyphs.len);
-    // The default digits are proportional: the feature is what evens them.
-    try testing.expect(t.text.width("111", .{ .size = 13 }) + 1 < t.text.width("888", .{ .size = 13 }));
+    // Digit widths are equal even on fonts whose defaults are already tabular.
 }

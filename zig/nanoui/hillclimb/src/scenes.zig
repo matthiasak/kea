@@ -1,5 +1,5 @@
 //! The benchmark scenes, nanoui's side; mygo/zz_nanoui_hillclimb_test.go
-//! builds the same ones with mygo. Each frame changes what it shows, as an
+//! builds the same ones with mygo, and clay.zig with Clay. Each frame changes what it shows, as an
 //! animation would, so every frame does all its work.
 const std = @import("std");
 const nanoui = @import("nanoui");
@@ -120,7 +120,7 @@ fn dashboard(s: *State, c: *ui.Context) void {
     }
 }
 
-fn hsl(h: f32) ui.Color {
+pub fn hsl(h: f32) ui.Color {
     const sat: f32 = 0.7;
     const l: f32 = 0.55;
     const k = struct {

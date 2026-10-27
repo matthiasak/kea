@@ -178,11 +178,11 @@ fn site(b: *Browser, c: *ui.Context, p: *const Palette, s: bp.SiteRow) Act {
     c.node(i).style.background = if (open) p.wash.alpha(0.6) else p.hover.alpha(h);
     const icon = b.kea.favicons.cached(s.host);
     mark.mark(c, p, if (icon) |ic| .{ .key = ic.name, .png = ic.png } else null, mark.initial(c, s.host), 16, false);
-    ui.text(c, s.host, .{ .size = 13, .color = p.ink, .truncate = true });
+    ui.text(c, s.host, .{ .size = 13, .color = p.ink, .truncate = .ellipsis });
     if (s.logins.len > 1) {
         ui.text(c, c.print("{d} accounts", .{s.logins.len}), .{ .size = 11.5, .color = p.muted });
     } else if (s.logins.len == 1 and s.logins[0].user.len > 0 and !open) {
-        ui.text(c, s.logins[0].user, .{ .size = 11.5, .color = p.muted, .truncate_middle = true });
+        ui.text(c, s.logins[0].user, .{ .size = 11.5, .color = p.muted, .truncate = .middle });
     }
     ui.spacer(c);
     _ = c.leaf(.{ .min_width = 8, .width = .{ .px = 8 } }, .none, null);
@@ -216,14 +216,14 @@ fn account(b: *Browser, c: *ui.Context, p: *const Palette, k: Kept) Act {
     c.addA11y(i, .row, name, k.host, false, true);
     c.node(i).style.background = p.hover.alpha(motion.quickTo(c, it.id, 0, if (it.hovered) 1 else 0));
     ui.column(c, .{ .min_width = 120 });
-    ui.text(c, name, .{ .size = 12, .color = if (k.user.len == 0) p.faint else p.ink, .truncate_middle = true });
+    ui.text(c, name, .{ .size = 12, .color = if (k.user.len == 0) p.faint else p.ink, .truncate = .middle });
     ui.end(c);
     // Ten dots whatever it is: a count that changed with it told anyone
     // looking over a shoulder how long it was.
     if (shown) |secret| {
         // Selectable, to be copied a piece at a time (`.textSelection(.enabled)`).
         ui.column(c, .{ .selectable = true, .min_width = 0 });
-        ui.text(c, secret, .{ .size = 12.5, .mono = true, .color = p.ink, .truncate = true });
+        ui.text(c, secret, .{ .size = 12.5, .mono = true, .color = p.ink, .truncate = .ellipsis });
         ui.end(c);
     } else
         ui.text(c, "••••••••••", .{ .size = 10, .mono = true, .color = p.muted });

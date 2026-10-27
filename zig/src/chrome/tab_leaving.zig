@@ -111,7 +111,7 @@ pub fn draw(b: *Browser, c: *ui.Context, p: *const Palette, s: *const Snap, x: f
     if (b.prefs.glyph == .icons and !s.blank) mark.mark(c, p, icon, mono, 15, false);
     if (s.shy) ui.icon(c, "eye.slash", .{ .size = 9, .color = p.muted.alpha(0.7) });
     if (s.recording) ui.icon(c, "record.circle", .{ .size = 10, .color = p.muted.alpha(0.8) });
-    ui.text(c, s.label(), .{ .size = 12.5, .color = p.muted, .truncate = true });
+    ui.text(c, s.label(), .{ .size = 12.5, .color = p.muted, .truncate = .ellipsis });
 }
 
 /// A pill or row gone, where it stood, with what it showed.
@@ -185,7 +185,7 @@ pub fn drawSideRow(b: *Browser, c: *ui.Context, p: *const Palette, s: *const Sna
     if (s.shy) ui.icon(c, "eye.slash", .{ .size = 9, .color = p.muted.alpha(0.7) });
     if (s.recording) ui.icon(c, "record.circle", .{ .size = 10, .color = p.muted.alpha(0.8) });
     const label = if (s.label().len == 0) "New Tab" else s.label();
-    ui.text(c, label, .{ .size = 12.5, .color = p.muted, .truncate = true });
+    ui.text(c, label, .{ .size = 12.5, .color = p.muted, .truncate = .ellipsis });
 }
 
 pub fn drawPin(b: *Browser, c: *ui.Context, p: *const Palette, s: *const Snap, x: f32, y: f32, w: f32, h: f32, v: f32) void {

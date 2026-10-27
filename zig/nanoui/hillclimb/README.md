@@ -1,15 +1,17 @@
 # hillclimb
 
 A terminal app, built on nanoui as a library, that measures nanoui against
-[mygo](https://github.com/egoist/mygo) **without opening a window**: each
-scene is built, laid out and painted frame after frame, then drawn by the
-GPU into an offscreen texture, as a window's frames would be.
+[mygo](https://github.com/egoist/mygo) and [Clay](https://github.com/nicbarker/clay)
+**without opening a window**: each scene is built, laid out and painted frame
+after frame, then drawn by the GPU into an offscreen texture, as a window's
+frames would be.
 
 ```sh
 cd hillclimb
 zig build run                                  # every scene, nanoui and mygo
 zig build run -- --label "what changed"        # name the run in history.jsonl
 zig build run -- --scene text,list --only nanoui --frames 600 --repeat 5
+zig build run -- --only clay                   # one framework (nanoui, mygo, clay)
 ```
 
 Each scene runs 30 frames of warm-up, then 300 measured, three times; the
@@ -41,6 +43,23 @@ cloned on first run): a test running the same scenes through mygo's own
 frames, and a helper exposing mygo's offscreen Metal renderer, both built
 only with the `nanoui_hillclimb` tag, so mygo's code is unchanged. Go 1.27
 is fetched by `GOTOOLCHAIN=auto` if missing.
+
+## Clay's twin
+
+`src/clay.zig` declares the same scenes through Clay's element API (v0.14,
+fetched as a dependency; its header translated for Zig and compiled with its
+implementation). Clay is a layout library and draws nothing (its renderers
+are separate), so its columns are **frame CPU** (declaring the elements,
+laying them out, making the render commands: what nanoui's build, layout and
+paint do) and **draw items** (its render commands). No encode, GPU or process
+CPU: those would need a renderer, so nanoui's include work Clay's don't. Its
+text is measured by nanoui's text system, as nanoui's is.
+
+Not quite like for like: nanoui's paint makes one GPU instance per glyph,
+where Clay's render commands hold whole strings for a renderer to shape and
+lay out later. Clay has no shadows or offsets, so its boxes are flat; its
+scroll scene moves a clip's child offset. Positions match nanoui's: the
+boxes, rows and cards land in the same places.
 
 ## Climbing
 

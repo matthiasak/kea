@@ -69,7 +69,7 @@ pub fn groupHeading(b: *Browser, c: *ui.Context, p: *const Palette, group: *cons
     if (editing) {
         nameField(b, c, p, group, horizontal);
     } else {
-        ui.text(c, group.name, .{ .size = name_style.size, .weight = name_style.weight, .color = p.muted, .truncate = true });
+        ui.text(c, group.name, .{ .size = name_style.size, .weight = name_style.weight, .color = p.muted, .truncate = .ellipsis });
     }
     if (!horizontal) ui.spacer(c);
     if (!editing and !horizontal) {

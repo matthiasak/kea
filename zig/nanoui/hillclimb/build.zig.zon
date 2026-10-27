@@ -5,6 +5,10 @@
     .minimum_zig_version = "0.17.0",
     .dependencies = .{
         .nanoui = .{ .path = ".." },
+        .clay = .{
+            .url = "https://github.com/nicbarker/clay/archive/refs/tags/v0.14.tar.gz",
+            .hash = "N-V-__8AALPgZwA7tLqRlkCCL7OrkEhj4xZ3y_0FxgR42t0W",
+        },
     },
     .paths = .{
         "build.zig",

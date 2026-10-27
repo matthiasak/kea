@@ -217,7 +217,7 @@ fn list(b: ?*Browser, c: *ui.Context, p: *const Palette, pull: swipe.Pull, shown
         }
         const host = if (Parts.parse(stop.url)) |parts| parts.hostName() orelse stop.url else stop.url;
         const label = if (stop.title.len > 0) stop.title else if (host.len > 0) host else stop.url;
-        ui.text(c, label, .{ .size = 12.5, .color = if (lit) p.ink else p.ink.alpha(0.75), .truncate = true });
+        ui.text(c, label, .{ .size = 12.5, .color = if (lit) p.ink else p.ink.alpha(0.75), .truncate = .ellipsis });
         ui.end(c);
     }
 }
@@ -241,7 +241,7 @@ fn question(c: *ui.Context, p: *const Palette, t: *Tab) void {
     const box = c.interact(i, .{});
     if (page.clicked or box.clicked) if (t.browser) |b| b.focusPane(t);
     c.addA11y(i, .group, c.print("{s} asks", .{if (q.host.len == 0) "This page" else q.host}), "", false, true);
-    ui.text(c, if (q.host.len == 0) "This page says" else q.host, .{ .size = 13, .weight = .semibold, .color = p.ink, .truncate_middle = true });
+    ui.text(c, if (q.host.len == 0) "This page says" else q.host, .{ .size = 13, .weight = .semibold, .color = p.ink, .truncate = .middle });
     ui.scroll(c, .{ .width = .fill, .max_height = 200, .scroll_bar = false, .selectable = true });
     ui.text(c, q.message, .{ .size = 13, .color = p.ink, .wrap = true });
     ui.end(c);

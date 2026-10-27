@@ -24,6 +24,8 @@ const tar = if (windows) "C:\\Windows\\System32\\tar.exe" else "/usr/bin/tar";
 
 /// Finds the running program and whether it can be replaced.
 pub fn detect(u: *Updater, env: *const std.process.Environ.Map) !void {
+    // An Android app is an APK, updated by its store or installed over.
+    if (builtin.abi.isAndroid()) return error.Unsupported;
     if (!update.validVersion(u.options.version)) return error.NoVersion;
     const exe = try std.process.executablePathAlloc(u.io, u.gpa);
     defer u.gpa.free(exe);
@@ -215,6 +217,8 @@ test "a staged program takes the running one's place, nothing left beside it" {
 
 test "an update from a feed: found, checked, unpacked, run, installed" {
     if (windows) return error.SkipZigTest; // the fake program is a shell script
+    // Android's apps aren't programs that update themselves (`detect`).
+    if (builtin.abi.isAndroid()) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     const io = std.testing.io;
     const cwd = std.Io.Dir.cwd();
@@ -268,6 +272,8 @@ fn makeRelease(a: std.mem.Allocator, io: std.Io, root: []const u8, version: []co
 
 test "a newer release while one waits takes its place; the same one isn't fetched again" {
     if (windows) return error.SkipZigTest; // the fake program is a shell script
+    // Android's apps aren't programs that update themselves (`detect`).
+    if (builtin.abi.isAndroid()) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     const io = std.testing.io;
     const cwd = std.Io.Dir.cwd();

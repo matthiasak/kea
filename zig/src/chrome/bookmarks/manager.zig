@@ -231,7 +231,7 @@ fn bar(b: *Browser, c: *ui.Context, p: *const Palette) void {
     ui.row(c, .{ .width = .fill, .gap = 8, .align_items = .center });
     defer ui.end(c);
     // The pills keep their size; the count gives way first, as SwiftUI shrinks a Text.
-    ui.text(c, c.print("{d} selected", .{s.picks.ids.items.items.len}), .{ .size = 12, .color = p.muted, .truncate = true });
+    ui.text(c, c.print("{d} selected", .{s.picks.ids.items.items.len}), .{ .size = 12, .color = p.muted, .truncate = .ellipsis });
     ui.spacer(c);
     if (controls.pill(c, p, "Open in Tabs", .{}).clicked) actions.openBookmarks(b, nodes, false);
     if (controls.pill(c, p, "New Window", .{}).clicked) actions.openBookmarks(b, nodes, true);

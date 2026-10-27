@@ -230,7 +230,7 @@ fn row(b: *Browser, c: *ui.Context, p: *const Palette, use: Use, node: *const Bo
         if (arrows) _ = c.leaf(.{ .width = px(16) }, .none, null);
         siteMark(b, c, p, node, 15);
     }
-    ui.text(c, label, .{ .size = 12.5, .color = if (node.unnamed()) p.muted else p.ink, .truncate = true });
+    ui.text(c, label, .{ .size = 12.5, .color = if (node.unnamed()) p.muted else p.ink, .truncate = .ellipsis });
     _ = c.leaf(.{ .grow = 1, .min_width = 8 }, .none, null);
     if (node.isFolder()) if (node.children) |kids| if (kids.len > 0)
         ui.text(c, c.print("{d}", .{b.bookmarks.folderCount(node.id, kids)}), .{ .size = 11, .color = p.muted });

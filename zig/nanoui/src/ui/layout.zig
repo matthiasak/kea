@@ -57,12 +57,13 @@ pub fn measure(c: *Context, index: u32, avail_w: f32) types.Size {
                 const w = if (rich.styled(t.spans)) rich.layout(c.text, t.str, t.style, t.spans, 0).width else c.text.width(t.str, t.style);
                 content.w = @ceil(w);
                 content.h = lh;
-                // Cut to fit (`truncate.zig`): a row may shrink it.
-                flexible = t.style.cuts();
+                // Cut or fade to fit (`truncate.zig`): a row may shrink it.
+                flexible = t.style.truncate != .none;
+                if (t.style.truncate != .none) content.w = @min(content.w, inner_w);
             }
         },
         .icon => |ic| {
-            if (c.text.atlas.symbol(ic.name, ic.size, @intFromEnum(ic.weight))) |sp| {
+            if (c.text.atlas.symbol(ic.name, ic.size, @backingInt(ic.weight))) |sp| {
                 content = .{ .w = sp.w + 2 * sp.x, .h = sp.h + 2 * sp.y };
             } else content = .{ .w = ic.size, .h = ic.size };
         },
@@ -332,7 +333,7 @@ test "truncate and max_lines share string and width without cache collision" {
             ui.column(c, .{ .width = .{ .px = 120 } });
             defer ui.end(c);
             s.label_idx = @intCast(c.nodes.items.len);
-            ui.text(c, "First line", .{ .size = 13, .truncate = true });
+            ui.text(c, "First line", .{ .size = 13, .truncate = .ellipsis });
             s.wrap_idx = @intCast(c.nodes.items.len);
             ui.text(c, "First line\nSecond line dropped", .{ .size = 13, .wrap = true, .max_lines = 1 });
         }

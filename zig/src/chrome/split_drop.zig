@@ -252,5 +252,5 @@ fn half(c: *ui.Context, p: *const Palette, title: []const u8, proposed: bool) vo
     defer ui.end(c);
     ui.column(c, .{ .width = .fill, .height = .fill, .radius = 10, .border = if (proposed) p.ink.alpha(0.3) else p.ink.alpha(0.12), .align_items = .center, .justify = .center, .padding = .xy(14, 0) });
     defer ui.end(c);
-    ui.text(c, if (title.len == 0) "New Tab" else title, .{ .size = 13, .weight = if (proposed) .medium else .regular, .color = p.ink.alpha(if (proposed) 0.78 else 0.48), .truncate = true });
+    ui.text(c, if (title.len == 0) "New Tab" else title, .{ .size = 13, .weight = if (proposed) .medium else .regular, .color = p.ink.alpha(if (proposed) 0.78 else 0.48), .truncate = .ellipsis });
 }

@@ -1,4 +1,4 @@
-//! Menus where nanoui handles them itself (Linux, Windows), from the same
+//! Menus where nanoui handles them itself (Linux, Windows, Android), from the same
 //! templates: kept for their accelerators, which keys reach before the
 //! view does ("CmdOrCtrl" is Ctrl there), and their items' state. Native
 //! menu bars are not built yet.

@@ -61,7 +61,7 @@ pub fn quiet(c: *ui.Context, p: *const Palette, icon: []const u8, title: []const
     c.node(i).style.background = p.side_hover.alpha(h);
     const ink = p.faint.mix(p.ink.alpha(0.7), h);
     ui.icon(c, icon, .{ .size = 10, .weight = .medium, .frame = 15, .color = ink });
-    ui.text(c, title, .{ .size = 12.5, .color = ink, .truncate = true });
+    ui.text(c, title, .{ .size = 12.5, .color = ink, .truncate = .ellipsis });
     return it;
 }
 
@@ -153,7 +153,7 @@ pub fn segmented(c: *ui.Context, p: *const Palette, options: []const []const u8,
             chosen_id = it.id;
             chosen_index = i;
         }
-        ui.text(c, title, .{ .size = 11.5, .weight = if (on) .medium else .regular, .color = if (on) p.ink else p.muted, .truncate = wide });
+        ui.text(c, title, .{ .size = 11.5, .weight = if (on) .medium else .regular, .color = if (on) p.ink else p.muted, .truncate = if (wide) .ellipsis else .none });
     }
     if (chosen_id == 0) return changed;
     const box = c.rects.get(outer_id);

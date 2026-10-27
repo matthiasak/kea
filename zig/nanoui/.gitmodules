@@ -4,3 +4,12 @@
 [submodule "apps/nanomon"]
 	path = apps/nanomon
 	url = https://github.com/justrach/nanomon.git
+[submodule "apps/nanostudio"]
+	path = apps/nanostudio
+	url = https://github.com/justrach/nanostudio.git
+[submodule "apps/nanofly"]
+	path = apps/nanofly
+	url = https://github.com/justrach/nanofly.git
+[submodule "site"]
+	path = site
+	url = https://github.com/justrach/nanoui-site.git

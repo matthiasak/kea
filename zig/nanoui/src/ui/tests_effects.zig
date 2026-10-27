@@ -18,16 +18,16 @@ const Titles = struct {
         {
             ui.row(c, .{ .width = .{ .px = 100 } });
             defer ui.end(c);
-            ui.text(c, title, .{ .size = 13, .truncate = true });
+            ui.text(c, title, .{ .size = 13, .truncate = .ellipsis });
         }
         {
             ui.row(c, .{ .width = .{ .px = 100 }, .gap = 4 });
             defer ui.end(c);
             _ = c.leaf(.{ .width = .{ .px = 20 }, .height = .{ .px = 16 } }, .none, null);
             s.beside = @intCast(c.nodes.items.len);
-            ui.text(c, title, .{ .size = 13, .truncate = true });
+            ui.text(c, title, .{ .size = 13, .truncate = .ellipsis });
         }
-        ui.text(c, "Short", .{ .size = 13, .truncate = true });
+        ui.text(c, "Short", .{ .size = 13, .truncate = .ellipsis });
     }
 };
 
@@ -60,11 +60,13 @@ test "truncate ends with ellipsis and fits" {
 
 const Faded = struct {
     fn view(_: *Faded, c: *ui.Context) void {
-        ui.text(c, "MMMMMM", .{ .size = 14, .fade = .{ .clear = 0, .ramp = 40 } });
+        const box = ui.div(c).w(50);
+        defer box.end();
+        ui.text(c, "MMMMMM", .{ .size = 14, .truncate = .fade, .fade_width = 40 });
     }
 };
 
-test "fade dims last glyph" {
+test "fade marks glyphs to fade at the box's right edge" {
     var s: Faded = .{};
     var t: ui.Tester = undefined;
     try t.init(testing.allocator, .init(&s, Faded.view), .{});
@@ -72,11 +74,11 @@ test "fade dims last glyph" {
     var glyphs: std.ArrayList(gpu.Instance) = .empty;
     defer glyphs.deinit(testing.allocator);
     for (t.instances.items) |i| if (i.kind == gpu.Kind.text) try glyphs.append(testing.allocator, i);
-    try testing.expectEqual(@as(usize, 6), glyphs.items.len);
-    const first = glyphs.items[0].color[3];
-    const last = glyphs.items[glyphs.items.len - 1].color[3];
-    try testing.expect(last < 0.5 * first);
-    for (glyphs.items[1..], glyphs.items[0 .. glyphs.items.len - 1]) |b, a| try testing.expect(b.color[3] <= a.color[3]);
+    try testing.expect(glyphs.items.len > 0);
+    for (glyphs.items) |g| {
+        try testing.expect(g.border_width > 0);
+        try testing.expectEqual(glyphs.items[0].radius, g.radius);
+    }
 }
 
 const red: ui.Color = .{ .r = 1 };

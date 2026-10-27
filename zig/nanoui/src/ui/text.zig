@@ -148,7 +148,7 @@ pub fn fit(c: *Context, index: u32, w: f32) void {
     const t = &n.content.text;
     if (t.str.len == 0) return;
     const room = w - n.style.padding.horizontal();
-    const k = cutKey(t.str, t.style, c.text.zoom, room, if (t.style.truncate_middle) 1 else 0);
+    const k = cutKey(t.str, t.style, c.text.zoom, room, if (t.style.truncate == .middle) 1 else 0);
     if (c.truncates.get(k)) |cut| {
         if (cut.head == fits_head) return;
         if (!rich.styled(t.spans)) {
@@ -165,7 +165,7 @@ pub fn fit(c: *Context, index: u32, w: f32) void {
         return;
     }
     const el = c.text.layout(ellipsis, t.style);
-    const cut = computeCut(lay, el.width, t.str, t.style.truncate_middle, room);
+    const cut = computeCut(lay, el.width, t.str, t.style.truncate == .middle, room);
     putCut(c, k, cut);
     if (!rich.styled(t.spans)) t.cut_lay = sliceLayout(c, lay, el, cut);
     t.str = splice(c, t.str, cut);

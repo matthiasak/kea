@@ -67,6 +67,15 @@ Pradhan, under the MIT License; its `src/tls_client.zig` is derived from Zig's
 standard library TLS client (MIT, Zig contributors). It is a dependency
 (`build.zig.zon`), fetched only for those targets, not copied here.
 
+## Windows Terminal
+
+Windows text alpha correction (`src/ui/text_blend.zig`) is adapted from
+Microsoft's [Windows Terminal renderer](https://github.com/microsoft/terminal/tree/98c8c795ebc2560af55e72beba3fa5fd31ceef64), `src/renderer/atlas/dwrite_helpers.cpp`
+and `dwrite_helpers.hlsl`, Copyright (c) Microsoft Corporation. Its gamma
+ratios and foreground-dependent contrast/alpha correction reproduce
+Direct2D text compositing. The MIT license is kept verbatim in
+[`third_party/licenses/Windows-Terminal-MIT.txt`](third_party/licenses/Windows-Terminal-MIT.txt).
+
 ## Apps
 
 [nanoterm](https://github.com/justrach/nanoterm) and

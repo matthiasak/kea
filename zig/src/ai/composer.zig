@@ -81,7 +81,7 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette, a: *Assistant, st: *
 
     ui.row(c, .{ .gap = 4, .width = .fill, .align_items = .center });
     if (controls.door(c, p, if (a.chat.pageHidden) "eye.slash" else "eye", .{ .on = !a.chat.pageHidden, .help = "Share the page in front" }).clicked) todo.* = .toggle_page;
-    ui.text(c, pageLine(c, b, a), .{ .size = 11.5, .color = p.muted, .truncate = true });
+    ui.text(c, pageLine(c, b, a), .{ .size = 11.5, .color = p.muted, .truncate = .ellipsis });
     _ = c.leaf(.{ .grow = 1, .min_width = 0 }, .none, null);
     if (pins.len == 0 and controls.door(c, p, "plus", .{ .help = "Add Pins\u{2026}" }).clicked) todo.* = .add_pins;
     if (controls.door(c, p, "camera", .{ .on = a.shot != null, .help = if (a.shot != null) "Remove the screenshot" else "Attach a screenshot of this page" }).clicked) todo.* = .attach_shot;
@@ -95,9 +95,9 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette, a: *Assistant, st: *
             if (c.interact(i, .{}).clicked) todo.* = .{ .pick = s };
             c.addA11y(i, .button, s.title, s.detail, false, true);
             ui.icon(c, icon(s.source), .{ .size = 10, .frame = 14, .color = p.muted });
-            ui.text(c, s.title, .{ .size = 12, .color = p.ink, .truncate = true });
+            ui.text(c, s.title, .{ .size = 12, .color = p.ink, .truncate = .ellipsis });
             _ = c.leaf(.{ .grow = 1, .min_width = 4 }, .none, null);
-            ui.text(c, s.detail, .{ .size = 11, .color = p.muted, .truncate = true });
+            ui.text(c, s.detail, .{ .size = 11, .color = p.muted, .truncate = .ellipsis });
             c.end();
         }
         ui.end(c);
@@ -120,7 +120,7 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette, a: *Assistant, st: *
             } else {
                 ui.icon(c, "doc.text", .{ .size = 11, .color = p.muted });
             }
-            ui.text(c, att.name, .{ .size = 11.5, .color = p.ink, .truncate = true });
+            ui.text(c, att.name, .{ .size = 11.5, .color = p.ink, .truncate = .ellipsis });
             if (controls.door(c, p, "xmark", .{ .help = "Remove attachment" }).clicked) todo.* = .{ .remove_attachment = att.id };
             ui.end(c);
         }
@@ -186,7 +186,7 @@ fn pinList(c: *ui.Context, p: *const Palette, st: *State, todo: *Do, pins: []con
         if (plain(c, if (pin.hidden) "Share Pin" else "Hide Pin")) todo.* = .{ .toggle_pin = pin.id };
         ui.icon(c, if (pin.hidden) "eye.slash" else "eye", .{ .size = 10, .color = if (pin.hidden) p.faint else p.muted });
         c.end();
-        ui.text(c, pin.title, .{ .size = 12, .color = if (pin.hidden) p.faint else p.ink, .truncate = true });
+        ui.text(c, pin.title, .{ .size = 12, .color = if (pin.hidden) p.faint else p.ink, .truncate = .ellipsis });
         _ = c.leaf(.{ .grow = 1, .min_width = 0 }, .none, null);
         if (plain(c, "Unpin")) todo.* = .{ .unpin = pin.id };
         ui.icon(c, "xmark", .{ .size = 8, .weight = .semibold, .color = p.muted });
@@ -257,7 +257,7 @@ fn modelPicker(b: *Browser, c: *ui.Context, p: *const Palette) void {
         const it = c.interact(i, .{});
         if (provider) |pr| c.help(i, pr.name);
         c.addA11y(i, .menu_button, label, "", false, true);
-        ui.text(c, label, .{ .size = 11, .color = p.muted, .truncate = true });
+        ui.text(c, label, .{ .size = 11, .color = p.muted, .truncate = .ellipsis });
         ui.icon(c, "chevron.up.chevron.down", .{ .size = 7.5, .color = p.muted });
         if (it.clicked) if (it.rect) |r| chat_view.menuLater(b, .{ .x = r.x, .y = r.y + r.h }, chat_id, modelItems);
     }

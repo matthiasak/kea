@@ -173,7 +173,7 @@ fn header(b: *Browser, c: *ui.Context, p: *const Palette, a: *Assistant, todo: *
     defer c.end();
     side_panels.headerGesture(b, c, head, .chat, !is_popped);
     ui.icon(c, "sparkles", .{ .size = 11, .weight = .medium, .color = p.muted });
-    ui.text(c, if (a.listing and !roomy) "Chats" else a.chat.label(), .{ .size = 13, .weight = .semibold, .color = p.ink, .truncate = true });
+    ui.text(c, if (a.listing and !roomy) "Chats" else a.chat.label(), .{ .size = 13, .weight = .semibold, .color = p.ink, .truncate = .ellipsis });
     _ = c.leaf(.{ .grow = 1, .min_width = 0 }, .none, null);
     if (!a.shy and controls.door(c, p, "sidebar.left", .{ .on = a.listing, .help = "Chats" }).clicked) {
         a.listing = !a.listing;

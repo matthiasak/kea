@@ -207,11 +207,12 @@ pub fn setChannel(f: *Frame, i: usize, v: f32) void {
         6 => f.radius = v,
         7...10 => {
             var b = f.background orelse Color{};
+            const value = std.math.clamp(v, 0, 1);
             switch (i) {
-                7 => b.r = v,
-                8 => b.g = v,
-                9 => b.b = v,
-                else => b.a = v,
+                7 => b.r = value,
+                8 => b.g = value,
+                9 => b.b = value,
+                else => b.a = value,
             }
             f.background = b;
         },

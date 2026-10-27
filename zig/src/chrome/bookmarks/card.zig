@@ -95,7 +95,7 @@ fn folder(b: *Browser, c: *ui.Context, p: *const Palette, id: Uuid) void {
     const it = c.interact(i, .{});
     c.addA11y(i, .menu_button, "Folder", here, false, true);
     ui.icon(c, "folder", .{ .size = 10.5, .color = p.muted });
-    ui.text(c, here, .{ .size = 12.5, .color = p.ink, .truncate = true });
+    ui.text(c, here, .{ .size = 12.5, .color = p.ink, .truncate = .ellipsis });
     _ = c.leaf(.{ .grow = 1, .min_width = 4 }, .none, null);
     ui.icon(c, "chevron.up.chevron.down", .{ .size = 8.5, .weight = .semibold, .color = p.muted });
     c.end();

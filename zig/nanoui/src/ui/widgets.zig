@@ -140,6 +140,44 @@ pub fn image(c: *Context, opts: ImageOptions) bool {
     return true;
 }
 
+pub const SvgOptions = struct {
+    /// Names the document: the same key, size and color are drawn once.
+    key: []const u8,
+    /// The SVG source, kept by the caller while it is shown (an
+    /// `@embedFile`, say).
+    bytes: []const u8,
+    /// The box's side in points: the document's viewBox is fitted in it.
+    size: f32 = 16,
+    /// A box of another shape, instead of `size` square.
+    width: ?f32 = null,
+    height: ?f32 = null,
+    /// Draws the document's shape in this one color (an icon that follows
+    /// the theme). Null draws its own colors, `currentColor` as the
+    /// theme's text.
+    color: ?Color = null,
+    opacity: f32 = 1,
+};
+
+/// An SVG document drawn at the screen's pixel density: an icon, a mark.
+/// False (and nothing drawn) if it can't be read.
+pub fn svg(c: *Context, opts: SvgOptions) bool {
+    const w = opts.width orelse opts.size;
+    const h = opts.height orelse opts.size;
+    const pw: u32 = @intFromFloat(@max(1, @round(w * c.scale)));
+    const ph: u32 = @intFromFloat(@max(1, @round(h * c.scale)));
+    // Tinted, it's drawn white and filled with the color as it's painted;
+    // otherwise currentColor is the theme's text, part of what it's kept by.
+    const cur = if (opts.color != null) Color{ .r = 1, .g = 1, .b = 1 } else c.theme.text;
+    var hasher = std.hash.Wyhash.init(0x5c6);
+    hasher.update(opts.key);
+    hasher.update(std.mem.asBytes(&[2]u32{ pw, ph }));
+    hasher.update(std.mem.asBytes(&[4]f32{ cur.r, cur.g, cur.b, cur.a }));
+    const k = hasher.final();
+    _ = c.text.images.infoSvg(k, opts.bytes, .{ .width = pw, .height = ph, .current = .{ cur.r, cur.g, cur.b, cur.a } }) orelse return false;
+    _ = c.leaf(.{ .width = .{ .px = w }, .height = .{ .px = h } }, .{ .image = .{ .key = k, .bytes = opts.bytes, .opacity = opts.opacity, .tint = opts.color, .snap = true } }, null);
+    return true;
+}
+
 /// A texture the app gives this frame (`gpu.Texture`: a video's frame, as
 /// often as it changes), in a box of `style` (which sizes and places it),
 /// the part `uv` (0 to 1) of it shown, its corners rounded by the style.

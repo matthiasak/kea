@@ -144,7 +144,7 @@ fn question(c: *ui.Context, p: *const Palette, q: Question, t: f32, live: bool) 
     defer c.end();
     if (live) _ = c.interact(i, .{});
     if (q.icon) |icon| ui.icon(c, icon, .{ .size = 11, .weight = .medium, .color = p.muted });
-    ui.text(c, q.said, .{ .size = 12.5, .color = p.ink, .truncate = q.cut });
+    ui.text(c, q.said, .{ .size = 12.5, .color = p.ink, .truncate = if (q.cut) .ellipsis else .none });
     const yes = c.open(.{ .padding = .xy(11, 5), .radius = controls.capsule, .background = p.ink, .control = true }, q.yes_key);
     const pressed = live and c.interact(yes, .{}).clicked;
     if (live) c.addA11y(yes, .button, q.yes, "", false, true);

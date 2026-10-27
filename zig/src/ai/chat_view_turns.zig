@@ -218,7 +218,7 @@ fn turnViewBox(b: *Browser, c: *ui.Context, p: *const Palette, st: *State, t: Tu
     for (t.tools) |u| {
         ui.row(c, .{ .width = .fill, .gap = 6, .align_items = .center });
         ui.icon(c, "magnifyingglass", .{ .size = 10 * z, .weight = .medium, .color = p.muted });
-        ui.text(c, u.said, .{ .size = 11.5 * z, .color = p.muted, .truncate = true });
+        ui.text(c, u.said, .{ .size = 11.5 * z, .color = p.muted, .truncate = .ellipsis });
         ui.end(c);
     }
     if (t.answer.len == 0 and !t.done) ui.text(c, "…", .{ .size = 13 * z, .color = p.faint });
@@ -229,7 +229,7 @@ fn turnViewBox(b: *Browser, c: *ui.Context, p: *const Palette, st: *State, t: Tu
         caution(c, p, c.print("Not in the pages shared: {s}", .{joined}), z);
     }
     ui.row(c, .{ .width = .fill, .align_items = .center });
-    ui.text(c, c.print("AI — may be wrong · {s}", .{t.place}), .{ .size = 10.5 * z, .color = p.muted, .truncate = true });
+    ui.text(c, c.print("AI — may be wrong · {s}", .{t.place}), .{ .size = 10.5 * z, .color = p.muted, .truncate = .ellipsis });
     _ = c.leaf(.{ .grow = 1, .min_width = 0 }, .none, null);
     if (t.done and t.answer.len > 0 and plate.quick(c, p, "Copy", null).clicked) ubi.copy(b.gpa, t.answer);
     ui.end(c);

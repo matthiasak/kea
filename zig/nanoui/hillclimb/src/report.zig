@@ -1,4 +1,5 @@
-//! The terminal report: one table per run, nanoui against mygo, and
+//! The terminal report: one table per run, nanoui against mygo and Clay
+//! (its layout and render commands only: it draws nothing), and
 //! nanoui against its own earlier runs (history.jsonl), so each change is
 //! kept only if it climbs.
 const std = @import("std");
@@ -113,6 +114,16 @@ const metrics = [_]Metric{
     }.f, .unit = "" },
 };
 
+/// Another framework's value, and nanoui's against it.
+fn compare(n: ?main.Result, other: ?main.Result, metric: Metric) void {
+    if (other != null and metric.get(other.?) > 0) std.debug.print("{d:>9.3} ", .{metric.get(other.?)}) else std.debug.print("{s:>9} ", .{"—"});
+    if (n != null and other != null and metric.get(other.?) > 0) {
+        const ratio = metric.get(n.?) / metric.get(other.?);
+        const col = if (ratio < 0.95) green else if (ratio > 1.05) red else dim;
+        std.debug.print("{s}{d:>8.2}×{s} ", .{ col, ratio, reset });
+    } else std.debug.print("{s:>9} ", .{""});
+}
+
 fn pct(now: f64, then: f64) f64 {
     return if (then == 0) 0 else (now - then) / then * 100;
 }
@@ -128,7 +139,7 @@ fn deltaColor(d: f64) []const u8 {
 
 pub fn table(results: []const main.Result, history: []const Entry) void {
     const last: ?Entry = if (history.len > 0) history[history.len - 1] else null;
-    std.debug.print("{s}{s:<10} {s:<20} {s:>9} {s:>9} {s:>9} {s:>8} {s:>8}{s}\n", .{ bold, "scene", "metric", "nanoui", "mygo", "n / m", "Δ last", "Δ best", reset });
+    std.debug.print("{s}{s:<10} {s:<20} {s:>9} {s:>9} {s:>9} {s:>9} {s:>9} {s:>8} {s:>8}{s}\n", .{ bold, "scene", "metric", "nanoui", "mygo", "n / m", "clay", "n / c", "Δ last", "Δ best", reset });
     var scenes_seen: [8][]const u8 = undefined;
     var n_scenes: usize = 0;
     for (results) |r| {
@@ -143,6 +154,7 @@ pub fn table(results: []const main.Result, history: []const Entry) void {
     for (scenes_seen[0..n_scenes]) |scene| {
         const n = find(results, "nanoui", scene);
         const m = find(results, "mygo", scene);
+        const cl = find(results, "clay", scene);
         for (metrics, 0..) |metric, mi| {
             std.debug.print("{s:<10} {s:<20} ", .{ if (mi == 0) scene else "", metric.name });
             if (n) |nr| std.debug.print("{d:>9.3} ", .{metric.get(nr)}) else std.debug.print("{s:>9} ", .{"—"});
@@ -152,6 +164,7 @@ pub fn table(results: []const main.Result, history: []const Entry) void {
                 const col = if (ratio < 0.95) green else if (ratio > 1.05) red else dim;
                 std.debug.print("{s}{d:>8.2}×{s} ", .{ col, ratio, reset });
             } else std.debug.print("{s:>9} ", .{""});
+            compare(n, cl, metric);
             if (n) |nr| {
                 const v = metric.get(nr);
                 if (last) |l| if (find(l.results, "nanoui", scene)) |lr| {

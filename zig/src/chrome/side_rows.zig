@@ -225,7 +225,7 @@ pub fn sideRow(b: *Browser, c: *ui.Context, p: *const Palette, t: *Tab, live: bo
         // The title keeps its length under the pointer and fades out beneath
         // the cross, rather than being cut shorter.
         const f_t = motion.quickTo(c, it.id, 4, if (hovering and !status) 1 else 0);
-        ui.text(c, label, .{ .size = 12.5, .color = colour, .truncate = true, .fade = if (f_t > 0.001) .{ .clear = 26 * f_t, .ramp = 16 * f_t } else null });
+        ui.text(c, label, .{ .size = 12.5, .color = colour, .truncate = .ellipsis, .fade = if (f_t > 0.001) .{ .clear = 26 * f_t, .ramp = 16 * f_t } else null });
     }
 
     var close: ui.Interaction = .{ .id = 0, .rect = null, .hovered = false, .pressed = false, .clicked = false, .focused = false };

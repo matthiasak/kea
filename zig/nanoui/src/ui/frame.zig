@@ -30,6 +30,7 @@ pub fn run(c: *Context, view: View, ts: *text.TextSystem, instances: *std.ArrayL
     c.painting_group = false;
     ts.setFamilies(theme.font, theme.mono_font);
     ts.beginFrame();
+    @import("scroll.zig").updateScrollbarDrag(c);
 
     const t0 = now();
     if (c.input.pressed and c.input.button == .left) c.selection.pressed = true;

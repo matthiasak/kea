@@ -189,3 +189,39 @@ pub fn shadowDither(x: usize, y: usize) f32 {
     const v2 = @as(f32, @floatFromInt(h2 & 0xffff)) / 65535.0;
     return (v1 + v2 - 1.0) * (0.5 / 255.0);
 }
+
+/// A dashed border's coverage at (`x`, `y`) from the box's centre, as
+/// GPUI lays dashes (shader.metal's `dash_cover`); `px` is a pixel's size.
+pub fn dashCover(x: f32, y: f32, hw: f32, hh: f32, r: f32, w: f32, px: f32) f32 {
+    const pi = std.math.pi;
+    const dv = 1 / (3 * w);
+    const sx = (2 * hw - 2 * r) * dv;
+    const sy = (2 * hh - 2 * r) * dv;
+    const cq = r * pi * 0.5 * dv;
+    const qx = @abs(x) - (hw - r);
+    const qy = @abs(y) - (hh - r);
+    const t: f32 = if (r > 0 and qx > 0 and qy > 0) blk: {
+        const vx = x - std.math.sign(x) * (hw - r);
+        const vy = y - std.math.sign(y) * (hh - r);
+        const ang = std.math.atan2(vy, vx);
+        break :blk if (x >= 0 and y < 0)
+            sx + (ang + pi * 0.5) * r * dv
+        else if (x >= 0)
+            sx + cq + sy + ang * r * dv
+        else if (y >= 0)
+            2 * sx + 2 * cq + sy + (ang - pi * 0.5) * r * dv
+        else
+            2 * sx + 3 * cq + 2 * sy + (ang + pi) * r * dv;
+    } else if ((hh - @abs(y)) < (hw - @abs(x)))
+        (if (y < 0) (x + hw - r) * dv else sx + 2 * cq + sy + (hw - r - x) * dv)
+    else
+        (if (x > 0) sx + cq + (y + hh - r) * dv else 2 * sx + 3 * cq + sy + (hh - r - y) * dv);
+    const max_t = 2 * (sx + sy) + 4 * cq;
+    if (max_t < 1) return 1;
+    const period = max_t / @floor(max_t);
+    const len: f32 = 2.0 / 3.0;
+    const u = t + period * 0.5 - len * 0.5;
+    const centered = u - period * @floor(u / period) - period * 0.5;
+    const sd = (@abs(centered) - len * 0.5) / dv;
+    return std.math.clamp(0.5 - sd / px, 0, 1);
+}

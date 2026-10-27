@@ -257,7 +257,7 @@ fn keyBox(b: *Browser, c: *ui.Context, p: *const Palette, id: []const u8, cached
     st.border = if (listening) p.ink.alpha(0.4) else p.hairline;
     const lit = listening or (if (cached_idx) |idx| s.has_key[idx] else store.effective(id) != null);
     const is_changed = if (cached_idx) |idx| s.changed_mask[idx] else store.isChanged(id);
-    ui.text(c, said, .{ .size = 12, .weight = if (is_changed) .semibold else .regular, .color = if (lit) p.ink else p.muted, .truncate = true });
+    ui.text(c, said, .{ .size = 12, .weight = if (is_changed) .semibold else .regular, .color = if (lit) p.ink else p.muted, .truncate = .ellipsis });
     if (it.clicked) {
         if (listening) stop(s) else listen(s, id);
         c.changed = true;

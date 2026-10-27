@@ -149,7 +149,7 @@ fn field(c: *ui.Context, p: *const Palette, buf: *ui.TextBuffer, prompt: []const
         if (secure) said[said.len - 1].value = "";
     }
     if (buf.text().len == 0)
-        _ = c.leaf(.{ .absolute = true, .offset = .{ .y = 2 } }, .{ .text = .{ .str = prompt, .style = .{ .size = 12, .truncate = true }, .color = p.faint } }, null);
+        _ = c.leaf(.{ .absolute = true, .offset = .{ .y = 2 } }, .{ .text = .{ .str = prompt, .style = .{ .size = 12, .truncate = .ellipsis }, .color = p.faint } }, null);
     return r;
 }
 

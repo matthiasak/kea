@@ -240,7 +240,7 @@ fn body(c: *ui.Context, p: *const palette.Palette, tab: *Tab, keeps: bool) bool 
     _ = c.leaf(.{ .width = px(64) }, .none, null);
     ui.spacer(c);
     var buf: [300]u8 = undefined;
-    ui.text(c, site(&buf, tab), .{ .size = 12.5, .weight = .medium, .color = p.muted, .truncate = true });
+    ui.text(c, site(&buf, tab), .{ .size = 12.5, .weight = .medium, .color = p.muted, .truncate = .ellipsis });
     ui.spacer(c);
     const kept = if (keeps) controls.pill(c, p, "Open in " ++ app_name, .{ .help = "Open in " ++ app_name ++ "   ⌘O" }).clicked else blk: {
         _ = c.leaf(.{ .width = px(64) }, .none, null);

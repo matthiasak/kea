@@ -115,6 +115,15 @@ pub const Shadow = struct {
     /// Drawn outside the box only (`Kind.shadow_out`): a box that shows
     /// what is under it (a page through a stage hole) keeps its shadow.
     knockout: bool = false,
+    /// Grows the shadow's box on every side before it's blurred; less than
+    /// 0 shrinks it, as CSS's spread radius does.
+    spread: f32 = 0,
+
+    /// Tailwind's `shadow-lg`, as GPUI draws it: two faint layers.
+    pub const lg = [_]Shadow{
+        .{ .color = .{ .a = 0.1 }, .blur = 15, .y = 10, .spread = -3 },
+        .{ .color = .{ .a = 0.1 }, .blur = 6, .y = 4, .spread = -4 },
+    };
 };
 
 /// The style of a box, in the manner of CSS flexbox.
@@ -137,6 +146,16 @@ pub const Glass = struct {
 
 pub const Pulse = struct { period: f32, scale_amp: f32, alpha_low: f32 };
 
+/// How a scrolling box shows its bar.
+pub const Scrollbar = union(enum) {
+    /// While the content is taller than the box.
+    always,
+    /// macOS's overlay bar, in this colour: shown while the box scrolls,
+    /// for 1.4 s after, then faded out over 0.26 s; held while the pointer
+    /// is on its 10-point strip, where it widens from 3 to 5 points.
+    overlay: Color,
+};
+
 pub const Style = struct {
     direction: Direction = .column,
     gap: f32 = 0,
@@ -156,14 +175,22 @@ pub const Style = struct {
     background: ?Color = null,
     border: ?Color = null,
     border_width: f32 = 1,
+    /// Dashed: dashes twice the border's width, gaps once it, spaced evenly
+    /// round the whole box (GPUI's `border_dashed`).
+    border_dashed: bool = false,
     radius: f32 = 0,
     /// Circular corners instead of Apple's continuous corners.
     corner_circular: bool = false,
     shadow: ?Shadow = null,
+    /// More shadows under the box, after `shadow`: layered ones.
+    shadows: []const Shadow = &.{},
     /// Filled with Liquid Glass instead of a background.
     glass: ?Glass = null,
     /// Children are clipped to the box and scroll vertically.
     scroll: bool = false,
+    /// A scrolling box's bar: always there while there's more to see, or
+    /// an overlay that shows while it scrolls and fades away after.
+    scrollbar: Scrollbar = .always,
     /// Overall opacity of the box and its content.
     opacity: f32 = 1,
     /// Moves the box after layout, without moving its siblings.
@@ -252,10 +279,16 @@ pub const TextStyle = struct {
     italic: bool = false,
     /// Line height as a multiple of the font's (1.5 for airy prose).
     leading: f32 = 1,
-    /// One line cut to fit its box, ending in "…".
-    truncate: bool = false,
-    /// As `truncate`, but the middle goes: "abc…xyz".
-    truncate_middle: bool = false,
+    /// Line height in points (CSS's `line-height: 22px`), taking the place
+    /// of `leading` when above 0; the extra room goes half above, half below.
+    line_height: f32 = 0,
+    /// Inline code's size (`Span.mono`) over the text's: smaller, as the
+    /// monospaced font looks larger at the same size; 1 keeps it.
+    mono_scale: f32 = 0.9,
+    /// A line longer than its box (text that doesn't wrap): cut before an
+    /// ellipsis, faded toward its end, or shortened through its middle.
+    truncate: Truncate = .none,
+    fade_width: f32 = 24,
     /// Glyphs fade out toward the box's right edge.
     fade: ?Fade = null,
     /// Wrapped text keeps at most this many lines (0: all of them), the
@@ -270,9 +303,11 @@ pub const TextStyle = struct {
 
     /// Cut to one line that fits, at its end or in its middle.
     pub fn cuts(s: TextStyle) bool {
-        return s.truncate or s.truncate_middle;
+        return s.truncate == .ellipsis or s.truncate == .middle;
     }
 };
+
+pub const Truncate = enum { none, ellipsis, middle, fade };
 
 /// Glyphs within `clear` points of the box's right edge are transparent;
 /// they reach full opacity `ramp` points further left.

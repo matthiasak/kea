@@ -156,7 +156,7 @@ fn card(b: *Browser, c: *ui.Context, p: *const Palette, t: *Tab, l: Layout, card
         var buf: [4]u8 = undefined;
         mark.mark(c, p, b.kea.favicons.icon(t.url()), t.monogram(&buf), 13, false);
     }
-    ui.text(c, caption, .{ .size = 11.5, .color = p.ink, .truncate = true });
+    ui.text(c, caption, .{ .size = 11.5, .color = p.ink, .truncate = .ellipsis });
     ui.end(c);
     return it;
 }

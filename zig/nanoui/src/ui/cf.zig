@@ -50,6 +50,14 @@ pub extern "c" fn CGContextSetShouldSubpixelPositionFonts(ctx: CGContextRef, v: 
 pub extern "c" const kCGColorSpaceSRGB: CFStringRef;
 pub extern "c" fn CGColorSpaceCreateWithName(name: CFStringRef) ?CGColorSpaceRef;
 pub extern "c" fn CGColorSpaceRelease(space: CGColorSpaceRef) void;
+pub extern "c" fn CGColorSpaceCreateDeviceGray() ?CGColorSpaceRef;
+pub extern "c" const kCFPreferencesCurrentApplication: CFStringRef;
+pub extern "c" fn CFPreferencesCopyAppValue(key: CFStringRef, app: CFStringRef) ?*anyopaque;
+pub extern "c" fn CFNumberGetTypeID() usize;
+pub extern "c" fn CFGetTypeID(ref: *anyopaque) usize;
+pub extern "c" fn CFNumberGetValue(number: *anyopaque, kind: CFIndex, out: *anyopaque) bool;
+/// `kCFNumberSInt64Type`.
+pub const number_sint64: CFIndex = 4;
 
 pub extern "c" fn CACurrentMediaTime() f64;
 pub extern "c" fn MTLCreateSystemDefaultDevice() ?objc.Object;

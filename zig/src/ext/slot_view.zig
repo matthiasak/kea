@@ -286,7 +286,7 @@ fn menuRow(b: *Browser, e: *Extensions, c: *ui.Context, p: *const Palette, btn: 
     const over = if (it.rect) |r| r.contains(c.input.mouse) else false;
     if (over) c.node(i).style.background = p.wash;
     icon(c, p, e, btn, 16);
-    ui.text(c, btn.name, .{ .size = 12.5, .color = if (btn.enabled) p.ink else p.muted, .truncate = true });
+    ui.text(c, btn.name, .{ .size = 12.5, .color = if (btn.enabled) p.ink else p.muted, .truncate = .ellipsis });
     _ = c.leaf(.{ .grow = 1, .min_width = 4 }, .none, null);
     const from_folder = if (e.row(btn.id)) |r| r.source != null else false;
     if (over and from_folder and tool(c, p, "arrow.clockwise", "Reload from its folder", false)) e.reload(btn.id);

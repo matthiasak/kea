@@ -42,7 +42,7 @@ pub fn plate(c: *ui.Context, p: *const Palette, title: []const u8, width: f32) P
         .shadow = card.swiftShadow(0.16, 34, 12),
     }, null);
     ui.row(c, .{ .gap = 10, .width = .fill, .padding = .{ .left = 22, .right = 22, .top = 18, .bottom = 14 }, .align_items = .center });
-    ui.text(c, title, .{ .size = 17, .weight = .semibold, .color = p.ink, .truncate = true });
+    ui.text(c, title, .{ .size = 17, .weight = .semibold, .color = p.ink, .truncate = .ellipsis });
     ui.spacer(c);
     const closed = controls.door(c, p, "xmark", .{ .help = "Done   esc" }).clicked;
     ui.end(c);

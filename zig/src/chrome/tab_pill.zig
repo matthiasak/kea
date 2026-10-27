@@ -242,7 +242,7 @@ fn titledContent(b: *Browser, c: *ui.Context, p: *const Palette, tab: *Tab, colo
     }
     const speaker = !tab.loading and (tab.noisy or tab.muted);
     const f_t = motion.quickTo(c, pill_id, 5, if (hovered and !speaker and !tab.loading) 1 else 0);
-    ui.text(c, tab.label(), .{ .size = 12.5, .color = colour, .truncate = true, .fade = if (f_t > 0.001) .{ .clear = 22 * f_t, .ramp = 14 * f_t } else null });
+    ui.text(c, tab.label(), .{ .size = 12.5, .color = colour, .truncate = .ellipsis, .fade = if (f_t > 0.001) .{ .clear = 22 * f_t, .ramp = 14 * f_t } else null });
     _ = c.leaf(.{ .grow = 1, .min_width = 2 }, .none, null);
 
     // The speaker at the end on its own, one place in under the pointer.

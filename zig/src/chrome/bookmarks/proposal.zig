@@ -124,7 +124,7 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette, proposal: *const org
         ui.column(c, .{ .width = .fill, .gap = 1, .padding = .xy(6, 6) });
         for (proposal.removed) |node| {
             ui.column(c, .{ .width = .fill, .padding = .xy(10, 4) });
-            ui.richText(c, node.title, &.{.{ .start = 0, .end = @intCast(node.title.len), .strike = true }}, .{ .size = 12.5, .color = p.ink, .truncate = true });
+            ui.richText(c, node.title, &.{.{ .start = 0, .end = @intCast(node.title.len), .strike = true }}, .{ .size = 12.5, .color = p.ink, .truncate = .ellipsis });
             ui.end(c);
         }
         ui.end(c);
@@ -133,7 +133,7 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette, proposal: *const org
     }
 
     ui.row(c, .{ .width = .fill, .gap = 8, .align_items = .center });
-    ui.text(c, c.print("AI \u{2014} may be wrong \u{00B7} {s}", .{proposal.place}), .{ .size = 11, .color = p.muted, .truncate = true });
+    ui.text(c, c.print("AI \u{2014} may be wrong \u{00B7} {s}", .{proposal.place}), .{ .size = 11, .color = p.muted, .truncate = .ellipsis });
     ui.spacer(c);
     if (controls.pill(c, p, "Discard", .{}).clicked) press(b, .discard);
     if (controls.pill(c, p, "Apply", .{ .filled = true }).clicked) press(b, .apply);
@@ -165,10 +165,10 @@ fn rows(b: *Browser, c: *ui.Context, p: *const Palette, nodes: []const Bookmark,
             _ = c.open(.{ .width = px(15), .align_items = .center, .justify = .center }, null);
             ui.icon(c, "folder.fill", .{ .size = 10, .color = p.muted });
             c.end();
-            ui.text(c, node.title, .{ .size = 12.5, .weight = .medium, .color = p.ink, .truncate = true });
+            ui.text(c, node.title, .{ .size = 12.5, .weight = .medium, .color = p.ink, .truncate = .ellipsis });
         } else {
             outline.siteMark(b, c, p, node, 15);
-            ui.text(c, node.title, .{ .size = 12.5, .color = p.ink, .truncate = true });
+            ui.text(c, node.title, .{ .size = 12.5, .color = p.ink, .truncate = .ellipsis });
         }
         ui.end(c);
         if (node.isFolder()) rows(b, c, p, node.kids(), depth + 1);

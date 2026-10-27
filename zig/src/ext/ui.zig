@@ -109,7 +109,7 @@ fn installer(b: *Browser, c: *ui.Context, p: *const Palette, e: *Extensions, s: 
     ui.key(c, "ext.link");
     const r = ui.textField(c, &s.link, .{ .bare = true, .size = 12.5, .width = .fill, .caret_color = p.ink, .selection_color = p.ink.alpha(0.12) });
     if (s.link.text().len == 0)
-        _ = c.leaf(.{ .absolute = true, .offset = .{ .x = 10, .y = 7 } }, .{ .text = .{ .str = "Paste a link to an extension, or its id", .style = .{ .size = 12.5, .truncate = true }, .color = p.muted.alpha(0.8) } }, null);
+        _ = c.leaf(.{ .absolute = true, .offset = .{ .x = 10, .y = 7 } }, .{ .text = .{ .str = "Paste a link to an extension, or its id", .style = .{ .size = 12.5, .truncate = .ellipsis }, .color = p.muted.alpha(0.8) } }, null);
     ui.end(c);
     const valid = crx.id(s.link.text()) != null;
     var add = r.submitted;
@@ -173,10 +173,10 @@ fn row(b: *Browser, c: *ui.Context, p: *const Palette, e: *Extensions, item: Ins
     if (image) |img| slot_view.picture(c, p, e, item.id, item.name, img, 22) else ui.icon(c, "puzzlepiece.extension", .{ .size = 14, .color = p.muted });
     c.end();
     ui.column(c, .{ .gap = 2, .grow = 1, .min_width = 0 });
-    ui.text(c, item.name, .{ .size = 13, .color = p.ink, .truncate = true });
+    ui.text(c, item.name, .{ .size = 13, .color = p.ink, .truncate = .ellipsis });
     const d = c.open(.{ .width = .fill }, null);
     if (item.source) |src| c.help(d, src);
-    ui.text(c, detail(c, e, item, context), .{ .size = 11.5, .color = p.muted, .truncate = true });
+    ui.text(c, detail(c, e, item, context), .{ .size = 11.5, .color = p.muted, .truncate = .ellipsis });
     c.end();
     ui.end(c);
     _ = c.leaf(.{ .min_width = 8, .width = px(8) }, .none, null);
