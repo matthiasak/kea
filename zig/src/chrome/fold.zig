@@ -145,7 +145,7 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette) void {
     const id = std.hash.Wyhash.hash(0, "kea.fold");
     const right = onRight(b);
     if (side) {
-        const w = b.prefs.side_width;
+        const w = b.prefs.effectiveSideWidth();
         const t = presence(c, id, folding(b) and b.peeking, motion.glide, motion.glide) orelse return;
         const at = if (right) c.size.w - w + (1 - t) * w else -(1 - t) * w;
         castShadow(c, p, .{ .x = at, .y = 0, .w = w, .h = c.size.h }, t, if (right) -4 else 4, 0);
@@ -178,7 +178,7 @@ fn castShadow(c: *ui.Context, p: *const Palette, r: ui.Rect, strength: f32, x: f
 /// column comes back as it rests; a change of side or of `sidebar.hides`.
 fn follows(b: *Browser) void {
     const st = &b.fold;
-    const now: @TypeOf(st.seen.?) = .{ .sidebar = b.prefs.sidebar, .right = b.prefs.side_position == .right, .hides = b.prefs.side_hides, .width = b.prefs.side_width };
+    const now: @TypeOf(st.seen.?) = .{ .sidebar = b.prefs.sidebar, .right = b.prefs.side_position == .right, .hides = b.prefs.side_hides, .width = b.prefs.effectiveSideWidth() };
     const was = st.seen orelse {
         st.seen = now;
         return;
@@ -303,7 +303,7 @@ pub fn followAt(b: *Browser, ptr: Pointer) void {
     st.crossing = in_window or overshot;
     if (b.peeking) {
         pass(b);
-        const reach = if (side) b.prefs.side_width else metrics.strip;
+        const reach = if (side) b.prefs.effectiveSideWidth() else metrics.strip;
         const over = ptr.on_own_panel or holding(b) or overshot or (ptr.on_window and in_window and distance < reach);
         st.inside = over;
         peek(b, over);
@@ -358,7 +358,7 @@ fn hideLights(b: *Browser, reduced: bool) void {
         .off = b.folded and !b.peeking,
         .sidebar = b.prefs.sidebar,
         .right = onRight(b),
-        .width = b.prefs.side_width,
+        .width = b.prefs.effectiveSideWidth(),
         .full = fullScreen(b),
     };
     if (st.lights) |was| if (std.meta.eql(was, want)) return;

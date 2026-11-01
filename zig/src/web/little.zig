@@ -111,6 +111,48 @@ pub fn show(b: *Browser, url: []const u8, front: bool) ?*Little {
     return self;
 }
 
+pub fn showTab(b: *Browser, tab: *Tab, w_in: f64, h_in: f64) ?*Little {
+    const kea = b.kea;
+    const app = kea.ui_app orelse return null;
+    if (kea.opts.headless) return null;
+    const self = gpa.create(Little) catch return null;
+    const off: ?f64 = if (kea.opts.hidden) -20000 else null;
+    const w = std.math.clamp(w_in, 320, 1200);
+    const h = std.math.clamp(h_in, 240, 900);
+    const win = app.newWindow(.{
+        .width = w,
+        .height = h,
+        .min_width = 320,
+        .min_height = 240,
+        .title_bar = .hidden,
+        .visible = false,
+        .x = off,
+        .y = off,
+        .tabbing_disallowed = true,
+        .on_close = .{ .ctx = self, .func = closed },
+        .content = .{ .view = ui.View.init(self, view) },
+    }) catch {
+        gpa.destroy(self);
+        return null;
+    };
+    self.* = .{ .kea = kea, .tab = tab, .browser = b, .window = win };
+    open.append(gpa, self) catch {};
+    if (monitor == null) monitor = appkit.addLocalMonitor(1 << 10, &monitor_ctx, keyDown);
+    if (win.surface) |s| {
+        self.host = StageHost.create(gpa, s) catch null;
+        if (self.host) |sh| {
+            sh.setPage(tab.web, false);
+            if (tab.web) |wv| _ = objc.msg(objc.BOOL, win.nswindow, "makeFirstResponder:", .{wv});
+        }
+        s.frame();
+    }
+    if (!kea.opts.hidden and kea.opts.root == null) {
+        objc.msg(void, win.nswindow, "makeKeyAndOrderFront:", .{@as(?objc.Object, null)});
+        objc.msg(void, app.nsapp, "activateIgnoringOtherApps:", .{objc.YES});
+    }
+    return self;
+}
+
 /// The small window a tab is in, if it is in one.
 pub fn of(t: *const Tab) ?*Little {
     for (open.items) |l| if (l.tab == t) return l;

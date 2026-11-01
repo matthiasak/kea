@@ -305,10 +305,13 @@ fn freeSet(s: *Set) void {
     var it = s.keyIterator();
     while (it.next()) |k| a.free(k.*);
     s.deinit(a);
+    s.* = .empty;
 }
 
 fn putSet(s: *Set, key: []const u8) void {
     if (s.contains(key)) return;
+    // ponytail: past 1024 hosts (only `missing`/`absent` get there) the set starts over; an LRU if misses matter.
+    if (s.count() >= 1024) freeSet(s);
     const owned = a.dupe(u8, key) catch return;
     s.put(a, owned, {}) catch a.free(owned);
 }

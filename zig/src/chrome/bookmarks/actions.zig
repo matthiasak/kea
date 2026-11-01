@@ -126,7 +126,7 @@ pub fn copy(b: *Browser, nodes: []const Bookmark) void {
     defer arena.deinit();
     const a = arena.allocator();
     const urls = Bookmarks.urls(a, nodes) catch return;
-    nanoui.clipboard.writeText(std.mem.join(a, "\n", urls) catch return);
+    b.kea.writeClipboard(std.mem.join(a, "\n", urls) catch return);
 }
 
 /// The nodes for `ids`, those still here, topmost and in reading order. On `a`.

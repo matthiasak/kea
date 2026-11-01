@@ -38,7 +38,6 @@ const keys_right = [pose_count][]const u8{
 var tried = false;
 var flight: ?Flight = null;
 var sprites_tried = false;
-var sprites_source: ?cg.Source = null;
 var sprites: ?Sprites = null;
 var icon: ?[]u8 = null;
 const gpa = std.heap.c_allocator;
@@ -158,7 +157,7 @@ fn loadSprites() ?*const Sprites {
     defer pool.pop();
     const url = findGifUrl() orelse return null;
     const source = cg.CGImageSourceCreateWithURL(url, null) orelse return null;
-    sprites_source = source;
+    defer cg.CFRelease(source);
     sprites = extractSprites(source) orelse return null;
     return &sprites.?;
 }
@@ -302,11 +301,12 @@ const spark_colors = [_]ui.Color{
 };
 
 /// Dynamic pixel-art kea circus flying across a blank New Tab (`area`), behind
-/// the address field at `field_y`.
-pub fn newTabArt(c: *ui.Context, area: ui.Size, field_y: f32) void {
+/// the address field at `field_y`, posed at `clock` seconds; the next frame is
+/// asked for only while it `animate`s.
+pub fn newTabArt(c: *ui.Context, area: ui.Size, field_y: f32, clock: f64, animate: bool) void {
     if (area.w < 240 or area.h < 180) return;
     const sp = loadSprites() orelse return;
-    const t: f32 = if (c.reduce_motion) 0 else @floatCast(c.time);
+    const t: f32 = if (c.reduce_motion) 0 else @floatCast(clock);
     _ = c.open(.{ .absolute = true, .width = .{ .px = area.w }, .height = .{ .px = area.h }, .clip = true }, "kea.newtab.art");
     defer c.end();
 
@@ -387,7 +387,7 @@ pub fn newTabArt(c: *ui.Context, area: ui.Size, field_y: f32) void {
         });
         c.end();
     }
-    if (!c.reduce_motion) c.frameIn(1.0 / 15.0);
+    if (animate and !c.reduce_motion) c.frameIn(1.0 / 15.0);
 }
 
 test "kea.gif reads as timed frames that become PNG" {
@@ -416,7 +416,7 @@ test "extractSprites builds 8 left and 8 right transparent pixel-art PNGs and re
     }
     const State = struct {
         fn draw(_: *@This(), c: *ui.Context) void {
-            newTabArt(c, c.size, (c.size.h - 50 - 60) / 2);
+            newTabArt(c, c.size, (c.size.h - 50 - 60) / 2, c.time, true);
         }
     };
     var st: State = .{};

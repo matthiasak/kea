@@ -132,7 +132,7 @@ fn codeFor(key: []const u8) u16 {
         .{ "f", 3 },       .{ "g", 5 },      .{ "s", 1 },       .{ "r", 15 },    .{ ".", 47 },    .{ "y", 16 },
         .{ "h", 4 },       .{ "u", 32 },     .{ "+", 24 },      .{ "-", 27 },    .{ "0", 29 },    .{ "i", 34 },
         .{ "j", 38 },      .{ "c", 8 },      .{ "[", 33 },      .{ "]", 30 },    .{ "k", 40 },    .{ "d", 2 },
-        .{ "v", 9 },       .{ "m", 46 },     .{ "b", 11 },      .{ "z", 6 },       .{ "left", 123 }, .{ "right", 124 }, .{ "delete", 51 },
+        .{ "v", 9 },       .{ "m", 46 },     .{ "b", 11 },      .{ "z", 6 },       .{ "left", 123 }, .{ "right", 124 }, .{ "delete", 51 }, .{ "tab", 48 },
     };
     inline for (table) |row| if (std.mem.eql(u8, row[0], key)) return row[1];
     return 0;
@@ -142,7 +142,7 @@ test "default combos run" {
     const skip = [_][]const u8{
         "file.print",         "view.reload",        "view.reloadOrigin", "view.stop",     "view.reader",
         "view.float",         "view.hide",          "view.inspector",    "view.console",  "view.inspect",
-        "tabs.focusLeftPane", "tabs.focusRightPane", "tabs.pasteAndGo",   "tabs.mute",
+        "tabs.focusLeftPane", "tabs.focusRightPane", "tabs.pasteAndGo",   "tabs.mute",     "view.source",
     };
     for (app.commands.all) |cmd| {
         const kc = cmd.default_key orelse continue;

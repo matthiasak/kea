@@ -167,7 +167,7 @@ pub const Send = struct {
         const from = @import("assistant_more.zig").folded(self.chat);
         r.recap = if (from > 0) if (self.chat.summary) |s| try a.dupe(u8, s) else null else null;
         var good: std.ArrayList(cs.Turn) = .empty;
-        for (self.chat.turns[from..]) |t| if (t.done and t.failed == null and t.answer.len > 0) try good.append(a, t);
+        for (self.chat.turns[from..]) |t| if (t.failed == null and t.answer.len > 0) try good.append(a, t);
         const keep = ubi.remembered(p);
         const tail = good.items[good.items.len -| keep..];
         r.earlier = try json.clone(a, @as([]const cs.Turn, tail));
@@ -310,7 +310,7 @@ pub const Send = struct {
         const self = r.owner() orelse return r.release();
         self.finish(r.id, r.asking.failure, r.reads.items);
         if (r.asking.failure == null and self.chat.turns.len > 0 and self.chat.turns[self.chat.turns.len - 1].id.eql(r.id))
-            self.name(r.provider, r.model);
+            @import("followups.zig").afterAnswer(self, r.provider, r.model);
         r.release();
     }
 };

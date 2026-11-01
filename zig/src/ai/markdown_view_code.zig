@@ -1,7 +1,8 @@
-//! `CodeBlock` (AIAssist.swift:1443-1507): a fenced block of an answer —
-//! its language, Copy, and for Mermaid a door between the drawn diagram
-//! (mermaid/draw.zig, kept as a picture) and its highlighted source
-//! (`Mermaid.highlighted`, Mermaid.swift:78-99).
+//! `CodeBlock` (AIAssist.swift:1443-1507): a fenced block of an answer on
+//! a recessed card — a header strip with its language and Copy over its
+//! source, syntax-highlighted (markdown_theme.zig); for Mermaid a door
+//! between the drawn diagram (mermaid/draw.zig, kept as a picture) and its
+//! highlighted source (`Mermaid.highlighted`, Mermaid.swift:78-99).
 const std = @import("std");
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
@@ -11,15 +12,19 @@ const plate = @import("../chrome/controls_plate.zig");
 const mermaid = @import("mermaid/mermaid.zig");
 const draw = @import("mermaid/draw.zig");
 const view = @import("markdown_view.zig");
+const theme = @import("markdown_theme.zig");
+const Copy = @import("markdown_view_rich.zig").Copy;
 
 /// Drawn pictures kept per window; past it the one shown longest ago goes.
 const pictures_kept = 24;
 
-pub fn block(x: *const view.Ctx, language: []const u8, text: []const u8, closed: bool) void {
+/// Selected, the source copies inside its fence (`cp` before it).
+pub fn block(x: *const view.Ctx, language: []const u8, text: []const u8, closed: bool, cp: Copy) void {
     const c = x.c;
     const p = x.p;
     const z = x.o.zoom;
-    const i = c.open(.{ .gap = 8, .width = .fill, .padding = .all(10), .background = p.wash, .radius = 10, .border = p.hairline }, null);
+    const th = theme.MdTheme.of(c.theme.dark, p);
+    const i = c.open(.{ .width = .fill, .background = th.code_block_bg, .radius = 10, .border = th.code_block_border }, null);
     defer c.end();
     const id = c.node(i).id;
     const box = x.st.boxState(x.b.gpa, id);
@@ -27,8 +32,8 @@ pub fn block(x: *const view.Ctx, language: []const u8, text: []const u8, closed:
     const source = x.st.sources.contains(id);
     const diagram = if (is_mermaid and closed and !source) mermaid.diagram(c.alloc(), text) else null;
 
-    ui.row(c, .{ .gap = 6, .width = .fill, .align_items = .center });
-    ui.text(c, if (language.len == 0) "Code" else language, .{ .size = 11 * z, .color = p.muted });
+    ui.row(c, .{ .gap = 6, .width = .fill, .align_items = .center, .padding = .{ .left = 12, .right = 6, .top = 4, .bottom = 4 } });
+    ui.text(c, if (language.len == 0) "Code" else language, .{ .size = 11 * z, .mono = true, .color = p.muted });
     ui.spacer(c);
     if (!is_mermaid and !x.o.drawn and plate.quick(c, p, if (box.wrapped) "Unwrap" else "Wrap", null).clicked) {
         box.wrapped = !box.wrapped;
@@ -46,23 +51,30 @@ pub fn block(x: *const view.Ctx, language: []const u8, text: []const u8, closed:
     if (until != null and !copied) _ = x.st.copied.remove(id);
     if (copied) c.frameIn(@floatCast(until.? - c.time));
     if (plate.quick(c, p, if (copied) "Copied" else "Copy", null).clicked) {
-        nanoui.clipboard.writeText(text);
+        x.b.kea.writeClipboard(text);
         x.st.copied.put(x.b.gpa, id, c.time + 1.5) catch {};
         c.frameIn(1.5);
         c.changed = true;
     }
     ui.end(c);
+    _ = c.leaf(.{ .width = .fill, .height = .{ .px = 1 }, .background = th.code_block_border }, .none, null);
+    // The source, the diagram and the stretch bar, under the strip.
+    ui.column(c, .{ .gap = 8, .width = .fill, .padding = .all(10) });
+    defer ui.end(c);
 
     if (diagram) |d| {
-        if (!x.o.drawn) ui.row(c, .{ .width = .fill, .scroll_x = true, .scroll_bar = true });
-        defer if (!x.o.drawn) ui.end(c);
-        ui.row(c, .{ .width = if (x.o.drawn) .fill else .auto, .justify = .center });
+        // At 100% or less the diagram fits the box; zoomed in, it scrolls sideways.
+        const zoomed = !x.o.drawn and box.scale > 1.0;
+        const fit_w = if (c.rects.get(id)) |r| @max(80, r.w - 20) else std.math.inf(f32);
+        if (zoomed) ui.row(c, .{ .width = .fill, .scroll_x = true, .scroll_bar = true });
+        defer if (zoomed) ui.end(c);
+        ui.row(c, .{ .width = if (zoomed) .auto else .fill, .justify = .center });
         defer ui.end(c);
         const bytes = picture(x, text, d) orelse return;
         _ = ui.image(c, .{
             .key = c.print("mermaid-{x}", .{pictureKey(text, c.theme.dark, z)}),
             .bytes = bytes,
-            .max_width = std.math.inf(f32),
+            .max_width = if (zoomed or x.o.drawn) std.math.inf(f32) else fit_w,
             .max_height = std.math.inf(f32),
             .radius = 0,
             .scale = 2.0 / box.scale,
@@ -77,15 +89,15 @@ pub fn block(x: *const view.Ctx, language: []const u8, text: []const u8, closed:
             .max_height = if (box.height > 0) box.height else std.math.inf(f32),
             .scroll = box.height > 0,
             .scroll_x = !wrap_code,
-            .scroll_bar = true,
+            .scroll_bar = box.height > 0 or !wrap_code,
         }, null);
     }
     const shown = if (std.mem.indexOfScalar(u8, text, '\r') != null) lf(c.alloc(), text) catch text else text;
-    const spans: []const ui.Span = if (is_mermaid) highlighted(c.alloc(), p, shown) catch &.{} else &.{};
-    const style: ui.TextStyle = .{ .size = 12 * z, .mono = true, .color = p.ink, .wrap = wrap_code };
+    const spans: []const ui.Span = (if (is_mermaid) highlighted(c.alloc(), p, shown) else theme.highlightCode(c.alloc(), &th, language, shown)) catch &.{};
+    const style: ui.TextStyle = .{ .size = 12 * z, .mono = true, .color = th.body, .wrap = wrap_code, .line_height = 1.4 * 12 * z };
     // Mermaid's header line is 12 points whatever the zoom (`highlighted`):
     // zoomed, it is a line of its own between what comes before and after.
-    const head: ?ui.Span = if (z != 1) for (spans) |sp| {
+    const head: ?ui.Span = if (is_mermaid and z != 1) for (spans) |sp| {
         if (sp.weight != null) break sp;
     } else null else null;
     const parts = cut(c.alloc(), shown, spans, head) catch {
@@ -93,10 +105,34 @@ pub fn block(x: *const view.Ctx, language: []const u8, text: []const u8, closed:
         return;
     };
     ui.column(c, .{ .width = if (wrap_code) .fill else .auto, .selectable = true });
-    for (parts) |part| if (part.text) |str| {
+    var first = true;
+    var last: usize = 0;
+    for (parts, 0..) |part, k| if (part.text != null) {
+        last = k;
+    };
+    const fence = c.print("{s}```{s}\n", .{ cp.prefix, language });
+    for (parts, 0..) |part, k| if (part.text) |str| {
         var st = style;
-        if (part.fixed) st.size = 12;
-        _ = c.leaf(.{ .width = if (wrap_code) .fill else .auto }, .{ .text = .{ .str = str, .style = st, .color = p.ink, .spans = part.spans } }, null);
+        if (part.fixed) {
+            st.size = 12;
+            st.line_height = 1.4 * 12;
+        }
+        const tail = if (k == last and closed) "\n```" else "";
+        if (wrap_code) {
+            _ = c.leaf(.{ .width = .fill }, .{ .text = .{ .str = str, .style = st, .color = th.body, .spans = part.spans, .copy = .{ .src = str, .prefix = if (first) fence else "", .suffix = tail, .join = if (first) cp.join else "\n" } } }, null);
+            first = false;
+            continue;
+        }
+        // Unwrapped, a leaf a line: one unwrapped text is one line, its breaks unshown.
+        var start: usize = 0;
+        var lines = std.mem.splitScalar(u8, str, '\n');
+        while (lines.next()) |line| {
+            defer start += line.len + 1;
+            const sp = within(c.alloc(), part.spans, @intCast(start), @intCast(start + line.len)) catch &.{};
+            const end = lines.index == null;
+            _ = c.leaf(.{ .width = .auto }, .{ .text = .{ .str = line, .style = st, .color = th.body, .spans = sp, .copy = .{ .src = line, .prefix = if (first) fence else "", .suffix = if (end) tail else "", .join = if (first) cp.join else "\n" } } }, null);
+            first = false;
+        }
     };
     ui.end(c);
     if (!x.o.drawn) {

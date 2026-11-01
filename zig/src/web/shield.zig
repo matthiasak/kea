@@ -49,7 +49,12 @@ const slots_by_site = [_]struct { sites: []const []const u8, selector: []const u
     .{ .sites = &.{"*theguardian.com"}, .selector = ".top-fronts-banner-ad-container" },
     .{ .sites = &.{ "*independent.co.uk", "*the-independent.com" }, .selector = "#billboard-wrapper" },
     .{ .sites = &.{"*cnn.com"}, .selector = ".ad-slot-header__wrapper" },
+    .{
+        .sites = &.{"*youtube.com"},
+        .selector = "ytd-ad-slot-renderer, ytd-in-feed-ad-layout-renderer, ytd-banner-promo-renderer, ytd-statement-banner-renderer, ytd-engagement-panel-section-list-renderer[target-id=\"engagement-panel-ads\"], #masthead-ad, #player-ads, .ytp-ad-overlay-container, .ytp-ad-message-container",
+    },
 };
+const yt_paths = [_][]const u8{ "api/stats/ads", "pagead/", "ptracking", "get_midroll_" };
 
 const Trigger = struct {
     @"url-filter": []const u8,
@@ -72,6 +77,13 @@ pub fn rulesJson(a: std.mem.Allocator) ![]u8 {
             .action = .{ .type = "block" },
         });
     }
+    for (yt_paths) |path| try rules.append(ar, .{
+        .trigger = .{
+            .@"url-filter" = try std.fmt.allocPrint(ar, "^https?://([^/]+\\.)?youtube\\.com/{s}", .{path}),
+            .@"if-domain" = &.{ "*youtube.com", "*youtube-nocookie.com" },
+        },
+        .action = .{ .type = "block" },
+    });
     try rules.append(ar, .{ .trigger = .{ .@"url-filter" = ".*" }, .action = .{ .type = "css-display-none", .selector = try std.mem.join(ar, ", ", &slots) } });
     for (slots_by_site) |entry| try rules.append(ar, .{
         .trigger = .{ .@"url-filter" = ".*", .@"if-domain" = entry.sites },
@@ -320,14 +332,54 @@ pub fn shieldedChanged(kea: *Kea) void {
         b.announce(if (on) "Ads and trackers blocked" else "Blocking off — reload to see the difference");
     }
 }
+/// Static check of WebKit's `URLFilterParser` subset (no `|`, lookarounds, or shorthand classes).
+fn validateWebKitFilter(pattern: []const u8) !void {
+    var paren: usize = 0;
+    var in_class = false;
+    var i: usize = 0;
+    while (i < pattern.len) : (i += 1) {
+        const c = pattern[i];
+        if (c == '\\') {
+            i += 1;
+            if (i >= pattern.len) return error.TrailingBackslash;
+            switch (pattern[i]) {
+                'd', 'D', 'w', 'W', 's', 'S', 'b', 'B', '1'...'9' => return error.UnsupportedEscape,
+                else => continue,
+            }
+        }
+        if (in_class) {
+            if (c == ']') in_class = false;
+            continue;
+        }
+        switch (c) {
+            '[' => in_class = true,
+            '(' => {
+                if (i + 1 < pattern.len and pattern[i + 1] == '?') return error.LookaroundNotSupported;
+                paren += 1;
+            },
+            ')' => {
+                if (paren == 0) return error.UnbalancedParen;
+                paren -= 1;
+            },
+            '|' => return error.DisjunctionNotSupported,
+            else => {},
+        }
+    }
+    if (in_class or paren != 0) return error.UnclosedGroup;
+}
 
-test "shield rules are sorted JSON with every domain" {
+test "shield rules are sorted JSON and valid WebKit content-blocker grammar" {
     const gpa = std.testing.allocator;
+    try std.testing.expectError(error.DisjunctionNotSupported, validateWebKitFilter("^https?://(a|b)"));
     const out = try rulesJson(gpa);
     defer gpa.free(out);
     try std.testing.expect(std.mem.startsWith(u8, out, "[{\"action\":{\"type\":\"block\"},\"trigger\":{\"load-type\":[\"third-party\"],\"url-filter\":\"^https?://([^/]+\\\\.)?doubleclick\\\\.net\"}}"));
     try std.testing.expect(std.mem.indexOf(u8, out, "\"if-domain\":[\"*cnn.com\"]") != null);
     const parsed = try std.json.parseFromSlice(std.json.Value, gpa, out, .{});
     defer parsed.deinit();
-    try std.testing.expectEqual(unwanted.len + 1 + slots_by_site.len, parsed.value.array.items.len);
+    try std.testing.expectEqual(unwanted.len + yt_paths.len + 1 + slots_by_site.len, parsed.value.array.items.len);
+    for (parsed.value.array.items) |rule| {
+        const trig = rule.object.get("trigger").?.object;
+        try validateWebKitFilter(trig.get("url-filter").?.string);
+    }
 }

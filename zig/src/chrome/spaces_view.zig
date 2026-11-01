@@ -154,7 +154,7 @@ const Pick = struct {
     kea: *Kea,
     record: Uuid,
     space: Uuid,
-    what: union(enum) { go, new, rename, icon: []const u8, left: usize, right: usize, folder, settings_folder, delete },
+    what: union(enum) { go, new, rename, icon: []const u8, left: usize, right: usize, folder, settings_folder, fold_groups, unfold_groups, delete },
 
     fn fire(self: *Pick, _: *nanoui.menu.Item) void {
         const b = browserOf(self.kea, self.record) orelse return;
@@ -167,6 +167,8 @@ const Pick = struct {
             .right => |at| b.moveSpace(self.space, at + 1),
             .folder => askFolder(b, self.space),
             .settings_folder => b.setSpaceDownloads(self.space, null),
+            .fold_groups => b.foldAllGroups(),
+            .unfold_groups => b.unfoldAllGroups(),
             .delete => ask(b, .delete, self.space),
         }
         b.redraw();
@@ -218,6 +220,11 @@ pub fn menuItems(arena: std.mem.Allocator, b: *Browser, _: u64) anyerror![]const
     const folder = if (here.downloads) |d| std.fs.path.basename(d) else null;
     try out.append(arena, try P.item(arena, b, if (folder) |f| try std.fmt.allocPrint(arena, "Downloads to “{s}”…", .{f}) else "Downloads Folder…", here.id, .folder));
     if (folder != null) try out.append(arena, try P.item(arena, b, "Downloads to the Folder in Settings", here.id, .settings_folder));
+    if (b.prefs.uses_tab_groups and b.tab_groups.items.len > 0) {
+        try out.append(arena, .separator);
+        try out.append(arena, try P.item(arena, b, "Fold All Groups", here.id, .fold_groups));
+        try out.append(arena, try P.item(arena, b, "Unfold All Groups", here.id, .unfold_groups));
+    }
     if (!here.isFirst()) {
         try out.append(arena, .separator);
         try out.append(arena, try P.item(arena, b, try std.fmt.allocPrint(arena, "Delete “{s}”…", .{here.name}), here.id, .delete));

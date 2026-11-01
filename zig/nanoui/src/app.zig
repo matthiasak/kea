@@ -23,6 +23,7 @@ pub const Options = struct {
     dock_menu: ?[]const menu_mod.MenuItem = null,
     /// The app is about to quit (⌘Q, its last window, `quit`): save what must be saved.
     on_terminate: ?*const fn (ctx: ?*anyopaque) void = null,
+    on_should_terminate: ?*const fn (ctx: ?*anyopaque) bool = null,
     /// Handoff from another device: the page's address.
     on_continue_activity: ?*const fn (ctx: ?*anyopaque, url: []const u8) void = null,
     /// The app became active (true) or stopped being active.
@@ -290,7 +291,10 @@ fn didFinishLaunching(self_obj: objc.Object, _: objc.SEL, _: objc.Object) callco
 
 fn shouldTerminate(self_obj: objc.Object, _: objc.SEL, _: objc.Object) callconv(.c) objc.NSUInteger {
     // AppKit would call exit(); stop the loop instead so `App.run` returns.
-    if (objc.getZig(App, self_obj)) |app| app.quit();
+    if (objc.getZig(App, self_obj)) |app| {
+        if (app.options.on_should_terminate) |f| if (!f(app.options.ctx)) return 0;
+        app.quit();
+    }
     return 0; // NSTerminateCancel
 }
 

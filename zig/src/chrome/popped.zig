@@ -137,6 +137,7 @@ fn closed(ctx: *anyopaque, _: *nanoui.Window) void {
         },
         // Closed by its button, the chat closes (`closeAssistant`).
         .chat => if (self.browser) |b| b.closeAssistant(),
+        .web => {},
     };
     kea.gpa.destroy(self);
 }
@@ -153,6 +154,7 @@ pub fn windowOf(b: *Browser, panel: SidePanel) ?*nanoui.Window {
     const m = switch (panel) {
         .bookmarks => b.kea.marks_window,
         .chat => b.chat.window,
+        .web => null,
     } orelse return null;
     return m.window;
 }

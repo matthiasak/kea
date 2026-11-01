@@ -192,7 +192,7 @@ pub const Lights = struct {
 
     fn wantX(self: *const Lights) f64 {
         const p = self.prefs;
-        return centreX(p.sidebar and p.side_position == .right, frameOf(self.window).size.width, p.side_width);
+        return centreX(p.sidebar and p.side_position == .right, frameOf(self.window).size.width, p.effectiveSideWidth());
     }
 
     fn place(self: *Lights) void {

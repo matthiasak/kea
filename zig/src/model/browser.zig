@@ -1,11 +1,4 @@
-//! Browser model: one window's row of tabs (`Browser.swift`), split across
-//! a file per MARK section — `browser_tabs.zig` ("tabs"), `browser_closed.zig`
-//! (closing and ⇧⌘T), `browser_rows.zig` ("this window's rows" and the
-//! session), `browser_windows.zig` ("a tab to another window"), `pins.zig`,
-//! `groups.zig`, `spaces.zig` and `omni.zig` (guessing, the address field and
-//! the address in the tab) — whose functions are this struct's methods
-//! through the decls below; `split.zig` (Split View's pairs) too. Also, for
-//! now: the Bookmarks side panel, Find on Page and `StageHost` sync.
+//! Browser model: one window's row of tabs (`Browser.swift`).
 const std = @import("std");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;
@@ -57,15 +50,11 @@ pub const Browser = struct {
     lights: ?*Lights = null,
     /// Its window's line in `windows.json` (`WindowRecord.id`).
     record_id: Uuid,
-    /// The oldest window's rows live in the session files; any other's in
-    /// its line of `windows.json` (`Browser.usesFiles`).
     uses_files: bool,
-    /// A window other than the oldest: its rows by space (`record.rows`),
-    /// each the encoded `Session.Shape`, keys and bytes on `gpa`.
     record_rows: std.StringArrayHashMapUnmanaged([]u8) = .empty,
-    /// The last window, closed with the app running: kept, tabs and all.
     shut: bool = false,
     ext: @import("browser_ext.zig").State = .{},
+    debug_hud: @import("../chrome/debug_hud.zig").State = .{},
 
     // Shared with every window, owned by `kea`.
     store: *Store,
@@ -108,16 +97,9 @@ pub const Browser = struct {
     splits: std.ArrayList(TabSplit) = .empty,
     displayed: std.ArrayList(*Tab) = .empty,
 
-    // The side panels (chrome/side_panels.zig): the one let out over the
-    // page (`expandedPanel`), the last one let out while it fades, a header
-    // being carried.
     expanded_panel: ?side_panels.SidePanel = null,
     let_out: ?side_panels.SidePanel = null,
     header_drag: ?side_panels.HeaderDrag = null,
-
-    // The address field (model/omni.zig): raised over a page (`editing`),
-    // what it thinks you mean, the site in it, ⌘K's switcher, and what was
-    // asked of the view (`refusals` shakes it, `focus_request` focuses it).
     editing: bool = false,
     omni: omni_ops.Omni,
     site_chip: ?SearchSite = null,
@@ -139,17 +121,10 @@ pub const Browser = struct {
     finder: @import("../web/page_find.zig").Find = .{},
     find_bar: @import("../chrome/find_bar.zig").State = .{},
 
-    // Taking things off pages (web/curtain_js.zig): pointing, what a
-    // private tab hid on its page only, and the list of what is hidden
-    // here (`reviewing`, chrome/hidden_panel.zig — set it through `setReviewing`).
     veiling: bool = false,
     passing_veils: @import("../web/curtain_js.zig").Passing = .empty,
     reviewing: bool = false,
     hidden_panel: @import("../chrome/hidden_panel.zig").State = .{},
-
-    // The sheets over the window (chrome/sheet.zig), one at a time: open them with `sheet.show`.
-    // Settings (`tuning`), the bookmarks manager, History, Downloads, Passwords (`managing`), Bring
-    // things over (`bringing_in`, import/bring.zig); and the Welcome over everything (`welcoming`).
     tuning: bool = false,
     bookmarking: bool = false,
     recalling: bool = false,
@@ -216,6 +191,14 @@ pub const Browser = struct {
     chat: @import("../ai/chat_view.zig").State = .{},
     /// The keychain's offer, the accounts under a sign-in box, the Passwords list (passwords/browser_passwords.zig).
     passwords: @import("../passwords/browser_passwords.zig").State,
+    cmd_held: bool = false,
+    cmd_slots: [18]?u64 = @splat(null), // ⌘1–9's tab and its split's right page, per frame (`tab_title.cmdSlots`).
+    picked_tab: ?u64 = null,
+    helm_hold_at: ?f64 = null,
+    helm_hold_fwd: bool = false,
+    esc_fullscreen_at: f64 = 0,
+    web_panel_tab: ?*Tab = null,
+    web_panel_hole_node: ?u32 = null,
 
     // MARK: peek and ⌃Tab's switcher (chrome/peek.zig, chrome/tab_switcher.zig)
     pub const peek = @import("../chrome/peek.zig").peek;
@@ -281,11 +264,14 @@ pub const Browser = struct {
     pub const closeSplit = split_ops.closeSplit;
     pub const fill = split_ops.fill;
     pub const splitViewChanged = split_ops.splitViewChanged;
+    pub const savedSplit = split_ops.savedSplit;
+    pub const pickForSplit = split_ops.pickForSplit;
 
     // MARK: tabs, again (browser_tabs.zig)
     pub const letGo = tabs_ops.letGo;
     pub const take = tabs_ops.take;
     pub const copyAddress = tabs_ops.copyAddress;
+    pub const copyCleanAddress = tabs_ops.copyCleanAddress;
     pub const copyMarkdownLink = tabs_ops.copyMarkdownLink;
     pub const pasteAndGo = tabs_ops.pasteAndGo;
     pub const pauseMedia = tabs_ops.pauseMedia;
@@ -348,6 +334,9 @@ pub const Browser = struct {
     pub const visibleTabsIn = groups_ops.visibleTabsIn;
     pub const removeEmptyGroup = groups_ops.removeEmptyGroup;
     pub const groupById = groups_ops.groupById;
+    pub const foldAllGroups = groups_ops.foldAllGroups;
+    pub const unfoldAllGroups = groups_ops.unfoldAllGroups;
+    pub const moveGroupToSpace = groups_ops.moveGroupToSpace;
 
     // MARK: spaces (spaces.zig)
     pub const space = spaces_ops.space;
@@ -472,6 +461,8 @@ pub const Browser = struct {
         }
         if (self.peek_tab) |t| self.letGo(t);
         self.peek_tab = null;
+        if (self.web_panel_tab) |t| self.letGo(t);
+        self.web_panel_tab = null;
         if (self.stage_host) |sh| sh.destroy();
         if (self.lights) |l| l.drop();
         for (self.tabs.items) |t| t.destroy();

@@ -12,6 +12,23 @@ const state = @import("tab_state.zig");
 const json = @import("../data/json.zig");
 const dispatch = @import("../sys/dispatch.zig");
 
+const Store = @import("../data/store.zig").Store;
+const Parts = @import("../data/url.zig").Parts;
+
+pub const awake_prefix = "awake.";
+
+pub fn isKeptAwake(store: *const Store, host: []const u8) bool {
+    if (host.len == 0) return false;
+    var buf: [300]u8 = undefined;
+    return store.bool(std.fmt.bufPrint(&buf, awake_prefix ++ "{s}", .{host}) catch return false) orelse false;
+}
+
+pub fn setKeptAwake(store: *const Store, keep: bool, host: []const u8) void {
+    if (host.len == 0) return;
+    var buf: [300]u8 = undefined;
+    const key = std.fmt.bufPrint(&buf, awake_prefix ++ "{s}", .{host}) catch return;
+    if (keep) store.setBool(key, true) else store.remove(key);
+}
 /// What each window keeps: its timer, its memory-pressure source, until
 /// when a critical warning lasts, and the sweep under way.
 const Watch = struct {
@@ -89,6 +106,7 @@ fn pressed(ctx: ?*anyopaque) callconv(.c) void {
     if (critical) {
         w.critical_until = json.now() + 60;
         b.kea.favicons.trimMemory(b.kea);
+        trimPictures(b, 0);
         sleepCritical(b);
     }
     sleepIdle(b, if (critical) 0 else 5 * 60);
@@ -111,9 +129,26 @@ fn sleepCritical(b: *Browser) void {
 /// `sleepIdle(within:)`: every tab gone long enough without a look, the
 /// one left longest first.
 pub fn sleepIdle(b: *Browser, within: ?f64) void {
+    const now = json.now();
+    if (b.prefs.closes_tabs) {
+        const close_after = @max(60, b.prefs.close_hours * 3600);
+        var to_close: std.ArrayList(*Tab) = .empty;
+        defer to_close.deinit(a);
+        for (b.tabs.items) |t| {
+            // A saved pair is spared even while Split View is off.
+            if (t.pin != null or t.group_id != null or t.name != null or t.shy or b.savedSplit(t.id)) continue;
+            if (now - t.touched_at < close_after) continue;
+            const why = awake(b, t);
+            // Headless tabs never build a page: one with somewhere to be counts as idle.
+            const pageless = b.kea.opts.headless and why != null and std.mem.eql(u8, why.?, "no page") and (t.pending != null or !t.isBlank());
+            if (why == null or pageless or std.mem.eql(u8, why.?, "already asleep")) to_close.append(a, t) catch {};
+        }
+        for (to_close.items) |t| if (b.tabs.items.len > 1) b.close(t);
+    }
+    trimPictures(b, max_kept_pictures);
+    @import("../chrome/tab_switcher.zig").dropIdlePictures(b);
     if (!b.prefs.sleeps_tabs) return;
     const wait = within orelse sleepAfter(b);
-    const now = json.now();
     const parked = b.parkedTabs(a) catch return;
     defer a.free(parked);
     var idle: std.ArrayList(*Tab) = .empty;
@@ -136,6 +171,29 @@ pub fn sleepIdle(b: *Browser, within: ?f64) void {
     }
     w.step +%= 1;
     sweep(b, w);
+}
+
+/// Slept tabs whose pictures stay: each is a JPEG of up to 1280 points wide,
+/// and a tab waking without one only shows its page a moment later.
+pub const max_kept_pictures: usize = 16;
+
+/// Every slept tab's picture past the `keep` looked at last, let go; its
+/// address and history (`pending`, `memory`) stay.
+pub fn trimPictures(b: *Browser, keep: usize) void {
+    const parked = b.parkedTabs(a) catch &.{};
+    defer if (parked.len > 0) a.free(parked);
+    var held: std.ArrayList(*Tab) = .empty;
+    defer held.deinit(a);
+    for ([_][]const *Tab{ b.tabs.items, parked }) |list| for (list) |t| {
+        if (t.asleep() and t.picture != null) held.append(a, t) catch return;
+    };
+    if (held.items.len <= keep) return;
+    std.mem.sort(*Tab, held.items, {}, struct {
+        fn newer(_: void, x: *Tab, y: *Tab) bool {
+            return x.touched_at > y.touched_at;
+        }
+    }.newer);
+    for (held.items[keep..]) |t| t.own(&t.picture, null);
 }
 
 /// One at a time: the next after this one has slept, or 3 s, whichever
@@ -178,6 +236,7 @@ pub fn awake(b: *Browser, t: *Tab) ?[]const u8 {
     const critical_until = if (watches.get(b)) |w| w.critical_until else 0;
     if (t.pin != null and json.now() >= critical_until) return "pinned";
     if (t.isBlank()) return "blank";
+    if (Parts.parse(t.url())) |p| if (p.hostName()) |h| if (isKeptAwake(&b.kea.store, h)) return "kept awake for this site";
     if (t.asleep()) return "already asleep";
     if (t.web == null) return "no page";
     if (t.loading) return "still loading";

@@ -94,6 +94,9 @@ pub const Kea = struct {
     launch_history_ms: f64 = 0,
     launch_ext_ms: f64 = 0,
     launch_create_ms: f64 = 0,
+    /// Set by headless tests (`ui.Tester.clipboard`): copies and pastes stay
+    /// off the system pasteboard.
+    test_clipboard: ?*std.ArrayList(u8) = null,
 
     pub fn create(gpa: std.mem.Allocator, ui_app: ?*nanoui.App, opts: Options) !*Kea {
         const t_start = nanoui.ui.clock.now();
@@ -302,5 +305,18 @@ pub const Kea = struct {
     /// window of its own unless headless (`app/browsers.zig`).
     pub fn newBrowser(self: *Kea) !*Browser {
         return browsers.open(self, null, null);
+    }
+
+    /// The pasteboard, or the test's own while one is set.
+    pub fn writeClipboard(self: *Kea, text: []const u8) void {
+        const tc = self.test_clipboard orelse return nanoui.clipboard.writeText(text);
+        tc.clearRetainingCapacity();
+        tc.appendSlice(self.gpa, text) catch {};
+    }
+
+    /// The pasteboard's text, on `gpa`; null when there is none.
+    pub fn readClipboard(self: *Kea, gpa: std.mem.Allocator) ?[]u8 {
+        const tc = self.test_clipboard orelse return nanoui.clipboard.readText(gpa) catch null;
+        return if (tc.items.len == 0) null else gpa.dupe(u8, tc.items) catch null;
     }
 };

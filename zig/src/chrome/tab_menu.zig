@@ -89,12 +89,14 @@ const Pick = struct {
         separate,
         close_both,
         open_split,
+        open_side_panel,
         new_window,
         to_window,
         rename,
         duplicate,
         site_info,
         copy_address,
+        copy_clean_address,
         copy_link,
         mute,
         sleep,
@@ -132,7 +134,19 @@ const Pick = struct {
                 b.focusPane(t);
                 b.closeSplit();
             },
-            .open_split => if (comptime split) b.openInSplit(t),
+            .open_split => if (comptime split) {
+                if (b.picked_tab) |pid| {
+                    b.picked_tab = null;
+                    // Only the picked tab's or the live tab's menu pairs the two.
+                    if (t.id == pid or t.id == b.active_id) if (b.activeTab()) |act_t| if (b.tabById(pid)) |other| if (act_t.id != other.id and b.splitFor(other) == null) {
+                        b.pair(act_t, other, false);
+                        b.redraw();
+                        return;
+                    };
+                }
+                b.openInSplit(t);
+            },
+            .open_side_panel => if (!t.isBlank()) @import("side_panels.zig").openWebPanel(b, t.url()),
             .new_window => b.moveToWindow(t, null, null),
             .to_window => {
                 for (b.kea.browsers.items) |other| if (other.record_id.eql(self.to)) {
@@ -152,6 +166,10 @@ const Pick = struct {
             .copy_address => {
                 b.select(t);
                 b.copyAddress();
+            },
+            .copy_clean_address => {
+                b.select(t);
+                b.copyCleanAddress();
             },
             .copy_link => {
                 b.select(t);
@@ -250,8 +268,12 @@ pub fn items(arena: std.mem.Allocator, b: *Browser, tab: *Tab) ![]MenuItem {
             try out.append(arena, try add.plain("Swap Pages", .swap, false));
             try out.append(arena, try add.plain("Separate Split Tabs", .separate, false));
             try out.append(arena, try add.plain("Close Both Pages", .close_both, false));
-        } else try out.append(arena, try add.plain("Open in Split View", .open_split, false));
+        } else {
+            const pair_two = if (b.picked_tab) |pid| (tab.id == pid or tab.id == b.active_id) and (if (b.tabById(pid)) |other| other.id != b.active_id and b.splitFor(other) == null else false) else false;
+            try out.append(arena, try add.plain(if (pair_two) "Open 2 Tabs in Split View" else "Open in Split View", .open_split, false));
+        }
     };
+    try out.append(arena, try add.plain("Open in Side Panel", .open_side_panel, tab.isBlank()));
     if (tab.pin == null) {
         // Another window, or a new one (Browser.moveToWindow).
         var others: std.ArrayList(*Browser) = .empty;
@@ -273,6 +295,7 @@ pub fn items(arena: std.mem.Allocator, b: *Browser, tab: *Tab) ![]MenuItem {
     // The card a click on the tab you are on shows under its address.
     try out.append(arena, try add.plain("Site Information…", .site_info, !editing or tab.isBlank() or tab.pin != null));
     try out.append(arena, try add.plain("Copy Address", .copy_address, tab.isBlank()));
+    try out.append(arena, try add.plain("Copy Clean Link", .copy_clean_address, tab.isBlank()));
     try out.append(arena, try add.plain("Copy as Markdown Link", .copy_link, tab.isBlank()));
     try out.append(arena, try @import("../sync/send.zig").menu(arena, b, tab));
     try out.append(arena, try add.plain(if (tab.muted) "Unmute Tab" else "Mute Tab", .mute, false));

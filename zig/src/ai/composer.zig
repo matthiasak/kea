@@ -33,6 +33,7 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette, a: *Assistant, st: *
                 defer b.gpa.free(txt);
                 if (txt.len > 0) {
                     a.draft.appendSlice(a.gpa, txt) catch {};
+                    st.history_clean = false;
                     _ = a.cachedSuggestions();
                     _ = c.shortcut(.{ .key = 'v', .cmd = true });
                     st.typing = true;
@@ -60,6 +61,7 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette, a: *Assistant, st: *
         }
         if (!attached and drop.text.len > 0) {
             a.draft.appendSlice(a.gpa, drop.text) catch {};
+            st.history_clean = false;
             _ = a.cachedSuggestions();
         }
         st.typing = true;
@@ -137,6 +139,7 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette, a: *Assistant, st: *
             st.typing = false;
             ui.focusNext(c, false);
         }
+        recall(c, a, st, suggestions.len > 0);
         const r = ui.textArea(c, &st.draft, .{ .size = 13, .min_lines = 1, .max_lines = 8, .submit_on_return = true, .bare = true, .color = p.ink });
         // The prompt is VoiceOver's name for it, as the TextField's is; drawn
         // here in faint (the area's own would be muted), after the area so it
@@ -146,8 +149,17 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette, a: *Assistant, st: *
         if (st.draft.text().len == 0)
             _ = c.leaf(.{ .absolute = true }, .{ .text = .{ .str = prompt, .style = .{ .size = 13 }, .color = p.faint } }, null);
         ui.end(c);
-        if (r.changed) a.setDraft(st.draft.text());
-        if (r.submitted) todo.* = .submit;
+        if (r.changed) {
+            a.setDraft(st.draft.text());
+            st.history_clean = st.draft.text().len == 0;
+            if (st.history_clean) st.history_idx = null;
+        }
+        if (r.submitted) {
+            todo.* = .submit;
+            st.history_idx = null;
+            st.history_saved.clearRetainingCapacity();
+            st.history_clean = true;
+        }
     }
 
     ui.row(c, .{ .gap = 8, .width = .fill, .align_items = .center });
@@ -166,6 +178,48 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette, a: *Assistant, st: *
         if (live and c.interact(i, .{}).clicked) todo.* = .submit;
         ui.icon(c, "arrow.up.circle.fill", .{ .size = 20, .color = if (can_send) p.ink else p.faint });
     }
+}
+
+/// ↑/↓ through what was typed in this chat, as a shell's history: only
+/// while the composer holds nothing or what was recalled, with the caret
+/// at its start or end and nothing selected.
+fn recall(c: *ui.Context, a: *Assistant, st: *State, suggesting: bool) void {
+    if (st.draft.text().len == 0) st.history_clean = true;
+    const id = st.draft.last_id;
+    if (id == 0 or c.focus != id or suggesting or !st.history_clean) return;
+    const len = st.draft.text().len;
+    const edit = c.edits.get(id);
+    const caret = if (edit) |e| @min(e.caret, len) else len;
+    const anchor = if (edit) |e| @min(e.anchor, len) else caret;
+    if (caret != anchor or (caret != 0 and caret != len)) return;
+    const bare = !c.input.shift and !c.input.cmd and !c.input.alt and !c.input.ctrl;
+    const up = c.shortcut(.{ .key = ui.Shortcut.up }) or (bare and c.input.key == .up);
+    const down = !up and (c.shortcut(.{ .key = ui.Shortcut.down }) or (bare and c.input.key == .down));
+    if (!up and !down) return;
+    c.input.key = null;
+    const inputs = a.sessionInputs(c.alloc());
+    const next: []const u8 = if (up) blk: {
+        if (inputs.len == 0) return;
+        const at = if (st.history_idx) |i| i -| 1 else last: {
+            st.history_saved.clearRetainingCapacity();
+            st.history_saved.appendSlice(a.gpa, st.draft.text()) catch {};
+            break :last inputs.len - 1;
+        };
+        st.history_idx = at;
+        break :blk inputs[at];
+    } else blk: {
+        const i = st.history_idx orelse return;
+        if (i + 1 < inputs.len) {
+            st.history_idx = i + 1;
+            break :blk inputs[i + 1];
+        }
+        st.history_idx = null;
+        break :blk c.alloc().dupe(u8, st.history_saved.items) catch "";
+    };
+    st.draft.set(next);
+    a.setDraft(next);
+    st.history_clean = st.history_idx != null or next.len == 0;
+    c.changed = true;
 }
 
 /// A plain button's box, opened (close with `c.end`); true when clicked.
@@ -230,7 +284,7 @@ fn pageLine(c: *ui.Context, b: *Browser, a: *Assistant) []const u8 {
     const t = b.activeTab() orelse return "No page in front";
     if (t.isBlank()) return "No page in front";
     if (isPrivateCached(t) and !a.shy) return "Private tab — not shared";
-    if (!a.shareable(t)) return "Not a web page — not shared";
+    if (!a.shareable(t)) return "Not a web page or PDF — not shared";
     if (a.chat.pageHidden) return c.print("Not shared: {s}", .{t.label()});
     return t.label();
 }
@@ -338,6 +392,7 @@ pub fn modelItems(arena: std.mem.Allocator, b: *Browser, id: Uuid) anyerror![]co
     try out.append(arena, .separator);
     try out.append(arena, try chat_view.checkedItem(arena, b, "Web Search", .web_search_toggle, id, "", b.prefs.ai_web_search));
     try out.append(arena, try chat_view.checkedItem(arena, b, "Browser Tools", .tools_toggle, id, "", b.prefs.ubi_tools));
+    try out.append(arena, try chat_view.checkedItem(arena, b, "Automatic Researcher Mode", .researcher_toggle, id, "", b.prefs.ai_researcher));
     try out.append(arena, .separator);
     try out.append(arena, try chat_view.item(arena, b, "Choose Provider\u{2026}", .settings, id, "", false));
     return out.items;

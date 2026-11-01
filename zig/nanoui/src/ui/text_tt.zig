@@ -33,10 +33,10 @@ pub const Glyph = struct { font: u16, glyph: u16, x: f32, y: f32, index: u32 = 0
 pub const Layout = struct { width: f32, glyphs: []const Glyph };
 pub const Line = struct { start: usize, end: usize, width: f32 };
 
-const FontKey = struct { size_bits: u32, weight: types.Weight, mono: bool, italic: bool };
+const FontKey = struct { size_bits: u32, weight: types.Weight, mono: bool, italic: bool, math: bool = false };
 
 fn fontKey(style: types.TextStyle) FontKey {
-    return .{ .size_bits = @bitCast(style.size), .weight = style.weight, .mono = style.mono, .italic = style.italic };
+    return .{ .size_bits = @bitCast(style.size), .weight = style.weight, .mono = style.mono, .italic = style.italic, .math = style.math };
 }
 
 fn weightOf(w: types.Weight) u16 {
@@ -179,7 +179,7 @@ pub const TextSystem = struct {
         h.update(s);
         h.update(std.mem.asBytes(&style.size));
         h.update(std.mem.asBytes(&style.mono_scale));
-        h.update(&.{ @backingInt(style.weight), @intFromBool(style.mono), @intFromBool(style.italic), @intFromBool(style.tabular) });
+        h.update(&.{ @backingInt(style.weight), @intFromBool(style.mono), @intFromBool(style.italic), @intFromBool(style.tabular), @intFromBool(style.math) });
         h.update(std.mem.asBytes(&style.tracking));
         return h.final();
     }

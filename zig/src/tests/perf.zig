@@ -100,6 +100,7 @@ pub const Harness = struct {
         const a0 = @atomicLoad(usize, &allocations, .monotonic);
         t.frame();
         const a1 = @atomicLoad(usize, &allocations, .monotonic);
+        t.renderer.syncImages(&t.text.images);
         const timing = t.renderer.drawTimed(h.target.?, t.instances.items, t.text.texture(), t.size, ui.Color.transparent);
         const st = t.ctx.stats;
         return .{
@@ -221,7 +222,7 @@ pub fn main(init: std.process.Init) !void {
     }
 
     const all_pass = try writeReport(init.gpa, init, &metrics);
-    const strict = if (init.environ_map.get("KEA_PERF_STRICT")) |v| std.mem.eql(u8, v, "1") else false;
+    const strict = !std.mem.eql(u8, init.environ_map.get("KEA_PERF_BASELINE") orelse "", "1");
     if (strict and !all_pass) {
         std.process.exit(1);
     }

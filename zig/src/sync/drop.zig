@@ -1,11 +1,13 @@
 //! One place every Mac reads and writes, by name — "kea/v1/devices/<uuid>/
-//! bookmarks.kea" (`SyncDrop`, `FolderDrop`, `BucketDrop` in SyncCore.swift).
-//! Every call blocks: off the main thread, but in tests.
+//! bookmarks.kea" (`SyncDrop`, `FolderDrop`, `BucketDrop` in SyncCore.swift),
+//! or a Google Drive folder (gdrive.zig). Every call blocks: off the main
+//! thread, but in tests.
 const std = @import("std");
 const objc = @import("nanoui").objc;
 const json = @import("../data/json.zig");
 const core = @import("core.zig");
 const sigv4 = @import("sigv4.zig");
+const gdrive = @import("gdrive.zig");
 const urlsession = @import("../sys/urlsession.zig");
 const local_network = @import("../web/local_network.zig");
 const Parts = @import("../data/url.zig").Parts;
@@ -17,7 +19,7 @@ pub const Error = error{ SyncFailed, OutOfMemory };
 
 pub const Drop = struct {
     gpa: std.mem.Allocator,
-    where: union(enum) { folder: []u8, bucket: Bucket },
+    where: union(enum) { folder: []u8, drive: gdrive.Client, bucket: Bucket },
     /// Why the last call failed (`SyncError.errorDescription` or the file
     /// system's own words), on the arena the call was given.
     why: []const u8 = "",
@@ -46,9 +48,15 @@ pub const Drop = struct {
         } } };
     }
 
+    /// Takes `client`, signed in, rooted at the sync folder.
+    pub fn drive(gpa: std.mem.Allocator, client: gdrive.Client) Drop {
+        return .{ .gpa = gpa, .where = .{ .drive = client } };
+    }
+
     pub fn deinit(self: *Drop) void {
         switch (self.where) {
             .folder => |r| self.gpa.free(r),
+            .drive => |*c| c.deinit(),
             .bucket => |b| {
                 for ([_][]u8{ b.endpoint, b.bucket, b.access, b.secret }) |s| self.gpa.free(s);
                 objc.release(b.session);
@@ -66,7 +74,7 @@ pub const Drop = struct {
         return std.ascii.eqlIgnoreCase(scheme, "http") and local_network.onThisMac(host);
     }
 
-    fn fail(self: *Drop, a: std.mem.Allocator, comptime fmt: []const u8, args: anytype) Error {
+    pub fn fail(self: *Drop, a: std.mem.Allocator, comptime fmt: []const u8, args: anytype) Error {
         self.why = try std.fmt.allocPrint(a, fmt, args);
         return error.SyncFailed;
     }
@@ -75,6 +83,7 @@ pub const Drop = struct {
     pub fn list(self: *Drop, a: std.mem.Allocator, prefix: []const u8) Error!Names {
         return switch (self.where) {
             .folder => |root| self.folderList(a, root, prefix),
+            .drive => gdrive.list(self, a, prefix),
             .bucket => |b| self.bucketList(a, b, prefix),
         };
     }
@@ -93,6 +102,7 @@ pub const Drop = struct {
                     return self.failWith(a, err);
                 return try copyData(a, d);
             },
+            .drive => return gdrive.get(self, a, name),
             .bucket => |b| {
                 const r = try self.send(a, b, "GET", try objectURL(a, b, name), null);
                 if (r.code == 200) return r.body;
@@ -118,6 +128,7 @@ pub const Drop = struct {
                 if (!objc.msg(objc.BOOL, d, "writeToFile:options:error:", .{ objc.nsString(path), @as(objc.NSUInteger, 1), &err }))
                     return self.failWith(a, err);
             },
+            .drive => try gdrive.put(self, a, name, data),
             .bucket => |b| {
                 const r = try self.send(a, b, "PUT", try objectURL(a, b, name), data);
                 if (r.code < 200 or r.code >= 300) return self.refused(a, r.code);
@@ -133,13 +144,61 @@ pub const Drop = struct {
                 defer pool.pop();
                 const path = objc.nsString(try std.fmt.allocPrint(a, "{s}/{s}", .{ root, name }));
                 if (!objc.msg(objc.BOOL, fm(), "fileExistsAtPath:", .{path})) return;
-                _ = objc.msg(objc.BOOL, fm(), "removeItemAtPath:error:", .{ path, @as(?*anyopaque, null) });
+                var err: ?objc.Object = null;
+                if (!objc.msg(objc.BOOL, fm(), "removeItemAtPath:error:", .{ path, &err })) return self.failWith(a, err);
             },
+            .drive => try gdrive.delete(self, a, name),
             .bucket => |b| {
                 const r = try self.send(a, b, "DELETE", try objectURL(a, b, name), null);
                 if ((r.code < 200 or r.code >= 300) and r.code != 404) return self.refused(a, r.code);
             },
         }
+    }
+
+    /// What sits right in the sync root: whether "kea" does, and the rest.
+    pub const RootInfo = struct { non_kea_count: usize = 0, sample_name: []const u8 = "", has_kea_dir: bool = false };
+
+    /// The root's own entries (dotfiles aside), on `a`.
+    pub fn inspectRoot(self: *Drop, a: std.mem.Allocator) Error!RootInfo {
+        var names: std.ArrayList([]const u8) = .empty;
+        switch (self.where) {
+            .folder => |root| {
+                try self.checkRoot(a, root);
+                const pool = objc.Pool.push();
+                defer pool.pop();
+                var err: ?objc.Object = null;
+                const items = objc.msg(?objc.Object, fm(), "contentsOfDirectoryAtPath:error:", .{ objc.nsString(root), &err }) orelse return self.failWith(a, err);
+                for (0..objc.msg(objc.NSUInteger, items, "count", .{})) |i| {
+                    const name = objc.fromNSString(objc.msg(objc.Object, items, "objectAtIndex:", .{@as(objc.NSUInteger, i)}));
+                    if (!std.mem.startsWith(u8, name, ".")) try names.append(a, try a.dupe(u8, name));
+                }
+            },
+            .drive => try gdrive.rootNames(self, a, &names),
+            .bucket => |b| {
+                const all = try self.bucketList(a, b, "");
+                for (all.keys()) |k| {
+                    const first = k[0 .. std.mem.indexOfScalar(u8, k, '/') orelse k.len];
+                    for (names.items) |n| {
+                        if (std.mem.eql(u8, n, first)) break;
+                    } else try names.append(a, first);
+                }
+            },
+        }
+        std.mem.sort([]const u8, names.items, {}, struct {
+            fn lt(_: void, x: []const u8, y: []const u8) bool {
+                return std.mem.lessThan(u8, x, y);
+            }
+        }.lt);
+        var info: RootInfo = .{};
+        for (names.items) |n| {
+            if (std.mem.eql(u8, n, "kea")) {
+                info.has_kea_dir = true;
+                continue;
+            }
+            if (info.non_kea_count == 0) info.sample_name = n;
+            info.non_kea_count += 1;
+        }
+        return info;
     }
 
     // MARK: folder

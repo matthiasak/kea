@@ -30,7 +30,7 @@ pub fn clientWorld() objc.Object {
     return client_world.?;
 }
 /// Every relay name Kea registers (`Web.release`).
-pub const relay_names = [_][]const u8{ "keaScroll", "keaVeil", "keaForms", "keaImages", "keaStore", "keaPasskeys", "keaMiddle", "keaIcon" };
+pub const relay_names = [_][]const u8{ "keaScroll", "keaVeil", "keaForms", "keaImages", "keaStore", "keaPasskeys", "keaMiddle", "keaIcon", "keaReader" };
 /// `HoveredLink.name`, in Kea's world only.
 pub const link_relay = "link";
 
@@ -133,7 +133,9 @@ pub fn configuration(kea: *Kea, shy: bool, data_store: ?objc.Object) objc.Object
         objc.msg(void, config, "_setProcessDisplayName:", .{objc.nsString("Kea Web Content")});
     const prefs = objc.msg(objc.Object, config, "preferences", .{});
     objc.msg(void, prefs, "setElementFullscreenEnabled:", .{objc.YES});
-    objc.msg(void, prefs, "setJavaScriptCanOpenWindowsAutomatically:", .{objc.NO});
+    // Every `window.open` reaches `createWebView`, which blocks the unprompted
+    // ones into the tab's pop-up badge (or lets an allowed site's through).
+    objc.msg(void, prefs, "setJavaScriptCanOpenWindowsAutomatically:", .{objc.YES});
     if (objc.msg(objc.BOOL, prefs, "respondsToSelector:", .{objc.sel("_setDNSPrefetchingEnabled:")}))
         objc.msg(void, prefs, "_setDNSPrefetchingEnabled:", .{objc.YES});
     objc.msg(void, config, "setMediaTypesRequiringUserActionForPlayback:", .{playback(&kea.store)});

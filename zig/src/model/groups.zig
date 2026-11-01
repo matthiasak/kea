@@ -74,6 +74,64 @@ pub fn toggleTabGroup(self: *Browser, id: Uuid) void {
     self.redraw();
 }
 
+pub fn foldAllGroups(self: *Browser) void {
+    for (self.tab_groups.items) |*g| g.collapsed = true;
+    self.rememberSession();
+    self.redraw();
+}
+
+pub fn unfoldAllGroups(self: *Browser) void {
+    for (self.tab_groups.items) |*g| g.collapsed = false;
+    self.rememberSession();
+    self.redraw();
+}
+
+pub fn moveGroupToSpace(self: *Browser, group_id: Uuid, target_space: Uuid) void {
+    if (!self.prefs.uses_spaces or target_space.eql(self.space_id)) return;
+    const sp_at = self.kea.spaceIndex(target_space) orelse return;
+    const g_at = groupIndex(self, group_id) orelse return;
+    if (!self.parked.contains(target_space)) {
+        self.parked.put(self.gpa, target_space, self.loadRow(target_space)) catch @panic("OOM");
+    }
+    const row = self.parked.getPtr(target_space).?;
+    if (row.groups == null) row.groups = .empty;
+    const grp = self.tab_groups.orderedRemove(g_at);
+    row.groups.?.append(self.gpa, grp) catch @panic("OOM");
+
+    var i: usize = 0;
+    while (i < self.tabs.items.len) {
+        const t = self.tabs.items[i];
+        if (t.pin == null and t.group_id != null and t.group_id.?.eql(group_id)) {
+            _ = self.tabs.orderedRemove(i);
+            if (self.stage_host) |sh| if (t.web) |wv| sh.forget(wv);
+            t.rehome(self.kea.dataStore(target_space));
+            row.tabs.append(self.gpa, t) catch @panic("OOM");
+            if (row.active == 0) row.active = t.id;
+            if (self.active_id == t.id) self.active_id = 0;
+        } else i += 1;
+    }
+    var s_idx: usize = 0;
+    while (s_idx < self.splits.items.len) {
+        const sp = self.splits.items[s_idx];
+        const l_gone = self.tabById(sp.left()) == null;
+        const r_gone = self.tabById(sp.right()) == null;
+        if (l_gone and r_gone) {
+            row.splits.append(self.gpa, self.splits.orderedRemove(s_idx)) catch @panic("OOM");
+        } else if (l_gone or r_gone) {
+            _ = self.splits.orderedRemove(s_idx);
+        } else s_idx += 1;
+    }
+    if (self.tabs.items.len == 0) self.adopt(self.make("", false));
+    if (self.active_id == 0) self.select(self.tabs.items[0]);
+    self.reindexTabs();
+    self.writeSession(true);
+    self.writeParked(true, target_space, row);
+    const said = std.fmt.allocPrint(self.gpa, "Moved group to {s}", .{self.kea.spaces.value[sp_at].name}) catch return self.redraw();
+    defer self.gpa.free(said);
+    self.announce(said);
+    self.redraw();
+}
+
 /// Ungroup Tabs: the tabs stay, loose.
 pub fn removeTabGroup(self: *Browser, id: Uuid) void {
     const at = groupIndex(self, id) orelse return;

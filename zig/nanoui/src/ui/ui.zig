@@ -90,6 +90,7 @@ pub const text = widgets.text;
 pub const textf = widgets.textf;
 pub const richText = widgets.richText;
 pub const Span = types.Span;
+pub const CopyMap = types.CopyMap;
 pub const heading = widgets.heading;
 pub const icon = widgets.icon;
 pub const IconOptions = widgets.IconOptions;
@@ -163,6 +164,7 @@ test {
     _ = @import("tests_multiline.zig");
     _ = @import("tests_texture.zig");
     _ = @import("tests_canvas.zig");
+    _ = @import("tests_copy_map.zig");
     _ = @import("triangulate.zig");
     _ = @import("tests_layer.zig");
     _ = @import("tests_safe_area.zig");

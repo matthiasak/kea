@@ -105,7 +105,7 @@ pub fn pinId(id: u64) u64 {
 }
 
 pub fn grid(b: *Browser, c: *ui.Context, p: *const Palette, pins: []const *Tab, live: u64, interactive: bool) void {
-    const cells = pinCells(c.alloc(), pins.len, b.prefs.side_width) catch return;
+    const cells = pinCells(c.alloc(), pins.len, b.prefs.effectiveSideWidth()) catch return;
     const size = extent(cells);
     _ = c.open(.{ .width = px(size.w), .height = px(size.h) }, "pins");
     defer c.end();
@@ -126,8 +126,9 @@ pub fn grid(b: *Browser, c: *ui.Context, p: *const Palette, pins: []const *Tab, 
         _ = pinSquare(b, c, p, t, t.id == live, cell, index, cells, interactive, false, fresh);
     }
     if (interactive) {
+        tab_leaving.collect(&st.pin_seen_ids, b.gpa, st.pin_seen.items);
         if (fresh) {
-            tab_leaving.clearIn(&st.pin_leaving, &st.pin_snaps, st.pin_seen.items, b.gpa);
+            tab_leaving.clearIn(&st.pin_leaving, &st.pin_snaps, &st.pin_seen_ids, b.gpa);
         } else {
             leavePins(b, c, p);
         }
@@ -143,17 +144,14 @@ pub fn grid(b: *Browser, c: *ui.Context, p: *const Palette, pins: []const *Tab, 
 fn leavePins(b: *Browser, c: *ui.Context, p: *const Palette) void {
     const st = &b.column;
     for (st.pin_last.items) |s| {
-        const kept = for (st.pin_seen.items) |cur| {
-            if (cur.id == s.id) break true;
-        } else false;
-        if (kept) continue;
+        if (st.pin_seen_ids.contains(s.id)) continue;
         const kv = st.pin_snaps.fetchRemove(s.id) orelse continue;
         st.pin_leaving.append(b.gpa, .{ .id = s.id, .x = s.x, .y = s.y, .w = s.w, .h = s.h, .snap = kv.value }) catch {
             var gone = kv.value;
             gone.deinit(b.gpa);
         };
     }
-    tab_leaving.pruneIn(&st.pin_snaps, st.pin_seen.items, b.gpa);
+    tab_leaving.pruneIn(&st.pin_snaps, &st.pin_seen_ids, b.gpa);
     var k: usize = 0;
     for (st.pin_leaving.items) |*l| {
         const v = presence.presence(c, pinId(l.id), false, motion.settle, null) orelse {
@@ -236,9 +234,13 @@ fn pinSquare(b: *Browser, c: *ui.Context, p: *const Palette, t: *Tab, live: bool
     _ = c.open(.{ .width = px(glyph), .height = px(glyph), .align_items = .center, .justify = .center }, null);
     if (b.editing_pin == t.id and interactive) {
         pinField(b, c, p, t);
+    } else if (b.prefs.shows_cmd_numbers and b.cmd_held) {
+        if (@import("tab_title.zig").cmdSlot(b, t)) |slot| {
+            ui.text(c, c.print("{d}", .{slot}), .{ .size = scale * 12 / 34, .weight = .semibold, .color = p.ink, .tabular = true });
+        }
     } else if (t.loading) {
         ring.ring(c, scale * 11 / 34);
-    } else if (b.prefs.glyph == .icons and iconOf(b, t) != null) {
+    } else if (b.prefs.glyph != .letters and iconOf(b, t) != null) {
         mark.mark(c, p, iconOf(b, t), t.pin orelse "", scale * 16 / 34, t.asleep());
     } else {
         const lv = std.math.clamp(motion.liveTo(c, it.id, 2, if (live) 1 else 0), 0, 1);
@@ -272,7 +274,18 @@ fn carry(b: *Browser, c: *ui.Context, t: *Tab, it: ui.Interaction, index: usize,
     if (!c.input.down) {
         const was = h.moved;
         st.pin_held = null;
-        if (was) c.changed = true;
+        if (was) {
+            c.changed = true;
+            if (c.input.mouse.y > st.grid_bottom + 8) {
+                b.unpin(t);
+                if (b.prefs.uses_tab_groups) {
+                    for (st.heading_rects.items) |hr| if (hr.rect.contains(c.input.mouse)) {
+                        b.moveToGroup(t, hr.id);
+                        break;
+                    };
+                }
+            }
+        }
         return was;
     }
     const travel: ui.Point = .{ .x = c.input.mouse.x - h.origin.x, .y = c.input.mouse.y - h.origin.y };

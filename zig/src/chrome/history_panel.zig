@@ -24,7 +24,8 @@ const px = struct {
 }.v;
 
 const Row = struct { key: []const u8, url: []const u8, title: []const u8, address: []const u8, last: json.SwiftDate, clock: []const u8 = "" };
-const Day = struct { name: []const u8, rows: []Row };
+/// `name` is formatted as the day comes into view (`list`), as `Row.clock` is.
+const Day = struct { start: json.SwiftDate, name: []const u8 = "", rows: []Row };
 /// `Browser.recall`: the hunt (`recallHunt`), the mode, and the list as
 /// drawn — worked out when the history or the search changes, not each
 /// time the panel is drawn.
@@ -93,7 +94,7 @@ fn refresh(b: *Browser) void {
         if (t.last < start) {
             if (rows.items.len > 0) days.items[days.items.len - 1].rows = rows.toOwnedSlice(arena) catch &.{};
             start = when.startOfDay(t.last);
-            days.append(arena, .{ .name = when.day(arena, start), .rows = &.{} }) catch return;
+            days.append(arena, .{ .start = start, .rows = &.{} }) catch return;
         }
         const addr = address.withoutWWW(t.address);
         rows.append(arena, .{
@@ -178,6 +179,7 @@ fn list(b: *Browser, c: *ui.Context, p: *const Palette) Act {
         }
         ui.key(c, c.print("day-{d}", .{d}));
         ui.column(c, .{ .width = .fill, .padding = .{ .top = if (d == 0) 0 else 14, .bottom = 6 } });
+        if (day.name.len == 0) day.name = when.day(st.arena.?.allocator(), day.start);
         plate.caption(c, p, day.name);
         ui.end(c);
         y += head_h;

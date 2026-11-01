@@ -6,6 +6,7 @@ zig/.zig-cache/
 zig/zig-out/
 zig/nanoui/.zig-cache/
 zig/nanoui/zig-out/
+zig/zig-pkg/
 .DS_Store
 
 # Signing material that's tied to one Apple Developer account and should
@@ -13,3 +14,6 @@ zig/nanoui/zig-out/
 *.provisionprofile
 *.p12
 *.mobileprovision
+
+# Google Drive sync's OAuth client (KEA_GDRIVE_CLIENT_ID/SECRET), read by build.sh.
+.env

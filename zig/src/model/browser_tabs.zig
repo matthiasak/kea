@@ -1,6 +1,4 @@
-//! Browser.swift "tabs" (2330-3046, 3255-3480, 3740-3800): the row in the
-//! order it is shown, opening, picking, moving, ⌘1–9 and ⌃Tab, and moving
-//! a tab to another space. A pair's pages share one place (model/split.zig).
+//! Browser.swift "tabs": opening, picking, moving, ⌘1–9, ⌃Tab, and spaces.
 const std = @import("std");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;
@@ -157,14 +155,14 @@ pub const OpenOptions = struct {
     /// grouped one's joins its group.
     from: ?*Tab = null,
     /// Opened behind by hand: with Load background tabs when you go to
-    /// them on, it loads nothing until it is gone to.
     may_wait: bool = false,
+    shy: bool = false,
 };
 
 /// `open(_:foreground:atEnd:from:mayWait:)`: a link opened from a page lands
 /// next to the page it came from.
 pub fn open(self: *Browser, url: []const u8, o: OpenOptions) *Tab {
-    const shy = if (o.from) |s| s.shy else false;
+    const shy = o.shy or if (o.from) |s| s.shy else false;
     const t = if (o.may_wait and !o.foreground and self.prefs.lazy_tabs and @import("../ext/ext.zig").idOf(url) == null) blk: {
         const asleep = self.makeAsleep(url, "", null, self.space_id);
         asleep.shy = shy;
@@ -273,8 +271,7 @@ pub fn visit(self: *Browser, url: []const u8, apart: bool) void {
 
 // MARK: picking
 
-/// `select(_:floatPrevious:)`. Within the pair on screen, a focus change;
-/// otherwise its folded group opens and a page asleep wakes.
+/// `select(_:floatPrevious:)`.
 pub fn select(self: *Browser, tab: *Tab) void {
     selectEx(self, tab, true);
 }
@@ -282,10 +279,6 @@ pub fn select(self: *Browser, tab: *Tab) void {
 pub fn selectEx(self: *Browser, tab: *Tab, float_previous: bool) void {
     if (self.splitFor(tab)) |s| if (self.activeSplit()) |front| if (s.id.eql(front.id) and self.active_id != tab.id) {
         return self.focusPane(tab);
-    };
-    if (self.prefs.uses_tab_groups) if (tab.group_id) |gid| if (self.groupById(gid)) |g| if (g.collapsed) {
-        g.collapsed = false;
-        self.writeSession(true);
     };
     // A peek is over the tab it was opened from; another tab puts it away.
     if (self.peek_tab != null and tab.id != self.active_id) self.closePeek();
@@ -320,12 +313,19 @@ pub fn selectEx(self: *Browser, tab: *Tab, float_previous: bool) void {
 pub fn selectIndex(self: *Browser, index: usize) void {
     const shown = self.shownTabs(self.gpa) catch return;
     defer self.gpa.free(shown);
-    if (index < shown.len) self.select(self.entry(shown[index]));
+    if (index >= shown.len) return;
+    const target = self.entry(shown[index]);
+    if (target.pin != null and target.id == self.active_id) {
+        var best: ?*Tab = null;
+        for (self.tabs.items) |other| if (other.id != target.id) {
+            if (best == null or other.touched > best.?.touched) best = other;
+        };
+        if (best) |other| return self.select(other);
+    }
+    self.select(target);
 }
 
-/// ⌃Tab, ⌃⇧Tab: the next tab on screen, round to the first again. It walks
-/// the whole row from the tab you are on, so it finds its way out even
-/// from one the row doesn't show.
+/// ⌃Tab, ⌃⇧Tab: the next tab on screen, round to the first again.
 pub fn step(self: *Browser, direction: isize) void {
     const shown = self.shownTabs(self.gpa) catch return;
     defer self.gpa.free(shown);
@@ -384,9 +384,7 @@ pub fn moveDisplayedTab(self: *Browser, tab: *Tab, index: usize) void {
     self.redraw();
 }
 
-/// Whether a pin carried onto another may land there: with the rows shown,
-/// a square among squares and a row among rows; with them off, it becomes
-/// the kind it landed among.
+/// Whether a pin carried onto another may land there.
 fn joins(self: *Browser, tab: *Tab, anchor: *const Tab) bool {
     if (tab.pin == null or anchor.pin == null or tab.listed == anchor.listed) return true;
     if (self.prefs.showsPinRows()) return false;
@@ -394,8 +392,7 @@ fn joins(self: *Browser, tab: *Tab, anchor: *const Tab) bool {
     return true;
 }
 
-/// Let go in the strip: before `target` (a pair's, before its first page),
-/// taking its group, or with none at the end of its kind; out of its pair.
+/// Let go in the strip: before `target` or at the end of its kind.
 pub fn dropTabIntoStrip(self: *Browser, tab: *Tab, before: ?*Tab) void {
     const source = self.indexOf(tab) orelse return;
     if (before) |target| {
@@ -428,8 +425,7 @@ pub fn dropTabIntoStrip(self: *Browser, tab: *Tab, before: ?*Tab) void {
     self.redraw();
 }
 
-/// Where a new tab goes: beside the tab you are on (past its pair), but
-/// never among the pins.
+/// Where a new tab goes: beside the tab you are on, never among pins.
 pub fn placeForNew(self: *Browser) usize {
     const here = self.indexOf(self.tabById(self.active_id) orelse return self.tabs.items.len).?;
     var after = here;
@@ -446,8 +442,7 @@ pub fn placeForNew(self: *Browser) usize {
     return @max(after + 1, self.pinnedCount());
 }
 
-/// A tab made outside the row — a peek being kept — put in it at `index`,
-/// never between a pair's pages (`safeInsertionIndex`).
+/// A tab made outside the row put in it at `index`.
 pub fn insert(self: *Browser, tab: *Tab, index: usize) void {
     self.prepare(tab);
     var at = @min(index, self.tabs.items.len);
@@ -460,9 +455,7 @@ pub fn insert(self: *Browser, tab: *Tab, index: usize) void {
 
 // MARK: a tab to another space
 
-/// `move(_:toSpace:)`: out of this row and into the space's, reopening with
-/// its sign-ins. A page whose sign-ins change asks first when it holds
-/// unsaved form entries (passwords/form_relay.zig `moveAsking`).
+/// `move(_:toSpace:)`: out of this row and into the space's.
 pub fn moveToSpace(self: *Browser, tab: *Tab, id: Uuid) void {
     if (!self.prefs.uses_spaces or id.eql(self.space_id)) return;
     if (self.kea.spaceIndex(id) == null or self.indexOf(tab) == null) return;
@@ -515,8 +508,7 @@ pub fn finishMove(self: *Browser, tab: *Tab, id: Uuid) void {
 
 // MARK: links dragged in, and the address copied
 
-/// A page decides what a link dragged out of it carries: never script,
-/// nor an extension's page, which would open with that extension's powers.
+/// Never open script or extension URLs dragged from a page.
 fn refused(url: []const u8) bool {
     const colon = std.mem.indexOfScalar(u8, url, ':') orelse return false;
     const scheme = url[0..colon];
@@ -526,8 +518,7 @@ fn refused(url: []const u8) bool {
     return false;
 }
 
-/// `take(_:)`: links, or text that reads as an address, dropped on the
-/// strip or the column, each opened in front. True when it held any.
+/// `take(_:)`: links or address text dropped on the strip or column.
 pub fn take(self: *Browser, drop: nanoui.ui.Drop) bool {
     for (drop.urls) |u| if (!refused(u)) {
         _ = self.open(u, .{ .foreground = true });
@@ -546,12 +537,22 @@ pub fn take(self: *Browser, drop: nanoui.ui.Drop) bool {
 pub fn copyAddress(self: *Browser) void {
     const t = self.activeTab() orelse return;
     if (t.isBlank()) return;
-    nanoui.clipboard.writeText(t.url());
+    self.kea.writeClipboard(t.url());
     self.announce("Address copied");
 }
 
-/// A title that links: backslashes first, so the ones added next aren't
-/// doubled, then both brackets, either of which would break the link.
+/// ⌥⇧⌘C. The address without tracking parameters, in the clipboard.
+pub fn copyCleanAddress(self: *Browser) void {
+    const t = self.activeTab() orelse return;
+    if (t.isBlank()) return;
+    const raw = t.url();
+    const cleaned = (@import("../data/url.zig").clean(self.gpa, raw, .all_trackers) catch null);
+    defer if (cleaned) |c| self.gpa.free(c);
+    self.kea.writeClipboard(cleaned orelse raw);
+    self.announce("Clean link copied");
+}
+
+/// Copies `[title](url)` to the clipboard.
 pub fn copyMarkdownLink(self: *Browser) void {
     const t = self.activeTab() orelse return;
     if (t.isBlank()) return;
@@ -563,14 +564,13 @@ pub fn copyMarkdownLink(self: *Browser) void {
         out.append(self.gpa, ch) catch return;
     }
     out.print(self.gpa, "]({s})", .{t.url()}) catch return;
-    nanoui.clipboard.writeText(out.items);
+    self.kea.writeClipboard(out.items);
     self.announce("Link copied");
 }
 
-/// ⌘⇧V, when nothing is being typed. What is in the clipboard, if it is a
-/// place — or a search — in the tab you're on.
+/// ⌘⇧V: opens the clipboard's address or search in the active tab.
 pub fn pasteAndGo(self: *Browser) void {
-    const text = (nanoui.clipboard.readText(self.gpa) catch null) orelse {
+    const text = self.kea.readClipboard(self.gpa) orelse {
         self.refusals += 1;
         return self.redraw();
     };

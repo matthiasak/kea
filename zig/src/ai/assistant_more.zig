@@ -108,6 +108,11 @@ pub fn run(self: *Assistant, text: []const u8) void {
         self.compact();
     } else if (is(name, "/clean-up")) {
         self.cleanUp();
+    } else if (is(name, "/researcher")) {
+        const b = self.browser orelse return;
+        const off = std.ascii.eqlIgnoreCase(rest, "off");
+        self.m.prefs.set("ai_researcher", !off);
+        if (off) self.announce("Automatic Researcher Mode off") else @import("researcher.zig").runOnActive(b, rest.len == 0);
     } else {
         self.setDraft(own);
         self.announce(std.fmt.allocPrint(a, "No command {s}", .{name}) catch "No command");
@@ -254,8 +259,102 @@ pub fn attachFilePath(self: *Assistant, path: []const u8) bool {
         self.addAttachment(base, "image/webp", bytes, true);
         return true;
     }
+    if (std.ascii.eqlIgnoreCase(ext, ".pdf")) {
+        // The PDF's words, never its raw bytes.
+        var arena: std.heap.ArenaAllocator = .init(self.gpa);
+        defer arena.deinit();
+        const parsed = @import("pdf_text.zig").parseBytes(arena.allocator(), bytes, base) orelse return false;
+        self.addAttachment(base, "text/plain", parsed.text, false);
+        return true;
+    }
     self.addAttachment(base, "text/plain", bytes, false);
     return true;
+}
+
+/// The turn `turn_id` asked again: it and the turns after it go.
+pub fn retry(self: *Assistant, turn_id: json.Uuid) void {
+    for (self.chat.turns) |t| if (t.id.eql(turn_id)) return editAndRetry(self, turn_id, t.question);
+}
+
+/// The turn `turn_id` asked again as `new_question`: it and the turns after it go.
+pub fn editAndRetry(self: *Assistant, turn_id: json.Uuid, new_question: []const u8) void {
+    if (self.busy() or self.compacting or self.notice != null) return;
+    const trimmed = sse.prefix(std.mem.trim(u8, new_question, " \t\r\n"), 2000);
+    if (trimmed.len == 0) return;
+    const idx = for (self.chat.turns, 0..) |t, i| {
+        if (t.id.eql(turn_id)) break i;
+    } else return;
+    // `new_question` may be the chat's own, gone once the chat changes.
+    const q = self.gpa.dupe(u8, trimmed) catch return;
+    defer self.gpa.free(q);
+    if (!std.mem.eql(u8, q, self.chat.turns[idx].question)) self.recordInput(q);
+    self.mutate(idx, struct {
+        fn f(n: usize, _: A, c: *Chat) !void {
+            c.turns = c.turns[0..n];
+            c.followups = null;
+            c.touched = json.now();
+            if (c.compacted) |comp| if (@as(usize, @intCast(@max(0, comp))) > n) {
+                if (n == 0) {
+                    c.compacted = null;
+                    c.summary = null;
+                } else c.compacted = @intCast(n);
+            };
+        }
+    }.f);
+    if (self.chat.turns.len > 0) self.keep() else if (!self.shy) self.m.chats.remove(self.chat.id);
+    _ = self.ask(q);
+}
+
+/// `c` shown in place of the chat (Researcher's "Open in Chat"), kept, and
+/// its follow-ups asked for when its last answer is done.
+pub fn adoptChat(self: *Assistant, c: Chat) void {
+    self.stop();
+    self.draft.clearRetainingCapacity();
+    self.clearLive();
+    if (self.shot) |s| {
+        self.gpa.free(s);
+        self.shot = null;
+    }
+    self.clearAttachments();
+    self.setChat(c);
+    self.keep();
+    const last = if (c.turns.len > 0) c.turns[c.turns.len - 1] else return;
+    if (!last.done or last.failed != null or c.followups != null) return;
+    if (ubi.quiet(self.m)) |r| @import("followups.zig").afterAnswer(self, r.provider, r.model);
+}
+
+/// What was typed in this chat, oldest first: its own list, or its
+/// questions for a chat kept before there was one. Borrowed or on `a`.
+pub fn sessionInputs(self: *const Assistant, a: A) []const []const u8 {
+    if (self.chat.inputs) |list| if (list.len > 0) return list;
+    var out: std.ArrayList([]const u8) = .empty;
+    for (self.chat.turns) |t| {
+        if (t.question.len == 0) continue;
+        if (out.items.len > 0 and std.mem.eql(u8, out.items[out.items.len - 1], t.question)) continue;
+        out.append(a, t.question) catch break;
+    }
+    return out.items;
+}
+
+/// `text` joins the chat's inputs, unless the last one is the same; the latest 100 kept.
+pub fn recordInput(self: *Assistant, text: []const u8) void {
+    const trimmed = sse.prefix(std.mem.trim(u8, text, " \t\r\n"), 2000);
+    if (trimmed.len == 0) return;
+    var arena: std.heap.ArenaAllocator = .init(self.gpa);
+    defer arena.deinit();
+    const had = self.sessionInputs(arena.allocator());
+    if (had.len > 0 and std.mem.eql(u8, had[had.len - 1], trimmed)) return;
+    const Add = struct { had: []const []const u8, text: []const u8 };
+    self.mutate(Add{ .had = had, .text = trimmed }, struct {
+        fn f(x: Add, a: A, c: *Chat) !void {
+            const kept = x.had[x.had.len -| 99..];
+            const list = try a.alloc([]const u8, kept.len + 1);
+            for (kept, 0..) |s, i| list[i] = try a.dupe(u8, s);
+            list[kept.len] = try a.dupe(u8, x.text);
+            c.inputs = list;
+        }
+    }.f);
+    self.keep();
 }
 
 pub fn pasteFromClipboard(self: *Assistant) bool {

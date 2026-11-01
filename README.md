@@ -65,6 +65,8 @@ git pull && ./build.sh
 | `./build.sh release test` | Builds `build/Kea.app` and stops without touching `/Applications` |
 | `KEA_INSTALL=0 ./build.sh` | Same as `release test` |
 | `KEA_SIGN_IDENTITY="…" ./build.sh` | Sign with a specific Developer ID identity |
+| `.env` with `KEA_GDRIVE_CLIENT_ID=…` and `KEA_GDRIVE_CLIENT_SECRET=…` | Read by `./build.sh` (gitignored) to build in a Google "Desktop app" OAuth client, so Drive sync is just Sign In…. Its project needs the Drive API on and a consent screen asking only `drive.file` (Kea sees only the folders it makes) and `email`, published so sign-ins don't lapse after 7 days |
+| `build/Kea.app/Contents/MacOS/Kea --temp-profile` | Runs beside an open Kea in a throwaway profile, removed on quit (`--profile=DIR` keeps one in DIR) |
 
 ---
 
@@ -79,7 +81,8 @@ git pull && ./build.sh
 - **Peek (`Shift-click`) & Little Kea (`⌘O`).** Preview links in a sheet over the page; press `esc` to dismiss or keep them as a tab.
 
 ### Ubi Chat & AI (`⇧⌘Y`)
-- **Multi-resource context & attachments.** Automatically reads the visible text of the active tab (toggleable via the eye icon), attaches a live page screenshot (`⇧⌘4`) or dropped/selected files, and pins any tabs, bookmarks, or history pages via `@`, `tabs/`, `bookmarks/`, or `history/`.
+- **Multi-resource context & attachments.** Automatically reads the visible text of the active tab — web pages and PDFs alike, via PDFKit, with `[Page N]` markers (toggleable via the eye icon) — attaches a live page screenshot (`⇧⌘4`) or dropped/selected files (PDFs as their text), and pins any tabs, bookmarks, or history pages via `@`, `tabs/`, `bookmarks/`, or `history/`.
+- **Automatic Researcher Mode (on by default).** On papers, PDFs, code repositories, math/science pages and technical posts, a floating Feynman Researcher card explains each section from first principles; click a heading to jump there, Ask to take it to Ubi Chat, or **Open in Chat** to carry the whole explanation (live, even mid-stream) into one reused chat. Toggle from the graduation-cap button, the model menu, `/researcher on|off`, or **Settings › AI**. It runs on its own only with an AI on this Mac or a cloud provider you already agreed to, and never on private tabs.
 - **Browser tools & Web search plugins.** Ubi Chat can search your open tabs, history, and bookmarks or read open tabs on demand, and enables built-in web search and URL-context SDK plugins for Gemini (`googleSearch` + `urlContext`), Anthropic (`web_search_20250305`), and OpenRouter (`web`).
 - **Thinking & effort controls.** Toggle **Thinking**, pick the **Thinking Level** (`Low`, `Medium`, `High`, `Max` — default `High`), and toggle **Web Search** directly from the composer's model bar or **Settings › AI**.
 - **Hallucination guard.** Links or domains in an AI answer that weren't in the shared pages are flagged inline (`⚠ Not in the pages shared`).
@@ -87,8 +90,9 @@ git pull && ./build.sh
   - **On this Mac / LAN:** Ollama (`127.0.0.1:11434`), LM Studio (`127.0.0.1:1234`), or **Custom server** (any `http`/`https` OpenAI-compatible server on `localhost`, private RFC1918 IPv4, link-local, `.local`, or `.home.arpa`, with optional API key).
   - **Cloud:** Anthropic, OpenAI, Google Gemini, OpenRouter (one-click OAuth PKCE sign-in), plus providers from the `models.dev` catalog.
   - **Key sources:** Store keys in the macOS Keychain, read from an `$ENV_VAR`, or fetch on demand from a shell command (e.g. `op read …`).
-- **Dual-format copy.** Copying an answer puts both rich HTML and clean Markdown on the pasteboard.
-- **Sessions.** A list of chats beside the conversation (search, Starred, Tasks, by day) to rename, star, clone or delete; the model names each chat; Compact folds earlier turns into a summary and keeps them; answers render Markdown and Mermaid diagrams (flowchart, sequence, pie, state, class) drawn by Kea itself; the transcript zooms on its own (⋯ › Zoom).
+- **Copy, Edit & Retry.** Each question and answer has a Copy button (answers copy as the Markdown written), and drag-selecting any part of a question or answer copies its underlying Markdown and LaTeX too; Edit rewrites a question in place and asks again from there; Retry asks a question again in its place. Code blocks, tables and diagrams wrap to the panel by default (Unwrap to scroll sideways).
+- **Ask anything & follow-ups.** The "Ask anything." card stays over the composer, with three follow-up questions the model suggests after each answer. `↑`/`↓` in an untouched composer walk back through what you typed in that chat.
+- **Sessions.** A list of chats beside the conversation (search, Starred, Tasks, by day) to rename, star, clone or delete; the model names each chat; Compact folds earlier turns into a summary and keeps them; `/summarize` gives a deep Feynman explanation of the page; answers stream in smoothly and render Markdown with syntax-highlighted code and diffs, LaTeX math (`$…$`, `$$…$$`, `\(…\)`, `\[…\]`, `align`/`cases`/matrices) typeset on the GPU in STIX Two, and Mermaid diagrams (flowchart, sequence, pie, state, class) drawn by Kea itself; the transcript zooms on its own (⋯ › Zoom).
 
 ### Privacy, Security & Extensions
 - **Zero-cost ad blocking.** Compiles a `WKContentRuleList` enforced inside WebKit's network layer before requests leave the Mac. Toggle per site from the address bar's site card.
@@ -122,6 +126,8 @@ git pull && ./build.sh
 | `⌘1`–`⌘9` / `⌃1`–`⌃9` Jump to tab / Space | `⌘Y` / `⇧⌘J` / `⌥⌘L` History / Downloads / Passwords |
 | `⇧⌘S` / `⌘S` Toggle sidebar / Fold sidebar | `⌘F` Find on page · `⇧⌘⌫` Clear browsing data |
 | `⌥⌘N` / `⌃⌘←` `⌃⌘→` Split page / Focus split pane | `⇧⌘C` / `⇧⌘V` Copy address / Paste and go |
+| `⌥⇧⌘C` Copy clean link (tracking parameters removed) | `⌥⌘I` or `F12` / `⌥⌘U` Web Inspector / Page source (also in small windows and extension popups) |
+| `⌘`- or `⇧`-click a tab, then `⌥⌘N` Pair two tabs in Split View | `⌥⇧⌘D` Performance & Memory HUD |
 
 Every shortcut can be customized in **Settings › Shortcuts**.
 
@@ -139,7 +145,7 @@ Every shortcut can be customized in **Settings › Shortcuts**.
 - `ai/`: Ubi Chat, providers, Markdown, Mermaid
 - `ext/`: Chrome extensions and their API shims
 - `passwords/`: keychain vault, passkeys, autofill
-- `sync/`: your Macs in step, Send to Device
+- `sync/`: your Macs in step through a folder, Google Drive or a bucket (an encrypted, self-healing Merkle DAG), Send to Device
 - `import/`: bringing things over from other browsers
 - `design/`: palette, motion
 - `sys/`: keychain, URLSession, CoreGraphics
@@ -155,7 +161,7 @@ zig build lines       # every Zig file within 600 lines
 zig build test        # unit tests
 zig build ui-test     # the chrome, driven headless through ui.Tester
 zig build e2e         # real WebKit in process, windows hidden (KEA_E2E=<text> runs matching cases)
-zig build perf        # frame cost at scale (KEA_PERF_STRICT=1 enforces the gates)
+zig build perf        # frame cost at scale, gates enforced (KEA_PERF_BASELINE=1 only reports)
 zig build smooth      # on-screen 120 Hz smoothness; shows windows (KEA_SMOOTH=S4 runs one scenario)
 zig build snapshots   # chrome states as PNGs in $KEA_SNAPSHOTS or $TMPDIR/kea-snapshots
 ```

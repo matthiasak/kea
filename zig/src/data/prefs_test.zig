@@ -44,6 +44,7 @@ const swift_defaults = .{
     .{ "ai.web_search", "ai_web_search", true },
     .{ "ai.thinking", "ai_thinking", true },
     .{ "ai.effort", "ai_effort", prefs.AiEffort.high },
+    .{ "ai.researcher", "ai_researcher", true },
     .{ "ai.server", "ai_server", "http://127.0.0.1:8080/v1/" },
     .{ "commandbar", "command_bar", false },
     .{ "swipe.history", "holds_history", false },
@@ -69,6 +70,17 @@ const swift_defaults = .{
     .{ "reader.theme", "reader_theme", prefs.ReaderTheme.auto },
     .{ "reader.size", "reader_size", @as(f64, 18) },
     .{ "reader.width", "reader_width", prefs.ReaderWidth.medium },
+    .{ "privacy.strip_click_trackers", "strips_click_trackers", true },
+    .{ "privacy.gpc", "gpc", true },
+    .{ "tabs.address", "shows_tab_address", true },
+    .{ "tabs.cmd_numbers", "shows_cmd_numbers", false },
+    .{ "search.suggestions", "search_suggestions", false },
+    .{ "video.double_esc", "double_esc_fullscreen", false },
+    .{ "general.confirm_quit", "confirm_quit", false },
+    .{ "tabs.popups_window", "popups_in_windows", false },
+    .{ "tabs.close", "closes_tabs", false },
+    .{ "tabs.close.hours", "close_hours", @as(f64, 24) },
+    .{ "web_panel.width", "web_width", @as(f32, 380) },
 };
 
 fn expectPref(want: anytype, got: anytype) !void {

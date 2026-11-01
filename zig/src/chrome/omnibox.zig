@@ -52,6 +52,14 @@ pub const State = struct {
     typed_seen: u64 = 0,
     active_seen: u64 = 0,
     last_completed_hash: u64 = 0,
+    /// Arrival or last pointer/key activity; the flock and breath settle
+    /// 0.9 s after it so an idle blank tab stops drawing.
+    opened_at: f64 = 0,
+    mouse_seen: ui.Point = .{},
+    /// The flock's own clock: it runs only while the art animates, so the
+    /// birds take up where they stopped.
+    art_clock: f64 = 0,
+    art_seen: f64 = 0,
 
     pub fn deinit(st: *State, gpa: std.mem.Allocator) void {
         st.field.deinit();
@@ -71,6 +79,9 @@ pub const Options = struct {
 pub fn view(b: *Browser, c: *ui.Context, p: *const Palette, area: ui.Rect, opts: Options) void {
     const st = &b.omnibox;
     const showing = b.fieldShowing() and !b.welcoming;
+    if ((showing and !st.shown) or b.active_id != st.active_seen or c.input.down or c.input.key != null or
+        c.input.chars.len > 0 or c.input.mouse.x != st.mouse_seen.x or c.input.mouse.y != st.mouse_seen.y) st.opened_at = c.time;
+    st.mouse_seen = c.input.mouse;
     notice(b, st, showing);
     if (showing) st.over = if (b.activeTab()) |t| !t.isBlank() else false;
     const v = arrival(c, st, showing) orelse {
@@ -101,7 +112,10 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette, area: ui.Rect, opts:
     if (st.over) {
         scrim(b, c, p, area);
     } else if (!b.kea.opts.headless) {
-        kea_flight.newTabArt(c, .{ .w = area.w, .h = area.h }, y);
+        const live = lively(c, st);
+        if (st.art_seen == 0) st.art_clock = c.time else if (live) st.art_clock += @min(c.time - st.art_seen, 0.25);
+        st.art_seen = c.time;
+        kea_flight.newTabArt(c, .{ .w = area.w, .h = area.h }, y, st.art_clock, live);
     }
     field(b, c, p, st, x, y, w, showing);
     if (!st.over and opts.facts and b.prefs.kea_facts) kea_fact.view(b, c, p, .{ .w = area.w, .h = area.h }, y, 1);
@@ -233,16 +247,21 @@ fn scrim(b: *Browser, c: *ui.Context, p: *const Palette, area: ui.Rect) void {
 /// A slow, almost invisible breath under the field: a soft shape of ink,
 /// from .97 to 1.03 and .65 to full, 2.6 s each way, eased; still under
 /// Reduce Motion. Thirty frames a second are plenty for something this slow.
-fn breath(c: *ui.Context, p: *const Palette, w: f32) void {
+fn breath(c: *ui.Context, p: *const Palette, w: f32, live: bool) void {
     _ = c.leaf(.{
         .absolute = true,
         .width = px(w),
         .height = px(field_height),
         .radius = 26,
         .shadow = .{ .color = p.ink.alpha(0.07), .blur = 2 * 26 },
-        .pulse = if (c.reduce_motion) null else .{ .period = 5.2, .scale_amp = 0.03, .alpha_low = 0.65 },
+        .pulse = if (c.reduce_motion or !live) null else .{ .period = 5.2, .scale_amp = 0.03, .alpha_low = 0.65 },
         .opacity = 1,
     }, .none, null);
+}
+
+/// Animating: focused and within 0.9 s of arrival or activity.
+fn lively(c: *ui.Context, st: *const State) bool {
+    return c.window_focused and c.time - st.opened_at < 0.9;
 }
 
 fn setSynced(b: *Browser, st: *State, s: []const u8) void {
@@ -275,7 +294,7 @@ fn field(b: *Browser, c: *ui.Context, p: *const Palette, st: *State, x: f32, y: 
     defer c.end();
     // The field's shadow, cast by its shape alone; the breath; then the field.
     _ = c.leaf(.{ .absolute = true, .width = px(w), .height = px(field_height), .radius = 14, .background = p.ground, .shadow = card.swiftShadow(0.06, 24, 8) }, .none, null);
-    breath(c, p, w);
+    breath(c, p, w, lively(c, st));
     const box = c.open(.{
         .direction = .row,
         .gap = 8,

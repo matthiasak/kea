@@ -147,7 +147,7 @@ pub fn run(
                 var summary = ui.FrameLog.summary(combined.items);
                 computeMultiSpanSteady(spans, fl, &summary);
 
-                const report_only = sc.report_only or (std.mem.eql(u8, sc.id, "S13") and only == null);
+                const report_only = sc.report_only;
                 var rep: ScenarioReport = .{
                     .id = sc.id,
                     .name = sc.name,

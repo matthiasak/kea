@@ -204,9 +204,13 @@ pub const known = [_]Known{
 /// is a slice of an option's key.
 pub fn completion(gpa: std.mem.Allocator, typed: []const u8, options: []const Suggestion) !?[]const u8 {
     const n = chars(typed);
-    if (n < 2) return null;
+    if (n == 0) return null;
     for (options) |option| {
-        // Its address as shown, and for a www site the name without the www.
+        if (n == 1) {
+            if (option.kind != .visited) continue;
+            const p = Parts.parse(option.url) orelse continue;
+            if (!isHomePath(p.path) or p.query != null or p.fragment != null) continue;
+        }
         var keys: [2][]const u8 = .{ option.key, "" };
         var targets: [2][]const u8 = .{ try identity(gpa, option.url), "" };
         defer for (targets) |t| gpa.free(t);

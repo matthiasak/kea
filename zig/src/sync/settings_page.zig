@@ -1,6 +1,7 @@
 //! Settings › Sync (`SyncSettings`, Sync.swift:785-961): where your Macs
-//! meet — nowhere, a synced folder or a bucket — the passphrase, what goes
-//! across, who else is there, and Handoff.
+//! meet — nowhere, a synced folder, Google Drive or a bucket — how this Mac
+//! unlocks the store, what goes across, who else is there, and Handoff.
+//! Drive's rows, the place's warnings and the unlock rows: settings_drive.zig.
 const std = @import("std");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;
@@ -16,6 +17,7 @@ const sync_mod = @import("sync.zig");
 const Sync = sync_mod.Sync;
 const Place = sync_mod.Place;
 const relative = @import("tick.zig").relative;
+const more = @import("settings_drive.zig");
 
 /// The page's own fields (`@State`), afresh each time Settings appears.
 pub const State = struct {
@@ -24,11 +26,23 @@ pub const State = struct {
     access: ui.TextBuffer = .{},
     secret: ui.TextBuffer = .{},
     passphrase: ui.TextBuffer = .{},
+    drive_client_id: ui.TextBuffer = .{},
+    drive_new_folder: ui.TextBuffer = .{},
+    import_key: ui.TextBuffer = .{},
+    backup_pass: ui.TextBuffer = .{},
+    show_oauth_client: bool = false,
+    browsing_drive: bool = false,
+    confirming_overwrite: bool = false,
+    showing_import_key: bool = false,
+    showing_backup_pass: bool = false,
+    /// The account key's last four characters, read once from the keychain.
+    ak_hint: ?[4]u8 = null,
+    ak_checked: bool = false,
     /// `onAppear` filled the bucket's fields from Sync.
     appeared: bool = false,
 
     pub fn deinit(s: *State) void {
-        inline for (.{ "endpoint", "bucket", "access", "secret", "passphrase" }) |f| @field(s, f).deinit();
+        inline for (.{ "endpoint", "bucket", "access", "secret", "passphrase", "drive_client_id", "drive_new_folder", "import_key", "backup_pass" }) |f| @field(s, f).deinit();
     }
 };
 
@@ -49,9 +63,9 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette) void {
 fn where(b: *Browser, c: *ui.Context, p: *const Palette, s: *State, sync: *Sync) void {
     plate.cardBox(c, p);
     defer ui.end(c);
-    plate.line(c, p, "Sync through", "A folder iCloud Drive, Google Drive or Dropbox keeps in step, or a cloud bucket");
-    var at: usize = @intFromEnum(sync.place);
-    if (controls.segmented(c, p, &.{ "Off", "Folder", "Bucket" }, &at, false)) sync.setPlace(@enumFromInt(at));
+    plate.line(c, p, "Sync through", "Google Drive, a synced folder, or a cloud bucket");
+    var at: usize = @backingInt(sync.place);
+    if (controls.segmented(c, p, &.{ "Off", "Folder", "Drive", "Bucket" }, &at, false)) sync.setPlace(@fromBackingInt(@intCast(at)));
     ui.end(c);
     switch (sync.place) {
         .off => {},
@@ -61,6 +75,7 @@ fn where(b: *Browser, c: *ui.Context, p: *const Palette, s: *State, sync: *Sync)
             if (controls.pill(c, p, "Choose…", .{}).clicked) choose(b);
             ui.end(c);
         },
+        .drive => more.drive(b, c, p, s, sync),
         .bucket => {
             frame.rule(c, p);
             plate.line(c, p, "Endpoint", "Google Cloud Storage: https://storage.googleapis.com, with an HMAC key");
@@ -84,13 +99,8 @@ fn where(b: *Browser, c: *ui.Context, p: *const Palette, s: *State, sync: *Sync)
         },
     }
     if (sync.place != .off) {
-        frame.rule(c, p);
-        plate.line(c, p, "Passphrase", "The same on each of your Macs. " ++ app_name ++ " can't recover it.");
-        ui.row(c, .{ .gap = 6, .align_items = .center });
-        const typed = field(c, p, &s.passphrase, "Passphrase", 140, true).submitted;
-        if (controls.pill(c, p, "Use", .{}).clicked or typed) applyPassphrase(b, s, sync);
-        ui.end(c);
-        ui.end(c);
+        more.alerts(b, c, p, s, sync);
+        more.unlock(b, c, p, s, sync);
     }
     frame.rule(c, p);
     plate.line(c, p, "Status", sync.status);
@@ -137,7 +147,7 @@ pub fn otherMacs(a: std.mem.Allocator, devices: []const sync_mod.Device) ![]cons
 
 /// A plain field on the wash, its prompt in faint (`textField`/`secureField`).
 /// The prompt comes after the field, so typing doesn't move the field's id.
-fn field(c: *ui.Context, p: *const Palette, buf: *ui.TextBuffer, prompt: []const u8, width: f32, secure: bool) ui.TextFieldResult {
+pub fn field(c: *ui.Context, p: *const Palette, buf: *ui.TextBuffer, prompt: []const u8, width: f32, secure: bool) ui.TextFieldResult {
     ui.column(c, .{ .width = .{ .px = width + 16 }, .padding = .xy(8, 5), .radius = 7, .background = p.wash });
     defer ui.end(c);
     const r = ui.textField(c, buf, .{ .bare = true, .size = 12, .width = .fill, .password = secure, .caret_color = p.ink, .selection_color = p.ink.alpha(0.12) });
@@ -165,14 +175,21 @@ fn keepBucket(b: *Browser, s: *State, sync: *Sync) void {
     if (sync.useBucket(s.endpoint.text(), s.bucket.text(), s.access.text(), sec)) |err| b.announce(err) else s.secret.clear();
 }
 
-fn applyPassphrase(b: *Browser, s: *State, sync: *Sync) void {
-    if (sync.place == .bucket) {
-        const sec = if (s.secret.text().len > 0) s.secret.text() else (sync.secret orelse "");
-        if (s.secret.text().len > 0 or !std.mem.eql(u8, s.endpoint.text(), sync.endpoint) or !std.mem.eql(u8, s.bucket.text(), sync.bucket) or !std.mem.eql(u8, s.access.text(), sync.access)) {
-            if (sync.useBucket(s.endpoint.text(), s.bucket.text(), s.access.text(), sec)) |err| return b.announce(err);
-            s.secret.clear();
+/// The bucket's fields, kept first when they changed. Whether to go on.
+pub fn keepBucketIfChanged(b: *Browser, s: *State, sync: *Sync) bool {
+    const sec = if (s.secret.text().len > 0) s.secret.text() else (sync.secret orelse "");
+    if (s.secret.text().len > 0 or !std.mem.eql(u8, s.endpoint.text(), sync.endpoint) or !std.mem.eql(u8, s.bucket.text(), sync.bucket) or !std.mem.eql(u8, s.access.text(), sync.access)) {
+        if (sync.useBucket(s.endpoint.text(), s.bucket.text(), s.access.text(), sec)) |err| {
+            b.announce(err);
+            return false;
         }
+        s.secret.clear();
     }
+    return true;
+}
+
+pub fn applyPassphrase(b: *Browser, s: *State, sync: *Sync) void {
+    if (sync.place == .bucket and !keepBucketIfChanged(b, s, sync)) return;
     // `use` keeps its own copy; the field empties at once.
     const said = sync.use(s.passphrase.text(), b);
     s.passphrase.clear();

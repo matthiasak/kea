@@ -19,7 +19,11 @@ test {
     _ = @import("markdown.zig");
     _ = @import("organize.zig");
     _ = @import("chat.zig");
+    _ = @import("researcher.zig");
+    _ = @import("chat_turns.zig");
     _ = @import("sync.zig");
+    _ = @import("sync_safety.zig");
+    _ = @import("sync_drive.zig");
     _ = @import("settings_ai.zig");
     _ = @import("import_arc.zig");
     _ = @import("import.zig");
@@ -27,4 +31,6 @@ test {
     _ = @import("extensions.zig");
     _ = @import("chrome_parity.zig");
     _ = @import("chrome.zig");
+    _ = @import("release_features.zig");
+    _ = @import("release_features_b.zig");
 }

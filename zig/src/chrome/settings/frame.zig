@@ -44,6 +44,8 @@ pub const State = struct {
     sync: @import("../../sync/settings_page.zig").State = .{},
     ai: @import("ai.zig").State = .{},
     extensions: @import("../../ext/ui.zig").State = .{},
+    /// The page's scroll box (`content`): Shortcuts makes only the rows in view.
+    scroll_id: u64 = 0,
 
     pub fn deinit(s: *State, gpa: std.mem.Allocator) void {
         s.general.deinit(gpa);
@@ -154,8 +156,9 @@ fn content(b: *Browser, c: *ui.Context, p: *const Palette, on: *const Entry) voi
     ui.end(c);
     // A page of its own opens at its top: one scroll per page.
     ui.key(c, @tagName(on.page));
-    ui.column(c, .{ .gap = 18, .width = .fill, .grow = 1, .scroll = true, .scroll_bar = false, .padding = .{ .bottom = 4 } });
-    defer ui.end(c);
+    const sc = c.open(.{ .direction = .column, .gap = 18, .width = .fill, .grow = 1, .scroll = true, .scroll_bar = false, .padding = .{ .bottom = 4 } }, null);
+    b.settings.scroll_id = c.node(sc).id;
+    defer c.end();
     on.draw(b, c, p);
 }
 

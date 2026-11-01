@@ -12,9 +12,13 @@
 #                              com.apple.developer.web-browser.public-key-credential
 #                              (default: Kea.provisionprofile). Apple Passwords' helper
 #                              is killed by macOS unless its parent holds that entitlement.
+#   .env                       KEA_GDRIVE_CLIENT_ID=… and KEA_GDRIVE_CLIENT_SECRET=…, built
+#                              in so Drive sync is just Sign In… (gitignored)
 set -euo pipefail
 
 cd "$(dirname "$0")"
+# KEA_GDRIVE_CLIENT_ID / KEA_GDRIVE_CLIENT_SECRET (Drive sync's OAuth client), kept out of git.
+[ -f .env ] && { set -a; . ./.env; set +a; }
 export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 if [ -z "${SDKROOT:-}" ] && [ -d "/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk" ]; then
   export SDKROOT="/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk"
@@ -41,7 +45,9 @@ fi
 ZIG_OPT="-Doptimize=ReleaseFast"
 [ "$CONFIG" = "debug" ] && ZIG_OPT="-Doptimize=Debug"
 
-(cd zig && zig build lines && (cd nanoui && zig build lines) && zig build "$ZIG_OPT")
+# Google Drive sync's OAuth client, built in so Settings has nothing to set up.
+(cd zig && zig build lines && (cd nanoui && zig build lines) && zig build "$ZIG_OPT" \
+  -Dgdrive-client-id="${KEA_GDRIVE_CLIENT_ID:-}" -Dgdrive-client-secret="${KEA_GDRIVE_CLIENT_SECRET:-}")
 BINARY="zig/zig-out/bin/$NAME"
 [ -f "$BINARY" ] || { echo "$BINARY was not produced" >&2; exit 1; }
 

@@ -88,9 +88,9 @@ pub const SpaceSwipe = struct {
         const at = objc.msg(objc.CGPoint, event, "locationInWindow", .{});
         const size = objc.msg(objc.CGRect, window, "frame", .{}).size;
         if (b.prefs.sidebar) return if (b.prefs.side_position == .right)
-            at.x >= size.width - b.prefs.side_width
+            at.x >= size.width - b.prefs.effectiveSideWidth()
         else
-            at.x < b.prefs.side_width;
+            at.x < b.prefs.effectiveSideWidth();
         return at.y > size.height - metrics.strip;
     }
 
@@ -216,7 +216,7 @@ fn resisted(b: *Browser, travel: f32) f32 {
 /// frame and without anything moving. One past the last is the new card.
 pub fn slide(b: *Browser, target: usize, from: usize) void {
     if (b.making_space and target != b.kea.spaces.value.len) cancelSpaceCreation(b);
-    const width = if (b.prefs.sidebar) b.prefs.side_width else metrics.strip;
+    const width = if (b.prefs.sidebar) b.prefs.effectiveSideWidth() else metrics.strip;
     const away: f32 = if (target > from) -1 else 1;
     b.space_step = if (target > from) 1 else -1;
     b.kea.swipe.resting = clock.now() + rest;

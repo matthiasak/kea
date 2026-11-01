@@ -39,6 +39,7 @@ const tab_switcher_view = @import("tab_switcher_view.zig");
 const sheet = @import("sheet.zig");
 const slot_view = @import("../ext/slot_view.zig");
 const welcome = @import("welcome.zig");
+const tab_leaving = @import("tab_leaving.zig");
 
 const px = struct {
     fn v(n: f32) ui.Length {
@@ -55,6 +56,7 @@ const panel_w_id: u64 = std.hash.Wyhash.hash(0, "kea.room.panel_w");
 pub fn view(b: *Browser, c: *ui.Context) void {
     // Kea's controls keep the arrow, as AppKit's plain buttons do.
     c.hand_cursor = false;
+    b.web_panel_hole_node = null;
     // An extension's popup window: the page and its site, as a small window shows one.
     if (b.ext.popup != null) return @import("../web/little.zig").popupView(b, c);
     const p = palette.get(c.theme.dark);
@@ -68,6 +70,7 @@ pub fn view(b: *Browser, c: *ui.Context) void {
     if (b.editing_pin == null) b.column.pin_claimed = 0;
     space_swipe.frame(b, c);
     groups_view.beginFrame(b);
+    @import("tab_title.zig").cmdSlots(b, c.alloc());
     // The panels' own windows follow the prefs, before anything is laid out.
     @import("popped.zig").followBookmarks(b.kea);
     @import("../model/browser_chat.zig").followChatWindow(b);
@@ -90,12 +93,16 @@ pub fn view(b: *Browser, c: *ui.Context) void {
     // The column, from the window's top: the lights sit in its own corner.
     // Placed by its own side, so a column leaving the right goes out on the right.
     const right = r.sideOnRight();
-    const col_target: f32 = if (r.sidebar()) b.prefs.side_width else 0;
+    const sw = b.prefs.effectiveSideWidth();
+    const col_target: f32 = if (r.sidebar()) sw else 0;
     const col_w = if (swapping) swapTo(c, col_id, 0, col_target) else motion.glideTo(c, col_id, b.room.still +% 1, col_target);
     if (r.sidebar() or col_w > 0.5) {
         const on_right = b.prefs.side_position == .right;
-        const x = if (on_right) c.size.w - col_w else col_w - b.prefs.side_width;
+        const x = if (on_right) c.size.w - col_w else col_w - sw;
         side_bar.sideBar(b, c, p, r.cards(), x);
+    } else {
+        tab_leaving.release(&b.column.leaving, &b.column.snaps, b.gpa);
+        tab_leaving.release(&b.column.pin_leaving, &b.column.pin_snaps, b.gpa);
     }
     drawStrip(b, c, p, !b.prefs.sidebar and !r.folded and !r.fullscreen, swapping);
     drawBookmarksBar(b, c, p, r, swapping);
@@ -105,13 +112,15 @@ pub fn view(b: *Browser, c: *ui.Context) void {
     bars.view(b, c, p);
     // Over the page only: the column, the strip and the bookmarks bar stay uncovered.
     peek.view(b, c, p, .{ .x = if (right) 0 else chrome.w, .y = chrome.h, .w = c.size.w - chrome.w, .h = c.size.h - chrome.h });
+    if (b.stage_host) |sh| sh.setWebPanel(if (b.web_panel_tab) |wt| (if (b.web_panel_hole_node != null and !wt.floating) wt.web else null) else null);
+    if (b.web_panel_hole_node) |hn| c.addStageHoleNode(hn);
 
     // Over everything, in App.swift's order. Fold, bars, Peek, panels and
     // sheets, the tab switcher and the import's card come with their phases.
     // The field is centred on the page, not on the window: the column of
     // tabs is not what it stands over.
-    const lead: f32 = if (r.sidebar() and !right) b.prefs.side_width else 0;
-    const trail: f32 = if (r.sidebar() and right) b.prefs.side_width else 0;
+    const lead: f32 = if (r.sidebar() and !right) sw else 0;
+    const trail: f32 = if (r.sidebar() and right) sw else 0;
     // With Split View on, each page has its own, fitted (chrome/split_stage.zig).
     if (!b.prefs.split_view) omnibox.view(b, c, p, .{ .x = lead, .y = 0, .w = c.size.w - lead - trail, .h = c.size.h }, .{});
     site_card.follow(b);
@@ -122,6 +131,7 @@ pub fn view(b: *Browser, c: *ui.Context) void {
     tab_switcher_view.view(b, c, p);
     @import("../import/progress.zig").view(b, c, p);
     drawOverlay(b, c, p);
+    @import("debug_hud.zig").view(b, c, p);
 }
 
 /// This frame's window, as ContentView reads it.
@@ -132,7 +142,7 @@ fn room(b: *Browser, c: *ui.Context) Room {
         .folded = b.folded,
         .fullscreen = fullscreenTab(b) != null,
         .side_right = prefs.side_position == .right,
-        .side_width = prefs.side_width,
+        .side_width = prefs.effectiveSideWidth(),
         .bar_pref = prefs.bookmarks_bar,
         .has_bookmarks = b.bookmarks.roots.len > 0,
         .marks_asked = prefs.bookmarks_sidebar,
@@ -143,6 +153,9 @@ fn room(b: *Browser, c: *ui.Context) Room {
         .chat_popped = prefs.chat_popped,
         .chat_width_pref = prefs.chat_width,
         .marks_width_pref = prefs.marks_width,
+        .web_asked = b.web_panel_tab != null,
+        .web_expanded = b.expanded_panel == .web,
+        .web_width_pref = prefs.web_width,
         .window_width = c.size.w,
     };
 }
@@ -173,7 +186,10 @@ fn arrival(b: *Browser, c: *ui.Context, id: u64, shown: bool, swapping: bool) ?f
 
 /// `TabBar`, coming and going with `.move(edge: .top)` and opacity.
 fn drawStrip(b: *Browser, c: *ui.Context, p: *const Palette, shown: bool, swapping: bool) void {
-    const t = arrival(b, c, strip_id, shown, swapping) orelse return;
+    const t = arrival(b, c, strip_id, shown, swapping) orelse {
+        if (b.prefs.sidebar) tab_leaving.release(&b.strip.leaving, &b.strip.snaps, b.gpa);
+        return;
+    };
     _ = c.open(.{
         .absolute = true,
         .width = .fill,

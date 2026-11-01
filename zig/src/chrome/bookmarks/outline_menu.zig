@@ -24,7 +24,7 @@ pub const Pick = struct {
     to: ?Uuid = null,
     list: state.List = .dropdown,
 
-    pub const What = enum { open, open_tab, open_tabs, open_window, group, copy, move, remove, rename, new_inside, sort_name, sort_site, edit, new_folder_top, card_folder, dupes, organize };
+    pub const What = enum { open, open_tab, open_tabs, open_window, open_split, open_private, open_group, group, copy, move, remove, rename, new_inside, sort_name, sort_site, edit, change_address, new_folder_top, card_folder, dupes, organize, show_bookmarks, hide_bar };
 
     pub fn fire(self: *Pick, _: *nanoui.menu.Item) void {
         const b = self.b;
@@ -38,6 +38,30 @@ pub const Pick = struct {
             .open_tab => if (first) |n| if (n.url) |u| actions.pickBookmark(b, u, true, held),
             .open_tabs => actions.openBookmarks(b, nodes, false),
             .open_window => actions.openBookmarks(b, nodes, true),
+            .open_split => if (first) |n| if (n.url) |u| {
+                const t = b.open(u, .{ .foreground = false });
+                b.openInSplit(t);
+            },
+            .open_private => if (first) |n| if (n.url) |u| {
+                _ = b.open(u, .{ .foreground = true, .shy = true });
+            },
+            .open_group => if (first) |n| {
+                var opened_first: ?*@import("../../web/tab.zig").Tab = null;
+                var gid: ?Uuid = null;
+                for (n.kids()) |child| if (child.url) |u| {
+                    const t = b.open(u, .{ .foreground = opened_first == null, .at_end = true });
+                    if (opened_first == null) {
+                        opened_first = t;
+                        if (!b.prefs.uses_tab_groups) b.prefs.set("uses_tab_groups", true);
+                        const g = b.addTabGroup(t);
+                        b.renameTabGroup(g, n.title);
+                        b.editing_group_id = null;
+                        gid = g;
+                    } else if (gid) |g| {
+                        b.moveToGroup(t, g);
+                    }
+                };
+            },
             .group => ask.group(b, self.ids, self.list),
             .copy => actions.copy(b, nodes),
             .move => b.bookmarks.move(self.ids, self.to, null),
@@ -48,6 +72,9 @@ pub const Pick = struct {
             .sort_site => b.bookmarks.sort(self.to, .site),
             .edit => if (first) |n| ask.edit(b, n),
             .new_folder_top => ask.newFolder(b, null, null),
+            .change_address => if (first) |n| ask.edit(b, n),
+            .show_bookmarks => @import("../sheet.zig").show(b, .bookmarking),
+            .hide_bar => b.prefs.set("bookmarks_bar", false),
             .card_folder => if (self.ids.len > 0) ask.cardFolder(b, self.ids[0]),
             .dupes => ask.duplicates(b),
             .organize => @import("proposal.zig").organizeBookmarks(b),
@@ -105,6 +132,9 @@ pub fn items(a: std.mem.Allocator, b: *Browser, ids: []const Uuid, list: state.L
         if (Bookmarks.count(node.kids()) > 0) {
             try out.append(a, try item(a, b, "Open All in New Tabs", .open_tabs, ids, null, list));
             try out.append(a, try item(a, b, "Open All in New Window", .open_window, ids, null, list));
+            if (b.prefs.uses_tab_groups) {
+                try out.append(a, try item(a, b, "Open All in Tab Group", .open_group, ids, null, list));
+            }
             try out.append(a, .separator);
         }
         try out.append(a, try item(a, b, "Rename\u{2026}", .rename, ids, null, list));
@@ -118,8 +148,13 @@ pub fn items(a: std.mem.Allocator, b: *Browser, ids: []const Uuid, list: state.L
             try out.append(a, try item(a, b, "Open", .open, ids, null, list));
             try out.append(a, try item(a, b, "Open in New Tab", .open_tab, ids, null, list));
             try out.append(a, try item(a, b, "Open in New Window", .open_window, ids, null, list));
+            if (b.prefs.split_view) {
+                try out.append(a, try item(a, b, "Open in Split View", .open_split, ids, null, list));
+            }
+            try out.append(a, try item(a, b, "Open in New Private Tab", .open_private, ids, null, list));
             try out.append(a, .separator);
         }
+        try out.append(a, try item(a, b, "Rename\u{2026}", .rename, ids, null, list));
         try out.append(a, try item(a, b, "Edit\u{2026}", .edit, ids, null, list));
         try out.append(a, try item(a, b, "Copy Address", .copy, ids, null, list));
     }
@@ -127,6 +162,18 @@ pub fn items(a: std.mem.Allocator, b: *Browser, ids: []const Uuid, list: state.L
     try out.append(a, .separator);
     try out.append(a, try item(a, b, "Remove", .remove, ids, null, list));
     return out.items;
+}
+
+pub fn barEmptyPopup(b: *Browser, at: ui.Point) void {
+    tab_menu.later(b, at, 0, builtBarEmpty);
+}
+
+pub fn builtBarEmpty(a: std.mem.Allocator, b: *Browser, _: u64) anyerror![]const MenuItem {
+    const out = try a.alloc(MenuItem, 3);
+    out[0] = try item(a, b, "New Folder\u{2026}", .new_folder_top, &.{}, null, .dropdown);
+    out[1] = try item(a, b, "Show Bookmarks\u{2026}", .show_bookmarks, &.{}, null, .dropdown);
+    out[2] = try item(a, b, "Hide Bookmarks Bar", .hide_bar, &.{}, null, .dropdown);
+    return out;
 }
 
 /// The "Move to" list: the top level and every folder the rows can go

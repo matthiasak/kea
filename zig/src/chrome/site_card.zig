@@ -21,9 +21,8 @@ const controls = @import("controls.zig");
 const config = @import("../web/config.zig");
 const float = @import("../web/float.zig");
 const Parts = @import("../data/url.zig").Parts;
-const dispatch = @import("../sys/dispatch.zig");
-const cg = @import("../sys/cg.zig");
 const palette = @import("../design/palette.zig");
+const sec = @import("site_card_security.zig");
 const px = struct {
     fn v(n: f32) ui.Length {
         return .{ .px = n };
@@ -48,6 +47,7 @@ pub const State = struct {
     /// Don't Float Videos Here.
     ground: bool = false,
     /// Where the card was last laid out in the browser window, or null when
+    keep_awake: bool = false,
     /// the native child NSPanel is up; `panel_size` is the panel's fitted size.
     rect: ?ui.Rect = null,
     panel_size: ?ui.Size = null,
@@ -99,10 +99,11 @@ fn show(b: *Browser, t: *Tab, draft: u64) void {
         .sound_was = plays,
         .sound = plays,
         .ground = if (host) |h| float.groundedHolds(&b.kea.store, h) else false,
+        .keep_awake = if (host) |h| @import("../web/sleep.zig").isKeptAwake(&b.kea.store, h) else false,
     };
     b.overlay = .{ .site_card = t.id };
     b.overlay_anchor = b.tab_field_rect;
-    certify(t);
+    sec.certify(t);
     openPanel(b, t);
 }
 
@@ -259,7 +260,7 @@ fn panelView(p: *Panel, c: *ui.Context) void {
 // MARK: the page
 
 /// `pageAddress`: the page on screen, else where it is going.
-fn pageAddress(t: *const Tab) ?[]const u8 {
+pub fn pageAddress(t: *const Tab) ?[]const u8 {
     return t.committed orelse t.address;
 }
 
@@ -279,89 +280,12 @@ pub fn site(url: []const u8) []const u8 {
     return p.scheme orelse url;
 }
 
-const Safety = struct {
-    title: []const u8,
-    detail: []const u8,
-    /// The certificate the page came with, for an https page.
-    trust: ?*anyopaque,
-};
-
-/// `safety`: what there is to say about the connection.
-fn safety(t: *const Tab, certified: ?bool) ?Safety {
-    const p = Parts.parse(pageAddress(t) orelse return null) orelse return null;
-    if (p.schemeIs("https")) {
-        const trust = serverTrust(t);
-        // Only a certificate this Mac refused and you let through anyway
-        // gets this far untrusted.
-        if (certified == false) return .{
-            .title = "Connection is not secure",
-            .detail = "This site's certificate isn't trusted by this Mac. Someone could be reading what you send.",
-            .trust = trust,
-        };
-        if (t.web) |wv| if (!objc.msg(objc.BOOL, wv, "hasOnlySecureContent", .{})) return .{
-            .title = "Parts of this page are not secure",
-            .detail = "The page came privately, but some of what it shows was fetched over plain http, where anyone on the network could read or change it.",
-            .trust = trust,
-        };
-        return .{
-            .title = "Connection is secure",
-            .detail = "Your information (for example, passwords or credit card numbers) is private when it is sent to this site.",
-            .trust = trust,
-        };
-    }
-    if (p.schemeIs("http")) return .{
-        .title = "Connection is not secure",
-        .detail = "Don't enter passwords or credit card numbers here: anything sent to this site can be read on the way.",
-        .trust = null,
-    };
-    return null;
-}
-
-fn serverTrust(t: *const Tab) ?*anyopaque {
-    const wv = t.web orelse return null;
-    return @ptrCast(objc.msg(?objc.Object, wv, "serverTrust", .{}));
-}
-
-extern "c" fn SecTrustEvaluateWithError(trust: *anyopaque, err: ?*?*anyopaque) bool;
-extern "c" fn CFRetain(object: *anyopaque) *anyopaque;
-
-/// `certify`: whether this Mac trusts the certificate, asked off the main
-/// thread (the answer can need a revocation check).
-const Certify = struct {
-    serial: u64,
-    trust: *anyopaque,
-    ok: bool = false,
-
-    fn ask(ctx: ?*anyopaque) callconv(.c) void {
-        const pool = objc.Pool.push();
-        defer pool.pop();
-        const self: *Certify = @ptrCast(@alignCast(ctx.?));
-        self.ok = SecTrustEvaluateWithError(self.trust, null);
-        cg.CFRelease(self.trust);
-        objc.dispatchMain(self, answered);
-    }
-
-    fn answered(ctx: ?*anyopaque) callconv(.c) void {
-        const self: *Certify = @ptrCast(@alignCast(ctx.?));
-        defer std.heap.c_allocator.destroy(self);
-        const t = Tab.alive(self.serial) orelse return;
-        const b = t.browser orelse return;
-        if (b.site_card.tab != t.id) return;
-        b.site_card.certified = self.ok;
-        b.redraw();
-    }
-};
-
-fn certify(t: *Tab) void {
-    const trust = serverTrust(t) orelse return;
-    const job = std.heap.c_allocator.create(Certify) catch return;
-    job.* = .{ .serial = t.serial, .trust = CFRetain(trust) };
-    dispatch.dispatch_async_f(dispatch.dispatch_get_global_queue(dispatch.qos_user_initiated, 0), job, Certify.ask);
-}
-
+const Safety = sec.Safety;
+const safety = sec.safety;
+const security = sec.security;
 /// The card goes first, then the thing is done, a turn later: a print
 /// panel or a sheet coming up under a card on its way out lands behind it.
-fn after(b: *Browser, t: *Tab, comptime act: fn (*Tab) void) void {
+pub fn after(b: *Browser, t: *Tab, comptime act: fn (*Tab) void) void {
     close(b);
     const Later = struct {
         fn fire(ctx: ?*anyopaque) callconv(.c) void {
@@ -373,18 +297,6 @@ fn after(b: *Browser, t: *Tab, comptime act: fn (*Tab) void) void {
 
 fn printPage(t: *Tab) void {
     if (t.browser) |b| b.printPage();
-}
-
-/// The system's own certificate sheet, over the window. Never in tests.
-fn showCertificate(t: *Tab) void {
-    const b = t.browser orelse return;
-    if (b.kea.opts.root != null or b.kea.opts.hidden) return;
-    const w = b.window orelse return;
-    const trust = serverTrust(t) orelse return;
-    const panel = objc.msg(objc.Object, objc.class("SFCertificatePanel"), "sharedCertificatePanel", .{});
-    objc.msg(void, panel, "beginSheetForWindow:modalDelegate:didEndSelector:contextInfo:trust:showGroup:", .{
-        w.nswindow, @as(?objc.Object, null), @as(?objc.SEL, null), @as(?*anyopaque, null), trust, objc.NO,
-    });
 }
 
 // MARK: the card
@@ -459,6 +371,10 @@ fn front(b: *Browser, c: *ui.Context, p: *const Palette, t: *Tab, dark: bool) vo
         close(b);
         b.copyAddress();
     }
+    if (row(c, "Copy Clean Link", "⌥⇧⌘C", false, dark)) {
+        close(b);
+        b.copyCleanAddress();
+    }
     separator(c, dark);
     if (row(c, "Print…", "⌘P", false, dark)) after(b, t, printPage);
     zoom(b, c, t, dark);
@@ -470,6 +386,11 @@ fn front(b: *Browser, c: *ui.Context, p: *const Palette, t: *Tab, dark: bool) vo
         _ = line(c, "Don't Float Videos Here", dark);
         defer c.end();
         if (controls.switch_(c, p, &st.ground, "Don't Float Videos Here")) float.setGrounded(&b.kea.store, st.ground, host);
+    }
+    if (b.prefs.sleeps_tabs or b.prefs.closes_tabs) {
+        _ = line(c, "Keep This Site Awake", dark);
+        defer c.end();
+        if (controls.switch_(c, p, &st.keep_awake, "Keep This Site Awake")) @import("../web/sleep.zig").setKeptAwake(&b.kea.store, st.keep_awake, host);
     }
 }
 
@@ -514,35 +435,12 @@ fn line(c: *ui.Context, title: []const u8, dark: bool) u32 {
     return i;
 }
 
-// MARK: one step in
-
-fn security(b: *Browser, c: *ui.Context, t: *Tab, s: Safety, dark: bool) void {
-    const st = &b.site_card;
-    if (pageAddress(t)) |url| header(c, site(url), dark);
-    _ = c.open(.{ .height = px(menu.row), .justify = .center, .padding = .{ .left = menu.text } }, null);
-    ui.text(c, s.title, .{ .size = menu.font, .color = menu.label(dark) });
-    c.end();
-    _ = c.open(.{ .padding = .{ .left = menu.text, .right = menu.trailing, .bottom = 6 } }, null);
-    _ = c.open(.{ .width = px(230) }, null);
-    ui.text(c, s.detail, .{ .size = 11, .color = menu.secondary(dark), .wrap = true });
-    c.end();
-    c.end();
-    separator(c, dark);
-    if (s.trust != null) {
-        if (row(c, if (st.certified == false) "Show Certificate (Not Valid)…" else "Show Certificate…", "", false, dark)) after(b, t, showCertificate);
-    }
-    if (row(c, "Back", "", false, dark)) {
-        st.deeper = false;
-        c.changed = true;
-    }
-}
-
 // MARK: drawn as a menu draws
 
 /// One line, as a menu item draws it: the accent behind it and white
 /// letters under the pointer; one that opens more ends in a chevron.
 /// True when clicked.
-fn row(c: *ui.Context, title: []const u8, keys: []const u8, submenu: bool, dark: bool) bool {
+pub fn row(c: *ui.Context, title: []const u8, keys: []const u8, submenu: bool, dark: bool) bool {
     const outer = c.open(.{ .width = .fill, .padding = .{ .left = menu.inset, .right = menu.inset }, .control = true }, null);
     defer c.end();
     const it = c.interact(outer, .{});
@@ -560,14 +458,14 @@ fn row(c: *ui.Context, title: []const u8, keys: []const u8, submenu: bool, dark:
 }
 
 /// The site's name over the lines, as a menu's section header.
-fn header(c: *ui.Context, title: []const u8, dark: bool) void {
+pub fn header(c: *ui.Context, title: []const u8, dark: bool) void {
     _ = c.open(.{ .height = px(menu.row), .justify = .center, .padding = .{ .left = menu.text, .right = menu.trailing } }, null);
     ui.text(c, title, .{ .size = 11, .weight = .semibold, .color = menu.secondary(dark), .truncate = .ellipsis });
     c.end();
 }
 
 /// A menu's separator: a hairline in its own band.
-fn separator(c: *ui.Context, dark: bool) void {
+pub fn separator(c: *ui.Context, dark: bool) void {
     _ = c.open(.{ .width = .fill, .height = px(menu.separator), .justify = .center, .padding = .{ .left = menu.rule, .right = menu.rule } }, null);
     _ = c.leaf(.{ .width = .fill, .height = px(1), .background = menu.separatorColor(dark) }, .none, null);
     c.end();

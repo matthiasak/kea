@@ -6,10 +6,25 @@
 //!
 //! Routes: `/page?title=T&body=B`, `/slow` (first bytes now, the rest after
 //! 8 s), `/download?name=N` (a 4 KiB attachment), `/f/<file>` (fixtures/),
-//! anything else 404.
+//! `/doc.md` (Markdown), `/twin.html` and `/broken-twin.html` (pages naming
+//! a Markdown twin, the second a missing one), anything else 404. Over http,
+//! `/popup-auto` opens a sized pop-up as it loads, `/popup-btn` on a click,
+//! `/paper.pdf` is a two-page PDF, `/research-paper.html` a paper with math.
 const std = @import("std");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;
+
+const doc_md = "# Mountain Kea\n\nAlpine parrot with **bold** feathers and `code`.\n";
+const twin_html = "<html><head><title>Twin</title><link rel=\"alternate\" type=\"text/markdown\" href=\"/doc.md\"></head><body><p>Short.</p></body></html>";
+const broken_twin_html = "<html><head><title>Broken Twin</title><link rel=\"alternate\" type=\"text/markdown\" href=\"/missing.md\"></head><body><article><h1>Broken Twin</h1>" ++
+    "<p>The kea is a large species of parrot found in the forested and alpine regions of the South Island of New Zealand, curious and bold around people.</p>" ++
+    "<p>Its olive-green plumage hides a flash of orange under the wings, seen only in flight, and its long curved beak pries open roots, grubs and seeds.</p>" ++
+    "<p>Kea are known for their intelligence: they solve puzzles, work together, and have been seen using sticks as tools around the high country huts.</p>" ++
+    "</article></body></html>";
+const research_paper_html = "<html><head><title>Alpine Kea Thermodynamics</title></head><body><article>" ++
+    "<h1>Abstract</h1><p>Kea keep warm above the snow line by trapping air in their down.</p>" ++
+    "<h2>1 Methodology</h2><p>Heat loss follows <math><mi>Q</mi><mo>=</mo><mi>k</mi><mi>A</mi><mi>ΔT</mi></math> across the feather layer.</p>" ++
+    "</article></body></html>";
 
 const fixtures = [_]struct { []const u8, []const u8 }{
     .{ "hello.html", @embedFile("fixtures/hello.html") },
@@ -89,6 +104,9 @@ fn startTask(_: objc.Object, _: objc.SEL, _: objc.Object, task: objc.Object) cal
     if (std.mem.startsWith(u8, path, "/f/")) {
         for (fixtures) |f| if (std.mem.eql(u8, f[0], path[3..])) return respond(task, url, 200, "text/html", null, f[1], true);
     }
+    if (std.mem.eql(u8, path, "/doc.md")) return respond(task, url, 200, "text/markdown", null, doc_md, true);
+    if (std.mem.eql(u8, path, "/twin.html")) return respond(task, url, 200, "text/html", null, twin_html, true);
+    if (std.mem.eql(u8, path, "/broken-twin.html")) return respond(task, url, 200, "text/html", null, broken_twin_html, true);
     respond(task, url, 404, "text/plain", null, "Not Found", true);
 }
 
@@ -176,6 +194,18 @@ fn answer(client: c_int) void {
         _ = sock.write(client, &file, file.len);
         return;
     }
+    if (std.mem.eql(u8, path, "/paper.pdf")) {
+        const pdf = @import("kea").pdf_text.tinyPdf(std.heap.c_allocator, &.{
+            &.{ "Abstract: Alpine Kea Thermodynamics", "Kea keep warm above the snow line." },
+            &.{ "1 Introduction: Feather Insulation", "Down traps air close to the skin." },
+        }, null) catch return;
+        defer std.heap.c_allocator.free(pdf);
+        var pdf_head_buf: [256]u8 = undefined;
+        const pdf_head = std.fmt.bufPrint(&pdf_head_buf, "HTTP/1.1 200 OK\r\nContent-Type: application/pdf\r\nContent-Length: {d}\r\nConnection: close\r\n\r\n", .{pdf.len}) catch return;
+        _ = sock.write(client, pdf_head.ptr, pdf_head.len);
+        _ = sock.write(client, pdf.ptr, pdf.len);
+        return;
+    }
     // `/huge`: a picture with no length that never ends, until the reader
     // hangs up; how much went out is kept in `huge_sent`.
     if (std.mem.eql(u8, path, "/huge")) {
@@ -200,7 +230,14 @@ fn answer(client: c_int) void {
         break :blk w;
     } else path;
     var body_buf: [1024]u8 = undefined;
-    const body = std.fmt.bufPrint(&body_buf, "<html><head><title>Local {s}</title></head><body>{s}</body></html>", .{ path, shown }) catch return;
+    const body: []const u8 = if (std.mem.eql(u8, path, "/popup-auto"))
+        "<html><head><title>Auto</title></head><body><script>window.open('/words/popped', 'p', 'width=420,height=320')</script></body></html>"
+    else if (std.mem.eql(u8, path, "/research-paper.html"))
+        research_paper_html
+    else if (std.mem.eql(u8, path, "/popup-btn"))
+        "<html><head><title>Button</title></head><body><button id=\"go\" onclick=\"window.open('/words/sized', 's', 'width=420,height=320')\">Go</button></body></html>"
+    else
+        std.fmt.bufPrint(&body_buf, "<html><head><title>Local {s}</title></head><body>{s}</body></html>", .{ path, shown }) catch return;
     var head_buf: [256]u8 = undefined;
     const head = std.fmt.bufPrint(&head_buf, "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {d}\r\nConnection: close\r\n\r\n", .{body.len}) catch return;
     _ = sock.write(client, head.ptr, head.len);

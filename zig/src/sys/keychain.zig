@@ -49,6 +49,8 @@ pub const Query = struct {
     service: []const u8,
     account: ?[]const u8 = null,
     protected: bool = false,
+    /// iCloud Keychain items (`kSecAttrSynchronizable`); null: the local ones only.
+    synchronizable: ?bool = null,
 };
 
 pub const Accessible = enum { when_unlocked, when_unlocked_this_device_only };
@@ -81,6 +83,7 @@ const Pairs = struct {
         p.put(kSecAttrService, str(q.service));
         if (q.account) |a| p.put(kSecAttrAccount, str(a));
         if (q.protected) p.put(kSecUseDataProtectionKeychain, kCFBooleanTrue);
+        if (q.synchronizable) |s| p.put(kSecAttrSynchronizable, boolean(s));
         return p;
     }
 

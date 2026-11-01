@@ -96,6 +96,25 @@ pub fn inSplit(self: *Browser, tab: *const Tab) bool {
     return self.splitFor(tab) != null;
 }
 
+/// In a pair, Split View on or off (a saved pair is kept as a group is).
+pub fn savedSplit(self: *const Browser, id: u64) bool {
+    return at(self, id) != null;
+}
+
+/// A ⌘- or ⇧-click (`picking`) on a tab not live: picked to pair with the
+/// live one, or picked again to let go. Any other click lets the pick go.
+/// Whether the click was taken.
+pub fn pickForSplit(self: *Browser, t: *const Tab, picking: bool) bool {
+    const live = self.activeTab();
+    if (!picking or !self.prefs.split_view or live == null or live.?.id == t.id or live.?.shy != t.shy or t.isBlank()) {
+        self.picked_tab = null;
+        return false;
+    }
+    self.picked_tab = if (self.picked_tab == t.id) null else t.id;
+    self.redraw();
+    return true;
+}
+
 /// The pair's other page.
 pub fn partnerOf(self: *Browser, tab: *const Tab) ?*Tab {
     const s = self.splitFor(tab) orelse return null;

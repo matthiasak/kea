@@ -226,6 +226,9 @@ test "history suggestions, known places and completion" {
     try testing.expectEqualStrings("github.com", after[0].key);
     try testing.expectEqual(history.Suggestion.Kind.visited, after[0].kind);
     for (after) |s| try testing.expect(!std.mem.eql(u8, s.url, "https://github.com"));
+    const one_letter = try r.h.suggestions(gpa, "g", 5);
+    defer gpa.free(one_letter);
+    try testing.expectEqualStrings("ithub.com", (try r.h.completion("g", one_letter)).?);
     // Titles from three letters, below every address match.
     const by_title = try r.h.suggestions(gpa, "general purpose", 5);
     defer gpa.free(by_title);

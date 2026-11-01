@@ -20,6 +20,7 @@ const frameworks = [_][]const u8{
     "IOKit",
     "AVFoundation",
     "NaturalLanguage",
+    "PDFKit",
 };
 
 fn linkMacFrameworks(mod: *std.Build.Module, b: *std.Build, target: std.Build.ResolvedTarget) void {
@@ -35,7 +36,7 @@ fn linkMacFrameworks(mod: *std.Build.Module, b: *std.Build, target: std.Build.Re
     mod.linkSystemLibrary("sqlite3", .{});
 }
 
-fn appModule(b: *std.Build, root: []const u8, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, imports: []const std.Build.Module.Import) *std.Build.Module {
+fn appModule(b: *std.Build, root: []const u8, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, imports: []const std.Build.Module.Import, opts: *std.Build.Module) *std.Build.Module {
     const mod = b.createModule(.{
         .root_source_file = b.path(root),
         .target = target,
@@ -43,18 +44,19 @@ fn appModule(b: *std.Build, root: []const u8, target: std.Build.ResolvedTarget, 
         .link_libc = true,
         .imports = imports,
     });
+    mod.addImport("kea_options", opts);
     linkMacFrameworks(mod, b, target);
     return mod;
 }
 
 /// A test harness's root module: imports `nanoui` and `kea` (src/root.zig).
-fn harness(b: *std.Build, root: []const u8, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) *std.Build.Module {
+fn harness(b: *std.Build, root: []const u8, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, opts: *std.Build.Module) *std.Build.Module {
     const nanoui = b.dependency("nanoui", .{ .target = target, .optimize = optimize }).module("nanoui");
-    const kea = appModule(b, "src/root.zig", target, optimize, &.{.{ .name = "nanoui", .module = nanoui }});
+    const kea = appModule(b, "src/root.zig", target, optimize, &.{.{ .name = "nanoui", .module = nanoui }}, opts);
     return appModule(b, root, target, optimize, &.{
         .{ .name = "nanoui", .module = nanoui },
         .{ .name = "kea", .module = kea },
-    });
+    }, opts);
 }
 
 pub fn build(b: *std.Build) void {
@@ -63,8 +65,14 @@ pub fn build(b: *std.Build) void {
 
     const nanoui = b.dependency("nanoui", .{ .target = target, .optimize = optimize }).module("nanoui");
 
+    // Build-time settings the app reads as `@import("kea_options")`.
+    const options = b.addOptions();
+    options.addOption([]const u8, "gdrive_client_id", b.option([]const u8, "gdrive-client-id", "Google OAuth client ID for Drive sync (default none)") orelse "");
+    options.addOption([]const u8, "gdrive_client_secret", b.option([]const u8, "gdrive-client-secret", "That Desktop client's secret (default none)") orelse "");
+    const opts = options.createModule();
+
     // Kea executable (Kea.app/Contents/MacOS/Kea)
-    const exe_mod = appModule(b, "src/main.zig", target, optimize, &.{.{ .name = "nanoui", .module = nanoui }});
+    const exe_mod = appModule(b, "src/main.zig", target, optimize, &.{.{ .name = "nanoui", .module = nanoui }}, opts);
     const exe = b.addExecutable(.{ .name = "Kea", .root_module = exe_mod });
     b.installArtifact(exe);
     const run_exe = b.addRunArtifact(exe);
@@ -74,22 +82,22 @@ pub fn build(b: *std.Build) void {
     // Unit and HistoryRegression tests. `-Dtest-root=src/<file>.zig` tests one
     // module tree in isolation (parallel work on separate modules).
     const test_root = b.option([]const u8, "test-root", "Root file for `zig build test` (default src/main.zig)");
-    const test_mod = if (test_root) |r| appModule(b, r, target, optimize, &.{.{ .name = "nanoui", .module = nanoui }}) else exe_mod;
+    const test_mod = if (test_root) |r| appModule(b, r, target, optimize, &.{.{ .name = "nanoui", .module = nanoui }}, opts) else exe_mod;
     const tests = b.addTest(.{ .root_module = test_mod });
     b.step("test", "Run Kea unit and HistoryRegression tests").dependOn(&b.addRunArtifact(tests).step);
 
     // Headless chrome suites on ui.Tester
-    const ui_tests = b.addTest(.{ .root_module = harness(b, "src/tests/ui/root.zig", target, optimize) });
+    const ui_tests = b.addTest(.{ .root_module = harness(b, "src/tests/ui/root.zig", target, optimize, opts) });
     b.step("ui-test", "Run the headless chrome suites (ui.Tester)").dependOn(&b.addRunArtifact(ui_tests).step);
 
     // Frame-time gate while the sidebar edge is dragged
-    const perf = b.addExecutable(.{ .name = "kea-perf", .root_module = harness(b, "src/tests/perf.zig", target, .ReleaseFast) });
+    const perf = b.addExecutable(.{ .name = "kea-perf", .root_module = harness(b, "src/tests/perf.zig", target, .ReleaseFast, opts) });
     const run_perf = b.addRunArtifact(perf);
     run_perf.has_side_effects = true;
-    b.step("perf", "Measure frame times dragging the sidebar edge (fails at CPU p90 >= 4 ms)").dependOn(&run_perf.step);
+    b.step("perf", "Measure chrome frame cost at scale (fails a gate unless KEA_PERF_BASELINE=1)").dependOn(&run_perf.step);
 
     // WebKit end to end, in process, windows hidden
-    const e2e = b.addExecutable(.{ .name = "kea-e2e", .root_module = harness(b, "src/tests/e2e/main.zig", target, .Debug) });
+    const e2e = b.addExecutable(.{ .name = "kea-e2e", .root_module = harness(b, "src/tests/e2e/main.zig", target, .Debug, opts) });
     // The app's scripting dictionary, which the bundle ships (scripting case).
     e2e.root_module.addAnonymousImport("kea_sdef", .{ .root_source_file = b.path("../Kea.sdef") });
     const run_e2e = b.addRunArtifact(e2e);
@@ -98,7 +106,7 @@ pub fn build(b: *std.Build) void {
     b.step("e2e", "Run the in-process WebKit end-to-end cases").dependOn(&run_e2e.step);
     // The same binary in zig-out/bin, to run under `leaks --atExit --`.
     b.step("e2e-bin", "Install kea-e2e into zig-out/bin").dependOn(&b.addInstallArtifact(e2e, .{}).step);
-    const smooth = b.addExecutable(.{ .name = "kea-smooth", .root_module = harness(b, "src/tests/e2e/main.zig", target, .ReleaseFast) });
+    const smooth = b.addExecutable(.{ .name = "kea-smooth", .root_module = harness(b, "src/tests/e2e/main.zig", target, .ReleaseFast, opts) });
     smooth.root_module.addAnonymousImport("kea_sdef", .{ .root_source_file = b.path("../Kea.sdef") });
     const run_smooth = b.addRunArtifact(smooth);
     run_smooth.addArg("--onscreen");
@@ -106,7 +114,7 @@ pub fn build(b: *std.Build) void {
     b.step("smooth", "Run on-screen smoothness scenarios S1-S16").dependOn(&run_smooth.step);
 
     // Chrome states rendered to PNGs ($KEA_SNAPSHOTS or $TMPDIR/kea-snapshots)
-    const snaps = b.addExecutable(.{ .name = "kea-snapshots", .root_module = harness(b, "src/tests/snapshots.zig", target, optimize) });
+    const snaps = b.addExecutable(.{ .name = "kea-snapshots", .root_module = harness(b, "src/tests/snapshots.zig", target, optimize, opts) });
     const run_snaps = b.addRunArtifact(snaps);
     run_snaps.has_side_effects = true;
     b.step("snapshots", "Render named chrome states to PNG").dependOn(&run_snaps.step);

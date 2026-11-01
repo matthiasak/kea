@@ -66,13 +66,18 @@ pub fn groupHeading(b: *Browser, c: *ui.Context, p: *const Palette, group: *cons
     const h = motion.quickTo(c, it.id, 0, if (it.hovered) 1 else 0);
     c.node(i).style.background = if (held_here) p.side_wash else p.side_hover.alpha(h);
 
+    const icons_only = !horizontal and b.prefs.glyph == .icons_only;
+    if (icons_only) c.node(i).style.justify = .center;
     if (editing) {
         nameField(b, c, p, group, horizontal);
+    } else if (icons_only) {
+        // On the frame's arena: the text is read at layout, after this returns.
+        ui.text(c, @import("mark.zig").initial(c, group.name), .{ .size = name_style.size, .weight = name_style.weight, .color = p.muted });
     } else {
         ui.text(c, group.name, .{ .size = name_style.size, .weight = name_style.weight, .color = p.muted, .truncate = .ellipsis });
     }
-    if (!horizontal) ui.spacer(c);
-    if (!editing and !horizontal) {
+    if (!horizontal and !icons_only) ui.spacer(c);
+    if (!editing and !horizontal and !icons_only) {
         // Turned a quarter back while folded, as the rows settle.
         const turn = motion.settleTo(c, it.id, 1, if (group.collapsed) -std.math.pi / 2.0 else 0);
         _ = c.open(.{ .opacity = h }, null);
@@ -150,13 +155,17 @@ fn carry(b: *Browser, c: *ui.Context, group: *const TabGroup, it: ui.Interaction
 const Pick = struct {
     b: *Browser,
     id: Uuid,
-    what: enum { rename, toggle, ungroup, close },
+    space: Uuid = Uuid.first,
+    what: enum { rename, toggle, fold_all, unfold_all, to_space, ungroup, close },
 
     fn fire(self: *Pick, _: *nanoui.menu.Item) void {
         const b = self.b;
         switch (self.what) {
             .rename => b.editing_group_id = self.id,
             .toggle => b.toggleTabGroup(self.id),
+            .fold_all => b.foldAllGroups(),
+            .unfold_all => b.unfoldAllGroups(),
+            .to_space => b.moveGroupToSpace(self.id, self.space),
             .ungroup => b.removeTabGroup(self.id),
             .close => b.closeTabGroup(self.id),
         }
@@ -169,17 +178,31 @@ pub fn menuItems(arena: std.mem.Allocator, b: *Browser, number: u64) anyerror![]
     const g = for (b.tab_groups.items) |g| {
         if (groups.number(g.id) == number) break g;
     } else return &.{};
-    const out = try arena.alloc(nanoui.MenuItem, 5);
-    const labels = [_][]const u8{ "Rename Group", if (g.collapsed) "Expand Group" else "Collapse Group", "", "Ungroup Tabs", "Close Group" };
-    const whats = [_]@FieldType(Pick, "what"){ .rename, .toggle, .rename, .ungroup, .close };
-    for (out, labels, whats, 0..) |*item, label, what, n| {
-        if (n == 2) {
-            item.* = .separator;
-            continue;
+    var out: std.ArrayList(nanoui.MenuItem) = .empty;
+    const item = struct {
+        fn make(a: std.mem.Allocator, br: *Browser, id: Uuid, label: []const u8, what: @FieldType(Pick, "what"), sp: Uuid) !nanoui.MenuItem {
+            const pick = try a.create(Pick);
+            pick.* = .{ .b = br, .id = id, .space = sp, .what = what };
+            return .{ .label = label, .click = .of(pick, Pick.fire) };
         }
-        const pick = try arena.create(Pick);
-        pick.* = .{ .b = b, .id = g.id, .what = what };
-        item.* = .{ .label = label, .click = .of(pick, Pick.fire) };
+    }.make;
+    try out.append(arena, try item(arena, b, g.id, "Rename Group", .rename, Uuid.first));
+    try out.append(arena, try item(arena, b, g.id, if (g.collapsed) "Expand Group" else "Collapse Group", .toggle, Uuid.first));
+    if (b.tab_groups.items.len > 1) {
+        try out.append(arena, try item(arena, b, g.id, "Fold All Groups", .fold_all, Uuid.first));
+        try out.append(arena, try item(arena, b, g.id, "Unfold All Groups", .unfold_all, Uuid.first));
     }
-    return out;
+    if (b.prefs.uses_spaces and b.kea.spaces.value.len > 1) {
+        var sp_items: std.ArrayList(nanoui.MenuItem) = .empty;
+        for (b.kea.spaces.value) |sp| if (!sp.id.eql(b.space_id)) {
+            try sp_items.append(arena, try item(arena, b, g.id, sp.name, .to_space, sp.id));
+        };
+        if (sp_items.items.len > 0) {
+            try out.append(arena, .{ .label = "Move Group to Space", .submenu = sp_items.items });
+        }
+    }
+    try out.append(arena, .separator);
+    try out.append(arena, try item(arena, b, g.id, "Ungroup Tabs", .ungroup, Uuid.first));
+    try out.append(arena, try item(arena, b, g.id, "Close Group", .close, Uuid.first));
+    return out.items;
 }

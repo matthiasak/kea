@@ -44,21 +44,64 @@ fn originHost(frame: objc.Object) []const u8 {
 /// A link that asks for a new window gets a new tab, built with the
 /// configuration WebKit hands over — with a controller of its own, so the
 /// opened tab never claims its opener's handlers.
+pub const popups_prefix = "popups.";
+
+pub fn isPopupAllowed(store: *const @import("../data/store.zig").Store, host: []const u8) bool {
+    if (host.len == 0) return false;
+    var buf: [300]u8 = undefined;
+    return store.bool(std.fmt.bufPrint(&buf, popups_prefix ++ "{s}", .{host}) catch return false) orelse false;
+}
+
+pub fn setPopupAllowed(store: *const @import("../data/store.zig").Store, on: bool, host: []const u8) void {
+    if (host.len == 0) return;
+    var buf: [300]u8 = undefined;
+    const key = std.fmt.bufPrint(&buf, popups_prefix ++ "{s}", .{host}) catch return;
+    if (on) store.setBool(key, true) else store.remove(key);
+}
+
 fn createWebView(self: objc.Object, _: objc.SEL, wv: objc.Object, configuration: objc.Object, action: objc.Object, features: objc.Object) callconv(.c) ?objc.Object {
     const source = nav.tabOf(self) orelse return null;
     const b = source.browser orelse return null;
     const pool = objc.Pool.push();
     defer pool.pop();
+    const kind = objc.msg(objc.NSInteger, action, "navigationType", .{});
+    const flags = objc.msg(objc.NSUInteger, action, "modifierFlags", .{});
+    const user_gesture = kind == 0 or flags != 0 or
+        (objc.msg(objc.BOOL, action, "respondsToSelector:", .{objc.sel("_isUserInitiated")}) and objc.msg(objc.BOOL, action, "_isUserInitiated", .{}));
+    const src_parts = Parts.parse(source.url());
+    const src_host = if (src_parts) |sp| sp.hostName() orelse "" else "";
+    const ext_src = if (src_parts) |sp| sp.schemeIs("chrome-extension") or sp.schemeIs("webkit-extension") or sp.schemeIs("kea-test") else false;
+    const target_url = if (objc.msg(?objc.Object, objc.msg(objc.Object, action, "request", .{}), "URL", .{})) |u|
+        objc.fromNSString(objc.msg(?objc.Object, u, "absoluteString", .{}))
+    else
+        "";
+    if (!user_gesture and !ext_src and !isPopupAllowed(&b.kea.store, src_host)) {
+        if (target_url.len > 0 and source.blocked_popups.items.len < 16) {
+            if (source.gpa.dupe(u8, target_url) catch null) |duped| {
+                source.blocked_popups.append(source.gpa, duped) catch source.gpa.free(duped);
+                b.redraw();
+            }
+        }
+        return null;
+    }
     const ucc = objc.new("WKUserContentController");
     defer objc.release(ucc);
     objc.msg(void, configuration, "setUserContentController:", .{ucc});
     const t = Tab.createWith(b.gpa, b.kea.tabId(), source.shy, configuration, b.kea) catch return null;
+    const w_num = objc.msg(?objc.Object, features, "width", .{});
+    const h_num = objc.msg(?objc.Object, features, "height", .{});
     const toolbars = objc.msg(?objc.Object, features, "toolbarsVisibility", .{});
-    t.popup = objc.msg(?objc.Object, features, "width", .{}) != null or objc.msg(?objc.Object, features, "height", .{}) != null or
+    t.popup = w_num != null or h_num != null or
         (toolbars != null and !objc.msg(objc.BOOL, toolbars.?, "boolValue", .{}));
     t.opener = source.id;
     b.prepare(t);
-    const flags = objc.msg(objc.NSUInteger, action, "modifierFlags", .{});
+    if (target_url.len > 0) t.setAddressOptimistically(target_url);
+    if (t.popup and b.prefs.popups_in_windows) {
+        const little = @import("little.zig");
+        const fw: f64 = if (w_num) |wn| objc.msg(f64, wn, "doubleValue", .{}) else little.width;
+        const fh: f64 = if (h_num) |hn| objc.msg(f64, hn, "doubleValue", .{}) else little.height;
+        if (little.showTab(b, t, fw, fh) != null) return t.web;
+    }
     const cmd_behind = (flags & (1 << 20)) != 0 and (flags & (1 << 17)) == 0;
     if (b.prefs.uses_tab_groups and !t.shy) t.group_id = source.group_id;
     b.tabs.insert(b.gpa, b.placeForNew(), t) catch {
@@ -71,8 +114,6 @@ fn createWebView(self: objc.Object, _: objc.SEL, wv: objc.Object, configuration:
         b.setActive(t.id);
         b.setEditing(false);
     }
-    if (objc.msg(?objc.Object, objc.msg(objc.Object, action, "request", .{}), "URL", .{})) |u|
-        t.setAddressOptimistically(objc.fromNSString(objc.msg(?objc.Object, u, "absoluteString", .{})));
     b.rememberSession();
     b.redraw();
     return t.web;

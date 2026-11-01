@@ -1,7 +1,8 @@
 //! P5.6, part B: the link under the pointer reaches the status line; a link
 //! from another app opens in a small window that never shows here, and
 //! Open in Kea moves its page into a tab, loaded as it is; Escape closes
-//! one; a playing video's page floats into the panel and comes back.
+//! one; an unprompted pop-up is blocked and a sized one opens in a small
+//! window; a playing video's page floats into the panel and comes back.
 const std = @import("std");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;
@@ -14,6 +15,7 @@ pub const cases = [_]Case{
     .{ .name = "hovering a link sets the status line", .run = hoverStatus },
     .{ .name = "little window opens hidden and Open in Kea keeps its page", .run = littleKeeps },
     .{ .name = "little window closes with escape and its page goes", .run = littleCloses },
+    .{ .name = "unprompted popup is blocked and sized popup opens in little window", .run = popups },
     .{ .name = "float panel hosts the page and gives it back", .run = floats },
 };
 
@@ -114,6 +116,61 @@ fn littleCloses(h: *Harness) !void {
     const dummy: u8 = 0;
     try h.waitFor(&dummy, noLittles, 3, "escape to close the small window");
     try h.expect(b.tabs.items.len == tabs, "closing the small window changed the row", .{});
+}
+
+// MARK: pop-ups
+
+fn blocked(t: *app.Tab) bool {
+    return t.blocked_popups.items.len > 0;
+}
+
+fn oneLittle(_: *const u8) bool {
+    return app.little.open.items.len == 1;
+}
+
+fn sizedLoaded(l: *app.little.Little) bool {
+    return !l.tab.loading and std.mem.eql(u8, l.tab.title(), "Local /words/sized");
+}
+
+fn popups(h: *Harness) !void {
+    const b = try h.start();
+    var buf: [128]u8 = undefined;
+    // Asked for as the page loads, with no click: kept on the tab's badge.
+    const auto = try web.open(h, b, try std.fmt.bufPrint(&buf, "{s}/popup-auto", .{h.http}));
+    const tabs = b.tabs.items.len;
+    try h.waitFor(auto, blocked, 5, "the blocked pop-up");
+    try h.expect(auto.blocked_popups.items.len == 1 and std.mem.endsWith(u8, auto.blocked_popups.items[0], "/words/popped"), "{d} blocked, first '{s}'", .{ auto.blocked_popups.items.len, if (auto.blocked_popups.items.len > 0) auto.blocked_popups.items[0] else "" });
+    try h.expect(b.tabs.items.len == tabs and app.little.open.items.len == 0, "the blocked pop-up opened anyway", .{});
+    {
+        var arena = std.heap.ArenaAllocator.init(h.gpa);
+        defer arena.deinit();
+        const menu = try app.tab_title.popupMenu(arena.allocator(), b, auto.id);
+        try h.expect(@import("page_features.zig").fire(menu, "Always Allow Pop-ups from 127.0.0.1"), "no Always Allow in a menu of {d}", .{menu.len});
+    }
+    try h.expect(h.kea.?.store.bool("popups.127.0.0.1") orelse false, "popups.127.0.0.1 not kept", .{});
+    try h.expect(auto.blocked_popups.items.len == 0, "the badge still holds {d}", .{auto.blocked_popups.items.len});
+
+    // Clicked, with a size of its own: a small window, not a tab.
+    b.prefs.set("popups_in_windows", true);
+    const from = try web.open(h, b, try std.fmt.bufPrint(&buf, "{s}/popup-btn", .{h.http}));
+    const count = b.tabs.items.len;
+    _ = try web.eval(h, from, "document.getElementById('go').click(); 1");
+    const dummy: u8 = 0;
+    try h.waitFor(&dummy, oneLittle, 5, "the small window");
+    const l = app.little.open.items[0];
+    const tab = l.tab;
+    h.waitFor(l, sizedLoaded, 10, "the pop-up's page") catch return h.fail("title '{s}'", .{tab.title()});
+    const size = objc.msg(objc.CGRect, objc.msg(objc.Object, l.window.nswindow, "contentView", .{}), "bounds", .{}).size;
+    try h.expect(@abs(size.width - 420) < 1 and @abs(size.height - 320) < 1, "the small window is {d}×{d}", .{ size.width, size.height });
+    try h.expect(b.tabs.items.len == count and b.indexOf(tab) == null, "the pop-up is already a tab", .{});
+
+    // ⌃Tab, then ⌃O: the switcher keeps the small window's page as a tab.
+    h.press("\t", 48, false, true);
+    try h.expect(b.switcher.active(), "⌃Tab didn't start the switcher", .{});
+    h.press("o", 31, false, true);
+    try h.waitFor(&dummy, noLittles, 3, "the small window to go");
+    try h.expect(!b.switcher.active(), "⌃O left the switcher up", .{});
+    try h.expect(b.indexOf(tab) != null and b.tabs.items.len == count + 1, "the pop-up's page isn't a tab", .{});
 }
 
 // MARK: the floating window

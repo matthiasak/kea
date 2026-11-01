@@ -87,6 +87,11 @@ pub const Assistant = struct {
     pub const clearAttachments = more.clearAttachments;
     pub const attachFilePath = more.attachFilePath;
     pub const pasteFromClipboard = more.pasteFromClipboard;
+    pub const retry = more.retry;
+    pub const editAndRetry = more.editAndRetry;
+    pub const adoptChat = more.adoptChat;
+    pub const sessionInputs = more.sessionInputs;
+    pub const recordInput = more.recordInput;
 
     pub fn create(m: *ai.Ai, browser: ?*Browser, shy: bool) !*Assistant {
         const self = try m.gpa.create(Assistant);
@@ -135,7 +140,7 @@ pub const Assistant = struct {
         return .{ .id = l.id, .question = l.question, .answer = l.answer.items, .place = l.place, .shot = l.shot, .tools = l.tools.items };
     }
 
-    fn clearLive(self: *Assistant) void {
+    pub fn clearLive(self: *Assistant) void {
         const l = &(self.live orelse return);
         self.gpa.free(l.question);
         self.gpa.free(l.place);
@@ -164,7 +169,7 @@ pub const Assistant = struct {
         if (b.chat.window) |w| w.redraw();
     }
 
-    fn active(self: *Assistant) ?*Tab {
+    pub fn active(self: *Assistant) ?*Tab {
         const b = self.browser orelse return null;
         return b.activeTab();
     }
@@ -172,8 +177,8 @@ pub const Assistant = struct {
     pub fn shareable(self: *const Assistant, tab: ?*Tab) bool {
         const t = tab orelse return false;
         if (t.isBlank()) return false;
-        const p = url.Parts.parse(t.url()) orelse return false;
-        if (!p.isWeb()) return false;
+        const web = if (url.Parts.parse(t.url())) |p| p.isWeb() else false;
+        if (!web and !@import("pdf_text.zig").isPdfTab(t)) return false;
         return self.shy or !ubi.isPrivatePage(t);
     }
 
@@ -224,7 +229,7 @@ pub const Assistant = struct {
         self.changed();
     }
 
-    fn setChat(self: *Assistant, c: Chat) void {
+    pub fn setChat(self: *Assistant, c: Chat) void {
         var next: std.heap.ArenaAllocator = .init(self.gpa);
         const copy = json.clone(next.allocator(), c) catch return next.deinit();
         self.chat_arena.deinit();
@@ -257,6 +262,7 @@ pub const Assistant = struct {
         const text = std.mem.trim(u8, self.draft.items, " \t\r\n");
         if (text.len == 0 and self.attachments.items.len == 0 and self.shot == null) return;
         const own = arena.allocator().dupe(u8, if (text.len > 0) text else "Describe this.") catch return;
+        if (text.len > 0) self.recordInput(own);
         if (own[0] == '/') return self.run(own);
         if (self.ask(sse.prefix(own, 2000))) self.draft.clearRetainingCapacity();
     }
@@ -325,7 +331,7 @@ pub const Assistant = struct {
                 c.pageHidden = false;
             }
         }.f);
-        if (!self.shareable(self.active())) return self.announce("AI works on web pages");
+        if (!self.shareable(self.active())) return self.announce("AI works on web pages and PDFs");
         self.listing = false;
         _ = self.ask(ubi.summary);
     }
@@ -354,6 +360,7 @@ pub const Assistant = struct {
                 list[c.turns.len] = try json.clone(a, t);
                 c.turns = list;
                 c.touched = json.now();
+                c.followups = null;
             }
         }.f);
         self.clearLive();
@@ -386,6 +393,7 @@ pub const Assistant = struct {
     pub fn open(self: *Assistant, id: Uuid) void {
         const found = self.m.chats.chat(id) orelse return;
         self.stop();
+        self.draft.clearRetainingCapacity();
         self.clearLive();
         if (self.shot) |s| {
             self.gpa.free(s);
@@ -405,6 +413,7 @@ pub const Assistant = struct {
 
     pub fn new(self: *Assistant, keeping_pins: bool) void {
         self.stop();
+        self.draft.clearRetainingCapacity();
         self.clearLive();
         if (self.shot) |s| {
             self.gpa.free(s);
@@ -461,7 +470,7 @@ pub const Assistant = struct {
             return;
         }
         const t = b.activeTab();
-        if (!self.shareable(t)) return self.announce("AI works on web pages");
+        if (!self.shareable(t)) return self.announce("AI works on web pages and PDFs");
         @import("../web/tab_state.zig").snapshotWidth(t.?, 1024, shotDone, self.serial);
     }
 

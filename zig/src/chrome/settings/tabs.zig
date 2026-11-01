@@ -47,10 +47,14 @@ fn tabs(b: *Browser, c: *ui.Context, p: *const Palette) void {
     frame.rule(c, p);
     plate.line(c, p, "Tabs show", "Beside the title, and on a pinned square");
     var glyph: usize = @intFromEnum(prefs.glyph);
-    if (controls.segmented(c, p, &.{ "Letters", "Site icons" }, &glyph, false)) prefs.set("glyph", @enumFromInt(glyph));
+    if (controls.segmented(c, p, &.{ "Letters", "Site icons", "Icons only" }, &glyph, false)) prefs.set("glyph", @enumFromInt(glyph));
     ui.end(c);
     frame.rule(c, p);
     _ = frame.prefLine(b, c, p, "bookmarks_bar", "Show the bookmarks bar", "Your bookmarks in a row above the page, folders opening as menus. It folds away with the tabs");
+    frame.rule(c, p);
+    _ = frame.prefLine(b, c, p, "shows_tab_address", "Show the address on the tab you're on", "Shows the site's domain on the active tab, and the page title when you point at it");
+    frame.rule(c, p);
+    _ = frame.prefLine(b, c, p, "shows_cmd_numbers", "Show tab numbers while ⌘ is held", "Shows ⌘1–9 badges on tabs when you hold ⌘");
     frame.rule(c, p);
     _ = frame.prefLine(b, c, p, "shows_reading", "Show how far you've read", "The tab you're on fills with grey as you scroll down the page");
     frame.rule(c, p);
@@ -64,6 +68,19 @@ fn tabs(b: *Browser, c: *ui.Context, p: *const Palette) void {
             if (@abs(prefs.sleep_minutes - m) < 0.5) break i;
         } else 1;
         if (controls.segmented(c, p, &.{ "5 min", "10 min", "30 min", "1 hour" }, &idx, false)) prefs.set("sleep_minutes", mins[idx]);
+        ui.end(c);
+    }
+    frame.rule(c, p);
+    _ = frame.prefLine(b, c, p, "closes_tabs", "Close tabs you leave alone", "Closes ordinary tabs after they have been left untouched; pinned, grouped, named, split and private tabs are kept.");
+    if (disclose.begin(c, 0x6b65_612e_7462_7334, prefs.closes_tabs, motion.settle)) {
+        defer disclose.end(c);
+        frame.rule(c, p);
+        plate.line(c, p, "Close after", "How long an untouched tab stays open");
+        const hrs = [_]f64{ 12, 24, 168, 720 };
+        var cidx: usize = for (hrs, 0..) |h, i| {
+            if (@abs(prefs.close_hours - h) < 1) break i;
+        } else 1;
+        if (controls.segmented(c, p, &.{ "12 hours", "1 day", "1 week", "1 month" }, &cidx, false)) prefs.set("close_hours", hrs[cidx]);
         ui.end(c);
     }
     frame.rule(c, p);
@@ -84,4 +101,6 @@ fn tabs(b: *Browser, c: *ui.Context, p: *const Palette) void {
     frame.rule(c, p);
     if (frame.prefLine(b, c, p, "split_view", "Split View", "Show two tabs side by side. Drag a tab onto a page to pair them."))
         for (b.kea.browsers.items) |w| w.splitViewChanged(prefs.split_view);
+    frame.rule(c, p);
+    _ = frame.prefLine(b, c, p, "popups_in_windows", "Open sized pop-ups in small windows", "Pop-ups that ask for a size of their own open in a small window instead of a tab");
 }

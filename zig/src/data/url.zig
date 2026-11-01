@@ -153,6 +153,74 @@ pub fn lower(gpa: std.mem.Allocator, s: []const u8) ![]u8 {
     return std.ascii.allocLowerString(gpa, s);
 }
 
+pub const CleanMode = enum { all_trackers, click_ids_only };
+
+const signed_url_keys = [_][]const u8{
+    "x-amz-signature", "x-goog-signature", "signature", "sig", "se", "sv",
+    "expires",         "googleaccessid",   "policy",    "token", "hmac",
+};
+
+const click_tracker_keys = [_][]const u8{
+    "fbclid",     "gclid",      "dclid",   "gbraid",   "wbraid",  "msclkid",
+    "twclid",     "ttclid",     "yclid",   "wickedid", "rb_clickid", "s_kwcid",
+    "mc_eid",     "igshid",     "igsh",    "_hsenc",   "_hsmi",   "mkt_tok",
+    "vero_id",    "oly_enc_id", "oly_anon_id",
+};
+
+fn isTrackerParam(key: []const u8, val: []const u8, host: []const u8, mode: CleanMode) bool {
+    for (click_tracker_keys) |k| if (std.ascii.eqlIgnoreCase(key, k)) return true;
+    if (mode != .all_trackers) return false;
+    if (std.ascii.startsWithIgnoreCase(key, "utm_")) return true;
+    if (std.ascii.eqlIgnoreCase(key, "ref_src") or std.ascii.eqlIgnoreCase(key, "ref_url")) return true;
+    const media_host = std.ascii.endsWithIgnoreCase(host, "youtube.com") or
+        std.ascii.endsWithIgnoreCase(host, "youtu.be") or
+        std.ascii.endsWithIgnoreCase(host, "spotify.com");
+    if (media_host) {
+        if (std.ascii.eqlIgnoreCase(key, "si")) return true;
+        if (std.ascii.eqlIgnoreCase(key, "feature") and
+            (std.ascii.eqlIgnoreCase(val, "shared") or std.ascii.eqlIgnoreCase(val, "share"))) return true;
+    }
+    return false;
+}
+
+/// Strips tracking parameters according to `mode`, returning null when nothing
+/// changed or when the URL contains a signed query parameter.
+pub fn clean(gpa: std.mem.Allocator, raw: []const u8, mode: CleanMode) !?[]u8 {
+    var p = Parts.parse(raw) orelse return null;
+    if (!p.isWeb()) return null;
+    const query = p.query orelse return null;
+    if (query.len == 0) return null;
+
+    var scan = std.mem.splitScalar(u8, query, '&');
+    while (scan.next()) |pair| {
+        if (pair.len == 0) continue;
+        const eq = std.mem.indexOfScalar(u8, pair, '=');
+        const key = if (eq) |i| pair[0..i] else pair;
+        for (signed_url_keys) |sk| if (std.ascii.eqlIgnoreCase(key, sk)) return null;
+    }
+
+    const host = p.hostName() orelse "";
+    var kept: std.ArrayList(u8) = .empty;
+    defer kept.deinit(gpa);
+    var stripped = false;
+    var it = std.mem.splitScalar(u8, query, '&');
+    while (it.next()) |pair| {
+        if (pair.len == 0) continue;
+        const eq = std.mem.indexOfScalar(u8, pair, '=');
+        const key = if (eq) |i| pair[0..i] else pair;
+        const val = if (eq) |i| pair[i + 1 ..] else "";
+        if (isTrackerParam(key, val, host, mode)) {
+            stripped = true;
+            continue;
+        }
+        if (kept.items.len > 0) try kept.append(gpa, '&');
+        try kept.appendSlice(gpa, pair);
+    }
+    if (!stripped) return null;
+    p.query = if (kept.items.len > 0) kept.items else null;
+    return try p.string(gpa);
+}
+
 test "url parts split and join" {
     const gpa = std.testing.allocator;
     const p = Parts.parse("HTTPS://me:pw@Example.com:8080/a/b?x=1#top").?;
@@ -198,6 +266,24 @@ test "url encoded matches Foundation's absoluteString" {
     }
 }
 
+
+test "url clean strips trackers and preserves signed URLs" {
+    const gpa = std.testing.allocator;
+    const yt = (try clean(gpa, "https://www.youtube.com/watch?v=dQw4w9WgXcQ&si=abc123&utm_source=share&t=42s", .all_trackers)).?;
+    defer gpa.free(yt);
+    try std.testing.expectEqualStrings("https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=42s", yt);
+
+    const click_only = (try clean(gpa, "https://example.com/page?utm_source=news&fbclid=IwAR123&gclid=abc", .click_ids_only)).?;
+    defer gpa.free(click_only);
+    try std.testing.expectEqualStrings("https://example.com/page?utm_source=news", click_only);
+
+    const all_gone = (try clean(gpa, "https://example.com/page?utm_medium=email&fbclid=123", .all_trackers)).?;
+    defer gpa.free(all_gone);
+    try std.testing.expectEqualStrings("https://example.com/page", all_gone);
+
+    const signed = try clean(gpa, "https://s3.amazonaws.com/bucket/file.pdf?X-Amz-Signature=deadbeef&utm_source=test&fbclid=123", .all_trackers);
+    try std.testing.expect(signed == null);
+}
 test {
     std.testing.refAllDecls(@This());
     std.testing.refAllDecls(Parts);

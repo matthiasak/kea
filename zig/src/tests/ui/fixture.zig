@@ -50,6 +50,7 @@ pub const Fixture = struct {
         });
         // As the hosted window's surface: holes show the page behind.
         f.tester.ctx.transparent_root = true;
+        k.test_clipboard = &f.tester.clipboard;
         f.tester.frame();
     }
 

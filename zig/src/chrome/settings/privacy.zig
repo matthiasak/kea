@@ -56,6 +56,10 @@ fn sites(b: *Browser, c: *ui.Context, p: *const Palette) void {
         @import("../../web/config.zig").followSignInsAll(kea, prefs.keeps_sign_ins);
     }
     frame.rule(c, p);
+    _ = frame.prefLine(b, c, p, "strips_click_trackers", "Remove click trackers from links", "Strips fbclid, gclid, and similar click IDs before opening a page");
+    frame.rule(c, p);
+    _ = frame.prefLine(b, c, p, "gpc", "Tell sites not to sell or share your data", "Sends the Global Privacy Control signal with every page");
+    frame.rule(c, p);
     plate.line(c, p, "Camera, microphone, location and notifications", "What each site was allowed or refused, and the sites whose videos don't float");
     if (controls.pill(c, p, "Forget choices", .{}).clicked) forgetCaptureChoices(b);
     ui.end(c);

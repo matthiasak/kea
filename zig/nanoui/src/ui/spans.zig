@@ -28,12 +28,13 @@ pub fn spanStyle(base: types.TextStyle, s: types.Span) types.TextStyle {
 pub fn spansHash(spans: []const types.Span, start: usize, end: usize) u64 {
     var h = std.hash.Wyhash.init(0x5eed);
     for (spans) |s| {
-        if (!s.styled() or s.end <= start or s.start >= end) continue;
+        if (!s.styled() or s.end <= start or s.start > end) continue;
         const a: u32 = @intCast(@max(s.start, start) - start);
         const b: u32 = @intCast(@min(s.end, end) - start);
         h.update(std.mem.asBytes(&a));
         h.update(std.mem.asBytes(&b));
         h.update(&.{ if (s.weight) |w| @as(u8, @backingInt(w)) + 1 else 0, @intFromBool(s.italic), @intFromBool(s.mono) });
+        h.update(std.mem.asBytes(&s.pad_x));
     }
     return h.final();
 }

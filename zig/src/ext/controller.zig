@@ -124,6 +124,7 @@ pub const Extensions = struct {
         // running workers when it changes, and never starts extension ones again.
         objc.msg(void, views, "setApplicationNameForUserAgent:", .{objc.nsString(@import("../web/config.zig").userAgentName())});
         const prefs = objc.msg(objc.Object, views, "preferences", .{});
+        @import("../web/config.zig").inspector(prefs, true);
         // A test run sits behind other windows (WKInactiveSchedulingPolicyNone).
         if (testing and objc.msg(objc.BOOL, prefs, "respondsToSelector:", .{objc.sel("setInactiveSchedulingPolicy:")}))
             objc.msg(void, prefs, "setInactiveSchedulingPolicy:", .{@as(objc.NSInteger, 2)});

@@ -64,6 +64,9 @@ fn compare() !void {
     var t: ui.Tester = undefined;
     try t.init(gpa, .init(&s, Scene.view), .{ .width = 360, .height = 300 });
     defer t.deinit();
+    // The CPU renderer reads the pictures' atlas: kept in memory here.
+    t.text.images.deinit();
+    t.text.images = .{ .gpa = gpa };
     t.settle(1);
     t.renderer.syncImages(&t.text.images);
     const metal = try t.renderer.drawOffscreen(gpa, t.instances.items, t.text.texture(), t.size, t.scale, t.theme.background);
@@ -154,10 +157,10 @@ test "pictures written straight to the GPU draw as the CPU atlas's copy does" {
         var t: ui.Tester = undefined;
         try t.init(gpa, .init(&s, Scene.view), .{ .width = 360, .height = 300 });
         defer t.deinit();
-        if (k == 1) {
-            // Its pictures start over, going to the GPU only.
+        if (k == 0) {
+            // Its pictures start over, kept on the CPU and synced whole.
             t.text.images.deinit();
-            t.text.images = .{ .gpa = gpa, .sink = .{ .ctx = &t.renderer, .upload = @import("metal.zig").Renderer.uploadImage } };
+            t.text.images = .{ .gpa = gpa };
             t.frame();
         }
         t.settle(1);

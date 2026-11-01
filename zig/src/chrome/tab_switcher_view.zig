@@ -152,7 +152,7 @@ fn card(b: *Browser, c: *ui.Context, p: *const Palette, t: *Tab, l: Layout, card
     if (partner) |q| picture(b, c, p, q, side, l.preview);
     ui.end(c);
     ui.row(c, .{ .gap = 6, .width = .fill, .align_items = .center });
-    if (b.prefs.glyph == .icons and !t.isBlank()) {
+    if (b.prefs.glyph != .letters and !t.isBlank()) {
         var buf: [4]u8 = undefined;
         mark.mark(c, p, b.kea.favicons.icon(t.url()), t.monogram(&buf), 13, false);
     }
@@ -174,5 +174,5 @@ fn picture(b: *Browser, c: *ui.Context, p: *const Palette, t: *Tab, w: f32, h: f
         return;
     }
     var buf: [4]u8 = undefined;
-    mark.mark(c, p, if (b.prefs.glyph == .icons) b.kea.favicons.icon(t.url()) else null, t.monogram(&buf), 26, false);
+    mark.mark(c, p, if (b.prefs.glyph != .letters) b.kea.favicons.icon(t.url()) else null, t.monogram(&buf), 26, false);
 }

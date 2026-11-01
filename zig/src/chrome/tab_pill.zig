@@ -88,7 +88,7 @@ const no_press: ui.Interaction = .{ .id = 0, .rect = null, .hovered = false, .pr
 
 /// The site's icon when the window wears icons (`prefs.glyph == .icons`).
 fn icon(b: *Browser, tab: *const Tab) ?mark.Icon {
-    if (b.prefs.glyph != .icons) return null;
+    if (b.prefs.glyph == .letters) return null;
     return b.kea.favicons.icon(tab.url());
 }
 
@@ -141,7 +141,7 @@ pub fn pill(b: *Browser, c: *ui.Context, p: *const Palette, tab: *Tab, o: Option
     }
     // The ground: hover's grey, a pin's faint one; the live grey is the strip's.
     if (!o.live and o.place.chip == null) {
-        const rest: ?ui.Color = if (is_pin) p.wash.alpha(0.55) else null;
+        const rest: ?ui.Color = if (b.picked_tab == tab.id) p.wash else if (is_pin) p.wash.alpha(0.55) else null;
         c.node(i).style.background = if (rest) |r| r.mix(p.hover, h) else p.hover.alpha(h);
     }
     const base = p.muted.mix(p.ink.alpha(0.7), h);
@@ -156,7 +156,7 @@ pub fn pill(b: *Browser, c: *ui.Context, p: *const Palette, tab: *Tab, o: Option
     } else if (small) {
         d.close = compactContent(b, c, p, tab, o.live, it.hovered and o.interactive);
     } else {
-        d.close = titledContent(b, c, p, tab, colour, it.id, it.hovered and o.interactive, o.interactive);
+        d.close = titledContent(b, c, p, tab, o.live, colour, it.id, it.hovered and o.interactive, o.interactive);
     }
     return d;
 }
@@ -226,8 +226,8 @@ fn compactContent(b: *Browser, c: *ui.Context, p: *const Palette, tab: *Tab, liv
 }
 
 /// The title between its marks, the speaker, and the cross or the ring.
-fn titledContent(b: *Browser, c: *ui.Context, p: *const Palette, tab: *Tab, colour: ui.Color, pill_id: u64, hovered: bool, interactive: bool) bool {
-    if (b.prefs.glyph == .icons and !tab.isBlank()) {
+fn titledContent(b: *Browser, c: *ui.Context, p: *const Palette, tab: *Tab, live: bool, colour: ui.Color, pill_id: u64, hovered: bool, interactive: bool) bool {
+    if (b.prefs.glyph != .letters and !tab.isBlank()) {
         var buf: [4]u8 = undefined;
         mark.mark(c, p, icon(b, tab), tab.monogram(&buf), 15, false);
     }
@@ -242,12 +242,14 @@ fn titledContent(b: *Browser, c: *ui.Context, p: *const Palette, tab: *Tab, colo
     }
     const speaker = !tab.loading and (tab.noisy or tab.muted);
     const f_t = motion.quickTo(c, pill_id, 5, if (hovered and !speaker and !tab.loading) 1 else 0);
-    ui.text(c, tab.label(), .{ .size = 12.5, .color = colour, .truncate = .ellipsis, .fade = if (f_t > 0.001) .{ .clear = 22 * f_t, .ramp = 14 * f_t } else null });
+    @import("tab_title.zig").draw(b, c, p, tab, live, hovered, colour, 12.5, if (f_t > 0.001) .{ .clear = 22 * f_t, .ramp = 14 * f_t } else null);
     _ = c.leaf(.{ .grow = 1, .min_width = 2 }, .none, null);
 
     // The speaker at the end on its own, one place in under the pointer.
     ui.row(c, .{ .align_items = .center });
     defer ui.end(c);
+    @import("tab_title.zig").drawPopupBadge(b, c, p, tab, interactive);
+    @import("tab_title.zig").drawCmdBadge(b, c, p, tab);
     if (speaker) {
         ui.row(c, .{ .offset = .{ .x = -18 * motion.quickTo(c, pill_id, 2, if (hovered and speaker) 1 else 0) } });
         if (controls.speaker(c, p, tab.muted).clicked and interactive) tab.toggleMute();

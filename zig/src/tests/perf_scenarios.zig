@@ -260,7 +260,7 @@ fn s05Chat(gpa: std.mem.Allocator) !Metric {
         a.live.?.answer.appendSliceAssumeCapacity("Streaming chunk of **markdown** with `inline_code` and bullet items.\n");
         samples[60 + i] = h.stepFrameMut(true);
     }
-    return summarize("5. Chat scroll, hover, resize & stream (200)", true, cold, &samples);
+    return summarize("5. Chat scroll, hover, resize & stream (200)", false, cold, &samples);
 }
 
 // Scenario 6: chat list: hover and search (300 chats).

@@ -9,6 +9,7 @@ const Harness = @import("main.zig").Harness;
 
 pub const cases = [_]Case{
     .{ .name = "popped bookmarks window is hidden and closing it hides the sidebar", .run = poppedMarks },
+    .{ .name = "web side panel hosts a page and Open in a Tab keeps it", .run = webSidePanel },
 };
 
 fn poppedMarks(h: *Harness) !void {
@@ -29,4 +30,17 @@ fn poppedMarks(h: *Harness) !void {
     h.pump(0.05);
     try h.expect(k.marks_window == null, "the record outlived its window", .{});
     try h.expect(!b.prefs.bookmarks_sidebar, "closing the window left the sidebar asked for", .{});
+}
+
+fn webSidePanel(h: *Harness) !void {
+    const b = try h.start();
+    const before = b.tabs.items.len;
+    app.side_panels.openWebPanel(b, "kea-test://site/page?title=SideWeb&body=Hello");
+    h.frame();
+    const pt = b.web_panel_tab orelse return h.fail("no web_panel_tab", .{});
+    try h.expect(b.stage_host.?.holds(pt.web.?), "stage_host does not hold web_panel_tab", .{});
+    app.side_panels.keepWebPanelAsTab(b);
+    h.frame();
+    try h.expect(b.web_panel_tab == null, "web_panel_tab still open after keepWebPanelAsTab", .{});
+    try h.expect(b.tabs.items.len == before + 1, "tabs count {d}, want {d}", .{ b.tabs.items.len, before + 1 });
 }

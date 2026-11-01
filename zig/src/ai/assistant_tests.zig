@@ -92,7 +92,9 @@ test "chats store round-trip with the Assistant" {
     b.send("And its colour?", ai.ollama, "llama3");
     try t.expectEqual(@as(usize, 2), b.chat.turns.len);
     try t.expectEqualStrings("The provider answered 503.", b.chat.turns[1].failed.?);
-    try t.expect(std.mem.startsWith(u8, stub.asked.items[2], "What is a kea?|A parrot of the mountains.|And its colour?"));
+    // asked[2] was the follow-ups after the first answer.
+    try t.expectEqualStrings(@import("ubi_chat.zig").followups_system, stub.systems.items[2]);
+    try t.expect(std.mem.startsWith(u8, stub.asked.items[3], "What is a kea?|A parrot of the mountains.|And its colour?"));
 }
 
 test "a private tab's chat is never written" {
@@ -106,8 +108,10 @@ test "a private tab's chat is never written" {
     defer a.destroy();
     a.send("Secret?", ai.ollama, "m");
     try t.expectEqual(@as(usize, 1), a.chat.turns.len);
-    // Not named, not kept.
-    try t.expectEqual(@as(usize, 1), stub.next);
+    // Not named, not kept; only follow-ups asked after it, from the same AI on this Mac.
+    try t.expectEqual(@as(usize, 2), stub.next);
+    try t.expectEqualStrings(@import("ubi_chat.zig").followups_system, stub.systems.items[1]);
+    try t.expectEqual(@as(usize, 0), a.chat.title.len);
     try t.expectEqual(@as(usize, 0), rig.ai.chats.index.len);
     a.rename(a.chat.id, "Named");
     try t.expectEqualStrings("Named", a.chat.title);

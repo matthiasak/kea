@@ -77,9 +77,12 @@ test "sink uploads survive render after pre-sink pixels allocation" {
 
     var s: BudgetState = .{ .bytes = png };
     var t: ui.Tester = undefined;
-    // Frame 1 runs with sink == null, allocating im.pixels and decoding 8 of 9 icons.
     try t.init(gpa, ui.View.init(&s, BudgetState.view), .{ .width = 200, .height = 200, .scale = 2, .dark = true });
     defer t.deinit();
+    // Frame 1 runs with sink == null, allocating im.pixels and decoding 8 of 9 icons.
+    t.text.images.deinit();
+    t.text.images = .{ .gpa = gpa };
+    t.frame();
     // Sync the first 8 icons into images_texture, then attach the direct GPU sink for icon.8.
     t.renderer.syncImages(&t.text.images);
     t.text.images.sink = .{ .ctx = &t.renderer, .upload = @TypeOf(t.renderer).uploadImage };

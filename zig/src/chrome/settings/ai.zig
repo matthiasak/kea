@@ -71,6 +71,8 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette) void {
             frame.rule(c, p);
             _ = frame.prefLine(b, c, p, "ubi_tools", "Let Ubi Chat look through your tabs, history and bookmarks", "When a question needs it, Ubi Chat can search your open tabs, history and bookmarks or read an open tab");
             frame.rule(c, p);
+            _ = frame.prefLine(b, c, p, "ai_researcher", "Automatic Researcher Mode", "Automatically explain each section of papers, PDFs, code repositories, math/science pages, and posts");
+            frame.rule(c, p);
             _ = frame.prefLine(b, c, p, "ai_web_search", "Web search and SDK plugins", "Let Gemini, Anthropic and OpenRouter search the web and read URLs");
             frame.rule(c, p);
             _ = frame.prefLine(b, c, p, "ai_thinking", "Thinking", "Think before answering complex questions");

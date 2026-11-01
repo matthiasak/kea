@@ -116,6 +116,9 @@ static float blur_along_x(float x, float y, float sigma, float corner, float2 ha
 
 static float shadow_alpha(float2 p, float2 half_size, float corner, float sigma) {
     float c = abs(corner);
+    // Deep inside: every tap sees the full straight-edged box (no corner
+    // within 3 sigma), so the blur is ~1 (the 8 taps sum to ~.997).
+    if (all(abs(p) <= half_size - c - 3.0 * sigma)) return 1.0;
     float low = p.y - half_size.y;
     float high = p.y + half_size.y;
     float start = clamp(-3.0 * sigma, low, high);
@@ -355,10 +358,15 @@ static float4 shade(VOut in, Instance i, texture2d<float> atlas, texture2d<float
 
     if (i.kind == 2.0 || i.kind == 5.0) {
         float sigma = max(i.border_width, 0.25);
-        float a = shadow_alpha(p, half_size, r, sigma) * i.color.a;
         // Knocked out inside the box itself: `uv.xy` is where the box is
-        // from the shadow's rect (the shadow's offset, negated).
-        if (i.kind == 5.0) a *= clamp(corner_sdf(p - i.uv.xy, half_size, r) + 0.5, 0.0, 1.0);
+        // from the shadow's rect (the shadow's offset, negated). Covered
+        // pixels leave before the blur is computed.
+        float ko = 1.0;
+        if (i.kind == 5.0) {
+            ko = clamp(corner_sdf(p - i.uv.xy, half_size, r) + 0.5, 0.0, 1.0);
+            if (ko <= 0.0) return float4(0.0);
+        }
+        float a = shadow_alpha(p, half_size, r, sigma) * i.color.a * ko;
         if (a > 0.0) a = clamp(a + shadow_dither(in.pos.xy), 0.0, 1.0);
         return float4(i.color.rgb * a, a);
     }

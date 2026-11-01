@@ -1,8 +1,10 @@
 //! P5.6 page features, part A: Find on page counts and steps, Reading mode
-//! takes the article (and says when there is none), the ad blocker's rule
-//! list compiles, and Curtain's sheet hides what was taken off a site,
-//! before the page draws and on the page already up.
+//! takes the article (and says when there is none) or a Markdown page or
+//! twin, the ad blocker's rule list compiles, Curtain's sheet hides what was
+//! taken off a site, before the page draws and on the page already up, and
+//! the back and forward menus jump through a tab's history.
 const std = @import("std");
+const nanoui = @import("nanoui");
 const app = @import("kea");
 const Case = @import("main.zig").Case;
 const Harness = @import("main.zig").Harness;
@@ -11,9 +13,12 @@ const web = @import("web.zig");
 pub const cases = [_]Case{
     .{ .name = "find counts matches", .run = findCounts },
     .{ .name = "reader takes the article and says when there is none", .run = readerMode },
+    .{ .name = "reader renders markdown and markdown twin with fallback", .run = readerMarkdown },
     .{ .name = "reader applies theme and size", .run = readerTheme },
     .{ .name = "shield rule list compiles", .run = shieldCompiles },
     .{ .name = "curtain veil hides a fixture element", .run = veilHides },
+    .{ .name = "gpc and click tracker stripping", .run = gpcAndCleanUrl },
+    .{ .name = "back and forward menus jump history entries", .run = backForwardMenus },
 };
 
 fn answered(b: *app.Browser) bool {
@@ -73,6 +78,27 @@ fn readerMode(h: *Harness) !void {
     h.waitFor(b, nothingSaid, 5, "the announcement") catch return h.fail("announced '{s}'", .{toast(b)});
 }
 
+/// Reading mode on `url`'s page: its heading `title`, from `from`.
+fn readsAs(h: *Harness, b: *app.Browser, url: []const u8, title: []const u8, from: []const u8) !void {
+    const t = try web.open(h, b, url);
+    app.reader.toggle(t);
+    h.waitFor(t, reading, 10, url) catch return h.fail("{s} not read: announced '{s}'", .{ url, toast(b) });
+    try web.evalUntil(h, t, "document.querySelector('#kea-reader h1').textContent", title);
+    try web.evalUntil(h, t, "document.querySelector('#kea-reader .kea-from').textContent", from);
+}
+
+fn readerMarkdown(h: *Harness) !void {
+    const b = try h.start();
+    // A Markdown page, rendered rather than read as text.
+    try readsAs(h, b, "kea-test://site/doc.md", "Mountain Kea", "site · markdown");
+    try web.evalUntil(h, b.activeTab().?, "document.querySelector('#kea-reader code').textContent", "code");
+    try web.evalUntil(h, b.activeTab().?, "document.querySelector('#kea-reader strong').textContent", "bold");
+    // An HTML page naming its Markdown twin: the twin is what's read.
+    try readsAs(h, b, "kea-test://site/twin.html", "Mountain Kea", "site · markdown");
+    // A twin that isn't there: the page's own article.
+    try readsAs(h, b, "kea-test://site/broken-twin.html", "Broken Twin", "site");
+}
+
 fn readerTheme(h: *Harness) !void {
     const b = try h.start();
     b.prefs.set("reader_theme", .sepia);
@@ -82,6 +108,8 @@ fn readerTheme(h: *Harness) !void {
     try h.waitFor(t, reading, 5, "reading mode");
     try web.evalUntil(h, t, "getComputedStyle(document.body).backgroundColor", "rgb(244, 236, 216)");
     try web.evalUntil(h, t, "getComputedStyle(document.getElementById('kea-reader')).fontSize", "22px");
+    try web.evalUntil(h, t, "String(document.querySelectorAll('#kea-reader-theme button').length)", "4");
+    try web.evalUntil(h, t, "(document.querySelector('#kea-reader-theme button[data-theme=\"dark\"]').click(), document.documentElement.dataset.krTheme)", "dark");
 }
 
 fn compiledOrNot(k: *app.Kea) bool {
@@ -112,4 +140,52 @@ fn veilHides(h: *Harness) !void {
     app.curtain_js.undoHiding(b);
     try web.evalUntil(h, t, "getComputedStyle(document.getElementById('other')).display", "block");
     try h.expect(std.mem.eql(u8, toast(b), "Other is back"), "announced '{s}'", .{toast(b)});
+}
+
+fn gpcAndCleanUrl(h: *Harness) !void {
+    const b = try h.start();
+    var ubuf: [256]u8 = undefined;
+    const dirty = try std.fmt.bufPrint(&ubuf, "{s}/page?title=Clean&fbclid=abc123&gclid=xyz987&keep=1", .{h.http});
+    const t = try web.open(h, b, dirty);
+    try h.expect(std.mem.indexOf(u8, t.url(), "fbclid=") == null and std.mem.indexOf(u8, t.url(), "keep=1") != null, "url was '{s}'", .{t.url()});
+    try web.evalUntil(h, t, "String(navigator.globalPrivacyControl)", "true");
+}
+
+/// The menu's `label`, chosen; false when the menu hasn't it.
+pub fn fire(items: []const nanoui.MenuItem, label: []const u8) bool {
+    for (items) |it| if (!it.is_separator and std.mem.eql(u8, it.label, label)) {
+        const click = it.click orelse return false;
+        var unused: nanoui.menu.Item = undefined;
+        click.func(click.ctx, &unused);
+        return true;
+    };
+    return false;
+}
+
+const Titled = struct { t: *app.Tab, want: []const u8 };
+
+fn titled(c: Titled) bool {
+    return !c.t.loading and std.mem.eql(u8, c.t.title(), c.want);
+}
+
+fn backForwardMenus(h: *Harness) !void {
+    const b = try h.start();
+    var buf: [128]u8 = undefined;
+    const t = try web.open(h, b, try std.fmt.bufPrint(&buf, "{s}/back-a", .{h.http}));
+    for ([_][]const u8{ "/back-b", "/back-c" }) |path| {
+        t.go(try std.fmt.bufPrint(&buf, "{s}{s}", .{ h.http, path }));
+        var want: [32]u8 = undefined;
+        const title = try std.fmt.bufPrint(&want, "Local {s}", .{path});
+        h.waitFor(Titled{ .t = t, .want = title }, titled, 10, title) catch return h.fail("at '{s}' titled '{s}'", .{ t.url(), t.title() });
+    }
+    var arena = std.heap.ArenaAllocator.init(h.gpa);
+    defer arena.deinit();
+    // Nearest first: two steps back is the second.
+    const back = try app.tab_title.backMenu(arena.allocator(), b, 0);
+    try h.expect(back.len == 2 and std.mem.eql(u8, back[0].label, "Local /back-b") and std.mem.eql(u8, back[1].label, "Local /back-a"), "back menu has {d} items, first '{s}'", .{ back.len, if (back.len > 0) back[0].label else "" });
+    try h.expect(fire(back, "Local /back-a"), "no Local /back-a in the back menu", .{});
+    h.waitFor(Titled{ .t = t, .want = "Local /back-a" }, titled, 10, "two steps back") catch return h.fail("at '{s}' titled '{s}'", .{ t.url(), t.title() });
+    try h.expect(std.mem.endsWith(u8, t.url(), "/back-a"), "back at '{s}'", .{t.url()});
+    const fwd = try app.tab_title.backMenu(arena.allocator(), b, 1);
+    try h.expect(fwd.len == 2 and std.mem.eql(u8, fwd[0].label, "Local /back-b") and std.mem.eql(u8, fwd[1].label, "Local /back-c"), "forward menu has {d} items, first '{s}'", .{ fwd.len, if (fwd.len > 0) fwd[0].label else "" });
 }

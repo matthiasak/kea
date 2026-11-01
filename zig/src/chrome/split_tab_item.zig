@@ -101,7 +101,7 @@ pub fn stacked(b: *Browser, c: *ui.Context, p: *const Palette, left: *Tab, right
     defer c.end();
     if (interactive) c.addA11y(i, .group, "Split tabs", "", false, true);
     var d: Drawn = .{ .index = i, .it = no_press };
-    for ([_]*Tab{ left, right }) |t| take(&d, t, half(b, c, p, t, .{ .stacked = true, .narrow = false, .interactive = interactive, .height = height }));
+    for ([_]*Tab{ left, right }) |t| take(&d, t, half(b, c, p, t, .{ .stacked = true, .narrow = b.prefs.glyph == .icons_only, .interactive = interactive, .height = height }));
     return d;
 }
 
@@ -124,7 +124,8 @@ fn half(b: *Browser, c: *ui.Context, p: *const Palette, t: *Tab, o: HalfOptions)
         .width = if (o.stacked) .fill else .auto,
         .height = px(if (o.stacked) o.height else 28),
         .gap = if (o.stacked) 8 else 5,
-        .padding = .{ .left = if (o.stacked) 10 else 9, .right = if (o.stacked) 7 else 4 },
+        .padding = if (o.narrow) .{} else .{ .left = if (o.stacked) 10 else 9, .right = if (o.stacked) 7 else 4 },
+        .justify = if (o.narrow) .center else .start,
         .radius = 9,
         .align_items = .center,
         .clip = true,
@@ -156,7 +157,7 @@ fn half(b: *Browser, c: *ui.Context, p: *const Palette, t: *Tab, o: HalfOptions)
         return .{ .it = it, .hovering = hovering };
     }
     const size: f32 = if (o.stacked) 15 else 13;
-    if (b.prefs.glyph == .icons or o.narrow) {
+    if (b.prefs.glyph != .letters or o.narrow) {
         var buf: [4]u8 = undefined;
         const icon = if (b.kea.favicons.icon(t.url())) |ic| mark.Icon{ .key = ic.key, .png = ic.png } else null;
         mark.mark(c, p, icon, t.monogram(&buf), size, t.asleep());
@@ -164,7 +165,7 @@ fn half(b: *Browser, c: *ui.Context, p: *const Palette, t: *Tab, o: HalfOptions)
     if (t.shy) ui.icon(c, "eye.slash", .{ .size = 9, .color = p.muted });
     // The page is asking something, over its half of the stage.
     if (t.question() != null) _ = c.leaf(.{ .width = px(5), .height = px(5), .radius = 2.5, .background = p.muted }, .none, null);
-    if (!o.narrow) ui.text(c, title, .{ .size = if (o.stacked) 12.5 else 12, .color = if (focused) p.ink else p.muted.mix(p.ink, h), .truncate = .ellipsis });
+    if (!o.narrow) @import("tab_title.zig").draw(b, c, p, t, focused, hovering, if (focused) p.ink else p.muted.mix(p.ink, h), if (o.stacked) 12.5 else 12, null);
     _ = c.leaf(.{ .grow = 1, .min_width = 0 }, .none, null);
     const playing = !t.loading and (t.noisy or t.muted);
     if (playing) {

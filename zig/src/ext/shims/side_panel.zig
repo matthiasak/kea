@@ -96,7 +96,7 @@ pub fn openPanel(owner: *Extensions, context: objc.Object) void {
     const path = owner.answer.panel_path.get(id) orelse defaultPanel(a, context) orelse return;
     const url = offscreen.page(path, context) orelse return;
     const b = owner.browser() orelse return;
-    _ = b.open(objc.fromNSString(objc.msg(?objc.Object, url, "absoluteString", .{})), .{ .foreground = true });
+    @import("../../chrome/side_panels.zig").openWebPanel(b, objc.fromNSString(objc.msg(?objc.Object, url, "absoluteString", .{})));
 }
 
 /// Whether the button opens the side panel.

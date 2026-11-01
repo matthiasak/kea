@@ -165,9 +165,13 @@ test "a folded group hides its tabs from the shown row" {
     defer t.allocator.free(shown);
     try t.expectEqual(@as(usize, 2), shown.len);
     try t.expect(std.mem.indexOfScalar(*app.Tab, shown, one) == null);
-    // Going to a tab in a folded group opens it.
+    // Going to a tab in a folded group shows the active tab while keeping the group folded.
     b.select(one);
-    try t.expect(!b.tab_groups.items[0].collapsed);
+    try t.expect(b.tab_groups.items[0].collapsed);
+    const shown_one = try b.shownTabs(t.allocator);
+    defer t.allocator.free(shown_one);
+    try t.expect(std.mem.indexOfScalar(*app.Tab, shown_one, one) != null);
+    try t.expect(std.mem.indexOfScalar(*app.Tab, shown_one, two) == null);
     // The last tab gone, the group goes.
     b.moveToGroup(one, null);
     b.moveToGroup(two, null);
@@ -383,4 +387,30 @@ test "background tabs open in click order next to active tab and visit(url, true
     b.visit("https://bookmark.example/", true);
     try t.expectEqual(active.id, b.active_id);
     try t.expectEqualStrings("https://bookmark.example/", url(b.tabs.items[4]));
+}
+
+test "foldAllGroups, unfoldAllGroups, and pin selectIndex toggle-back" {
+    var f: Fixture = undefined;
+    try f.init(t.allocator, .{ .tabs = 2 });
+    defer f.deinit();
+    const b = f.browser;
+    b.prefs.set("uses_tab_groups", true);
+    const pin_tab = b.tabs.items[0];
+    pin_tab.own(&pin_tab.address, "https://pin.example/");
+    b.pin(pin_tab, false);
+    const one = b.tabs.items[1];
+    const two = b.tabs.items[2];
+    const gid = b.addTabGroup(one);
+    b.moveToGroup(two, gid);
+    b.foldAllGroups();
+    try t.expect(b.tab_groups.items[0].collapsed);
+    b.unfoldAllGroups();
+    try t.expect(!b.tab_groups.items[0].collapsed);
+
+    b.select(one);
+    try t.expectEqual(one.id, b.active_id);
+    b.selectIndex(0);
+    try t.expectEqual(pin_tab.id, b.active_id);
+    b.selectIndex(0);
+    try t.expectEqual(one.id, b.active_id);
 }

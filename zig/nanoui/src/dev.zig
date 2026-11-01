@@ -5,6 +5,8 @@
 //!   --nanoui-snapshot=PNG    render the first native UI window offscreen to PNG and exit
 //!   --nanoui-script=STEPS    with --nanoui-snapshot: steps run first (see ui.Tester.runScript)
 //!   --nanoui-dark            with --nanoui-snapshot: the dark appearance
+//!   --nanoui-dump=JSON       with --nanoui-snapshot: the frame's sizes, stats, web content
+//!                            rects, accessibility items and visible text as JSON (ui.Tester.dumpJson)
 //!   --nanoui-wait=SECONDS    with --nanoui-snapshot: run the event loop that long first,
 //!                            drawing the view as it goes, so processes, timers, replies and
 //!                            what the view asks for as it draws arrive
@@ -21,6 +23,7 @@ pub const Flags = struct {
     generate_dir: ?[]const u8 = null,
     snapshot: ?[]const u8 = null,
     script: []const u8 = "",
+    dump: ?[]const u8 = null,
     dark: bool = false,
     hidden: bool = false,
     eval: ?[]const u8 = null,
@@ -35,6 +38,7 @@ pub const Flags = struct {
             if (value(arg, "--nanoui-generate=")) |v| f.generate_dir = try arena.dupe(u8, v);
             if (value(arg, "--nanoui-snapshot=")) |v| f.snapshot = try arena.dupe(u8, v);
             if (value(arg, "--nanoui-script=")) |v| f.script = try arena.dupe(u8, v);
+            if (value(arg, "--nanoui-dump=")) |v| f.dump = try arena.dupe(u8, v);
             if (value(arg, "--nanoui-eval=")) |v| f.eval = try arena.dupe(u8, v);
             if (value(arg, "--nanoui-play=")) |v| f.play = try arena.dupe(u8, v);
             if (value(arg, "--nanoui-wait=")) |v| f.wait = std.fmt.parseFloat(f64, v) catch 0;
@@ -69,6 +73,7 @@ pub fn snapshot(app: anytype, path: []const u8) !void {
         try t.runScript(app.flags.script);
         try t.screenshot(path);
         std.debug.print("nanoui: wrote {s} ({d}x{d} points at {d}x)\n", .{ path, t.size.w, t.size.h, t.scale });
+        if (app.flags.dump) |p| try t.dump(p);
         return;
     }
     return error.NoNativeWindow;

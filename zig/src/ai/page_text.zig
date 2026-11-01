@@ -15,6 +15,7 @@ const config = @import("../web/config.zig");
 const Tab = @import("../web/tab.zig").Tab;
 const regex = @import("regex.zig");
 const sse = @import("client_sse.zig");
+const pdf_text = @import("pdf_text.zig");
 
 pub const script = @embedFile("js/page.js");
 
@@ -36,15 +37,16 @@ pub const Read = struct {
 /// A page read, on the reader's allocator; null when there was nothing to read.
 pub const Then = *const fn (ctx: *anyopaque, read: ?Read) void;
 
-const Job = struct { a: std.mem.Allocator, address: ?[]const u8, ctx: *anyopaque, then: Then };
+const Job = struct { wv: objc.Object, a: std.mem.Allocator, address: ?[]const u8, ctx: *anyopaque, then: Then };
 const EvalBlock = objc.Block(Job, &.{ ?objc.Object, ?objc.Object });
 
 /// The page on screen in `t`, read onto `a`; `then` always comes, on the
 /// main thread, even when the tab goes meanwhile.
 pub fn read(t: *Tab, a: std.mem.Allocator, ctx: *anyopaque, then: Then) void {
     const wv = t.web orelse return then(ctx, null);
+    if (pdf_text.readTab(t, a, t.address, ctx, then)) return;
     const j = std.heap.c_allocator.create(Job) catch return then(ctx, null);
-    j.* = .{ .a = a, .address = if (t.address) |s| a.dupe(u8, s) catch null else null, .ctx = ctx, .then = then };
+    j.* = .{ .wv = objc.retain(wv), .a = a, .address = if (t.address) |s| a.dupe(u8, s) catch null else null, .ctx = ctx, .then = then };
     const pool = objc.Pool.push();
     defer pool.pop();
     var block = EvalBlock.init(j, evaluated);
@@ -60,9 +62,27 @@ fn stringIn(dict: objc.Object, key: []const u8) ?[]const u8 {
 fn evaluated(j: *Job, value: ?objc.Object, _: ?objc.Object) void {
     const ctx = j.ctx;
     const then = j.then;
+    const wv = j.wv;
+    defer objc.release(wv);
+    // A PDF the address didn't give away: PDFKit reads it.
+    if (pdfTitle(value)) |title| {
+        const a = j.a;
+        const address = j.address;
+        std.heap.c_allocator.destroy(j);
+        return pdf_text.readWebViewPdf(wv, a, address, title, ctx, then);
+    }
     const r = found(j, value);
     std.heap.c_allocator.destroy(j);
     then(ctx, r);
+}
+
+fn pdfTitle(value: ?objc.Object) ?[]const u8 {
+    const dict = value orelse return null;
+    if (!objc.msg(objc.BOOL, dict, "isKindOfClass:", .{objc.class("NSDictionary")})) return null;
+    const v = objc.msg(?objc.Object, dict, "objectForKey:", .{objc.nsString("pdf")}) orelse return null;
+    if (!objc.msg(objc.BOOL, v, "respondsToSelector:", .{objc.sel("boolValue")}) or !objc.msg(objc.BOOL, v, "boolValue", .{})) return null;
+    const t = stringIn(dict, "title") orelse "";
+    return if (t.len > 0) t else "PDF";
 }
 
 fn found(j: *Job, value: ?objc.Object) ?Read {

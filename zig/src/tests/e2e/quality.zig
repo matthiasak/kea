@@ -14,7 +14,7 @@ const web = @import("web.zig");
 
 pub const cases = [_]Case{
     .{ .name = "open and close 20 tabs", .run = openClose20 },
-    .{ .name = "idle blank tab stays under 30 fps and 2% CPU", .run = idleBlank },
+    .{ .name = "idle blank tab stays under 2.5 fps and 2% CPU", .run = idleBlank },
 };
 
 fn openClose20(h: *Harness) !void {
@@ -47,6 +47,12 @@ fn idleBlank(h: *Harness) !void {
     const s = b.window.?.surface.?;
     // Past the opening: the field's appearance, the first layouts.
     h.pump(1);
+    // Its last springs still: what is measured is rest, not the arrival.
+    const still_by = ui.clock.now() + 3;
+    while (s.ctx.animating and ui.clock.now() < still_by) {
+        s.frame();
+        nanoui.runFor(1.0 / 60.0);
+    }
     // A hidden window's display link never fires, so its pace is kept here
     // as the link keeps it (`Surface.frame`): every refresh while something
     // moves, else after `frame_in`, else not until something asks.
@@ -78,7 +84,7 @@ fn idleBlank(h: *Harness) !void {
     const frames = s.ctx.frame - frames0;
     const fps = @as(f64, @floatFromInt(frames)) / spent;
     std.debug.print("     idle: {d} frames in {d:.2} s ({d:.1} fps), cpu {d:.1} ms ({d:.2}% of wall), {d:.1} ms of it in frames, {d} allocations in frames\n", .{ frames, spent, fps, cpu * 1000, cpu / spent * 100, @as(f64, @floatFromInt(in_frames)) / 1e6, allocs });
-    try h.expect(fps <= 31, "{d:.1} frames a second while idle", .{fps});
+    try h.expect(fps <= 2.5, "{d:.1} frames a second while idle", .{fps});
     try h.expect(cpu < 0.02 * spent, "{d:.1} ms of CPU in {d:.2} s idle", .{ cpu * 1000, spent });
     // An idle frame reuses what it had (tab_bar's pill lists were made and
     // freed every frame).

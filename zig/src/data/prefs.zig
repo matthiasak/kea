@@ -15,7 +15,7 @@ pub const SidePosition = enum { left, right };
 /// `Look` (Design.swift).
 pub const Look = enum { light, dark, system };
 /// `Glyph`.
-pub const Glyph = enum { letters, icons };
+pub const Glyph = enum { letters, icons, icons_only };
 
 pub const ReaderTheme = enum { auto, light, sepia, dark };
 pub const ReaderWidth = enum { narrow, medium, wide };
@@ -134,10 +134,22 @@ pub const keys = .{
     .ai_web_search = "ai.web_search",
     .ai_thinking = "ai.thinking",
     .ai_effort = "ai.effort",
+    .ai_researcher = "ai.researcher",
     .ai_provider = "ai.provider",
     .ai_server = "ai.server",
     .split_view = "splitView",
     .command_bar = "commandbar",
+    .strips_click_trackers = "privacy.strip_click_trackers",
+    .gpc = "privacy.gpc",
+    .shows_tab_address = "tabs.address",
+    .shows_cmd_numbers = "tabs.cmd_numbers",
+    .search_suggestions = "search.suggestions",
+    .double_esc_fullscreen = "video.double_esc",
+    .confirm_quit = "general.confirm_quit",
+    .popups_in_windows = "tabs.popups_window",
+    .closes_tabs = "tabs.close",
+    .close_hours = "tabs.close.hours",
+    .web_width = "web_panel.width",
 };
 
 pub const InitOptions = struct {
@@ -219,12 +231,24 @@ pub const Prefs = struct {
     ai_web_search: bool = true,
     ai_thinking: bool = true,
     ai_effort: AiEffort = .high,
+    ai_researcher: bool = true,
     ai_provider: ?[]u8 = null,
     ai_server: []u8 = &.{},
     /// `ai.models`: provider id → model, where it isn't the default.
     ai_models: std.StringArrayHashMapUnmanaged([]u8) = .empty,
     split_view: bool = false,
     command_bar: bool = false,
+    strips_click_trackers: bool = true,
+    gpc: bool = true,
+    shows_tab_address: bool = true,
+    shows_cmd_numbers: bool = false,
+    search_suggestions: bool = false,
+    double_esc_fullscreen: bool = false,
+    confirm_quit: bool = false,
+    popups_in_windows: bool = false,
+    closes_tabs: bool = false,
+    close_hours: f64 = 24,
+    web_width: f32 = chat_std,
 
     /// `Preferences.init`, in Swift's order.
     pub fn init(gpa: std.mem.Allocator, store: *const Store, opts: InitOptions) Prefs {
@@ -241,6 +265,7 @@ pub const Prefs = struct {
         p.side_width = std.math.clamp(p.side_width, side_min, side_max);
         p.chat_width = std.math.clamp(p.chat_width, chat_min, chat_max);
         p.marks_width = std.math.clamp(p.marks_width, side_min, side_max);
+        p.web_width = std.math.clamp(p.web_width, chat_min, chat_max);
         // A choice made while passkeys couldn't work is not a choice about them.
         const entitled = entitledToPasskeys();
         p.passkeys_possible = entitled;
@@ -346,6 +371,10 @@ pub const Prefs = struct {
     /// `showsPinRows`.
     pub fn showsPinRows(self: *const Prefs) bool {
         return self.lists_pins and self.sidebar;
+    }
+
+    pub fn effectiveSideWidth(self: *const Prefs) f32 {
+        return if (self.sidebar and self.glyph == .icons_only) 52 else self.side_width;
     }
 
     pub fn effectiveChatSide(self: *const Prefs) SidePosition {

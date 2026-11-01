@@ -57,6 +57,8 @@ const states = [_]State{
     .{ .name = "p11-import", .opts = .{ .sidebar = true, .tabs = 2 }, .setup = @import("snapshots_import.zig").sheet },
     .{ .name = "p13-extensions-settings", .opts = .{ .sidebar = true, .tabs = 2 }, .setup = @import("snapshots_ext.zig").settings },
     .{ .name = "p13-slot", .opts = .{ .sidebar = false, .tabs = 2 }, .setup = @import("snapshots_ext.zig").slot },
+    .{ .name = "p15-column-icons-only", .opts = .{ .sidebar = true, .tabs = 7 }, .setup = columnIconsOnly },
+    .{ .name = "p15-cmd-badges-warnings", .opts = .{ .sidebar = true, .tabs = 3 }, .setup = cmdBadgesWarnings },
 };
 
 /// Settings open on `page`.
@@ -158,6 +160,40 @@ fn columnPinsIcons(f: *Fixture) void {
         if (i == 0) t.setTitle("Tab 1");
     }
     pinsAndGroups(f);
+}
+
+/// Icons only: three squares, a group of two, and a pair of loose tabs.
+fn columnIconsOnly(f: *Fixture) void {
+    const b = f.browser;
+    b.prefs.set("split_view", true);
+    pinsAndGroups(f);
+    b.prefs.set("glyph", .icons_only);
+    var loose: [2]*@import("kea").Tab = undefined;
+    var n: usize = 0;
+    for (b.tabs.items) |t| if (t.pin == null and t.group_id == null and !t.isBlank() and n < 2) {
+        loose[n] = t;
+        n += 1;
+    };
+    if (n < 2) return;
+    b.select(loose[0]);
+    b.pair(loose[1], loose[0], false);
+}
+
+/// ⌘ held with numbers on: badges on every row, a plain-http tab's
+/// warning, and a blocked pop-up's sign.
+fn cmdBadgesWarnings(f: *Fixture) void {
+    const b = f.browser;
+    b.prefs.set("shows_cmd_numbers", true);
+    b.cmd_held = true;
+    const plain = b.tabs.items[1];
+    plain.own(&plain.address, "http://example.com/");
+    plain.setTitle("Example");
+    const popper = b.tabs.items[2];
+    popper.own(&popper.address, "https://www.example.org/");
+    popper.setTitle("Pop-ups");
+    const u = popper.gpa.dupe(u8, "https://ads.example.org/pop") catch return;
+    popper.blocked_popups.append(popper.gpa, u) catch popper.gpa.free(u);
+    b.select(b.tabs.items[3]);
 }
 
 /// The tab in front on an https page, its address edited: the card under it.

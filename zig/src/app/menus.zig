@@ -182,6 +182,9 @@ const Act = struct {
                 _ = b.open(url, .{ .foreground = true });
             },
             .ghost => |at| if (at < b.ghosts.items.len) b.reopenGhost(at),
+            .side_panel_url => |url| @import("../chrome/side_panels.zig").openWebPanel(b, url),
+            .side_panel_current => if (b.activeTab()) |t| if (!t.isBlank()) @import("../chrome/side_panels.zig").openWebPanel(b, t.url()),
+            .side_panel_close => @import("../chrome/side_panels.zig").closeWebPanel(b),
         }
         b.redraw();
     }
@@ -200,6 +203,9 @@ const What = union(enum) {
     substitution: Substitution,
     visit: []const u8,
     ghost: usize,
+    side_panel_url: []const u8,
+    side_panel_current,
+    side_panel_close,
 };
 
 /// A command from its menu: as `Command.run`, but the menu's own Settings…,
@@ -314,7 +320,10 @@ pub fn items(a: std.mem.Allocator, kea: *Kea, b: *Browser, top: Top) ![]const Me
             // ponytail: .undo and .redo route through the responder chain (NanoUIView.undo:/redo: on s.ctx when a nanoui text field has focus, falling back to WKWebView when a page has focus).
             for ([_]nanoui.menu.Role{ .undo, .redo }) |r| try m.role(r);
             try m.line();
-            for ([_]nanoui.menu.Role{ .cut, .copy, .paste }) |r| try m.role(r);
+            try m.role(.cut);
+            try m.role(.copy);
+            try m.command("tabs.copyCleanAddress", .{ .disabled = blank });
+            try m.role(.paste);
             try m.add(.{ .label = "Paste and Match Style", .accelerator = "Cmd+Alt+Shift+V", .selector = "pasteAsPlainText:" });
             try m.add(.{ .label = "Delete", .selector = "delete:" });
             try m.role(.select_all);
@@ -340,7 +349,7 @@ pub fn items(a: std.mem.Allocator, kea: *Kea, b: *Browser, top: Top) ![]const Me
                 (if (b.folded) "Show Tab Bar" else "Hide Tab Bar");
             try m.command("view.fold", .{ .label = fold_title });
             var wear: Build = .{ .a = a, .kea = kea, .b = b };
-            for ([_]Glyph{ .letters, .icons }, [_][]const u8{ "Letters", "Site icons" }) |g, t|
+            for ([_]Glyph{ .letters, .icons, .icons_only }, [_][]const u8{ "Letters", "Site icons", "Icons only" }) |g, t|
                 try wear.add(.{ .label = t, .kind = .radio, .checked = p.glyph == g, .click = try wear.act(.{ .glyph = g }) });
             try m.add(.{ .label = "Tabs Wear", .submenu = wear.out.items });
             try m.line();
@@ -355,6 +364,18 @@ pub fn items(a: std.mem.Allocator, kea: *Kea, b: *Browser, top: Top) ![]const Me
                 try m.command("view.summarize", .{ .disabled = blank });
                 try m.command("view.ask", .{});
             }
+            var sp_menu: Build = .{ .a = a, .kea = kea, .b = b };
+            const presets = [_]struct { []const u8, []const u8 }{
+                .{ "Claude", "https://claude.ai" },
+                .{ "ChatGPT", "https://chatgpt.com" },
+                .{ "Gemini", "https://gemini.google.com" },
+                .{ "Perplexity", "https://www.perplexity.ai" },
+            };
+            for (presets) |pr| try sp_menu.plain(pr[0], .{ .side_panel_url = pr[1] }, false);
+            try sp_menu.line();
+            try sp_menu.plain("Current Page", .side_panel_current, blank);
+            try sp_menu.plain("Close Side Panel", .side_panel_close, b.web_panel_tab == null);
+            try m.add(.{ .label = "Side Panel", .submenu = sp_menu.out.items });
             try m.line();
             try m.command("view.hide", .{});
             try m.command("view.hidden", .{});
@@ -366,6 +387,8 @@ pub fn items(a: std.mem.Allocator, kea: *Kea, b: *Browser, top: Top) ![]const Me
             try m.command("view.inspector", .{});
             try m.command("view.console", .{});
             try m.command("view.inspect", .{});
+            try m.command("view.source", .{});
+            try m.command("view.debugHud", .{ .checked = b.debug_hud.shown });
             try m.line();
             try m.role(.toggle_full_screen);
         },
@@ -446,6 +469,10 @@ fn tabs(m: *Build, active: ?*@import("../web/tab.zig").Tab, blank: bool) !void {
     try m.command("tabs.duplicate", .{ .disabled = blank });
     try m.command("tabs.toggleMute", .{ .label = if (active != null and active.?.muted) "Unmute Tab" else "Mute Tab", .disabled = active == null });
     try m.command("tabs.newGroup", .{ .disabled = if (active) |t| t.pin != null or t.shy else true });
+    if (b.prefs.uses_tab_groups) {
+        try m.command("tabs.foldGroups", .{ .disabled = b.tab_groups.items.len == 0 });
+        try m.command("tabs.unfoldGroups", .{ .disabled = b.tab_groups.items.len == 0 });
+    }
     if (b.prefs.uses_spaces) {
         var sp: Build = .{ .a = m.a, .kea = m.kea, .b = b };
         const can_move = if (active) |t| t.pin == null and !t.shy else false;
@@ -455,6 +482,7 @@ fn tabs(m: *Build, active: ?*@import("../web/tab.zig").Tab, blank: bool) !void {
         try m.add(.{ .label = "Move Tab to Space", .disabled = !can_move or sp.out.items.len == 0, .submenu = sp.out.items });
     }
     try m.command("tabs.copyAddress", .{ .disabled = blank });
+    try m.command("tabs.copyCleanAddress", .{ .disabled = blank });
     try m.command("tabs.copyMarkdown", .{ .disabled = blank });
     if (active) |t| try m.add(try send.menu(m.a, b, t));
     try m.command("tabs.pasteAndGo", .{});

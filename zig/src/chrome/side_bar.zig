@@ -65,12 +65,17 @@ pub const State = struct {
     pin_last: std.ArrayList(SeenPin) = .empty,
     pin_leaving: std.ArrayList(tab_leaving.Leaving) = .empty,
     pin_snaps: std.AutoHashMapUnmanaged(u64, tab_leaving.Snap) = .empty,
+    /// The ids of `seen`, `last` and `pin_seen`, for looking up (`tab_leaving.collect`).
+    seen_ids: tab_leaving.Ids = .empty,
+    last_ids: tab_leaving.Ids = .empty,
+    pin_seen_ids: tab_leaving.Ids = .empty,
     drawn: bool = false,
     space: Uuid = Uuid.first,
     last_size: ui.Size = .{},
     last_width: f32 = 0,
     rows_node: u64 = 0,
     panel_win_w: f32 = 0,
+    grid_bottom: f32 = 0,
     pub const SeenRow = struct { id: u64, x: f32, y: f32, w: f32 };
     pub const SeenPin = struct { id: u64, x: f32, y: f32, w: f32, h: f32 };
     pub const Pill = struct { item: u64, colour: ui.Color, radius: f32 };
@@ -99,6 +104,9 @@ pub const State = struct {
         var pit = st.pin_snaps.valueIterator();
         while (pit.next()) |s| s.deinit(gpa);
         st.pin_snaps.deinit(gpa);
+        st.seen_ids.deinit(gpa);
+        st.last_ids.deinit(gpa);
+        st.pin_seen_ids.deinit(gpa);
     }
 };
 
@@ -122,8 +130,9 @@ fn signature(b: *Browser, c: *ui.Context) u64 {
     }
     h.update(std.mem.asBytes(&b.active_id));
     h.update(&b.space_id.bytes);
-    h.update(&.{ @intFromBool(b.making_space), @intFromBool(b.prefs.uses_tab_groups), @intFromBool(b.prefs.showsPinRows()) });
-    h.update(std.mem.asBytes(&b.prefs.side_width));
+    h.update(&.{ @intFromBool(b.making_space), @intFromBool(b.prefs.uses_tab_groups), @intFromBool(b.prefs.showsPinRows()), @intFromEnum(b.prefs.glyph) });
+    const ew = b.prefs.effectiveSideWidth();
+    h.update(std.mem.asBytes(&ew));
     h.update(std.mem.asBytes(&c.size));
     return h.final();
 }
@@ -144,7 +153,7 @@ pub fn sideBar(b: *Browser, c: *ui.Context, p: *const Palette, on_frame: bool, x
         c.animating = true;
     }
 
-    const w = b.prefs.side_width;
+    const w = b.prefs.effectiveSideWidth();
     const on_right = b.prefs.side_position == .right;
     const reserve: f32 = if (fullScreen(b)) 0 else metrics.side_lights;
     const root = c.open(.{ .absolute = true, .offset = .{ .x = x }, .width = px(w), .height = .fill, .clip = true, .motion_blur = true }, "side-bar");
@@ -167,10 +176,16 @@ pub fn sideBar(b: *Browser, c: *ui.Context, p: *const Palette, on_frame: bool, x
     lights.dragStrip(b, c, .{ .grow = 1, .height = .fill }, .zoom);
     c.end();
 
+    const icons_only = b.prefs.glyph == .icons_only;
     _ = c.open(.{ .direction = .column, .width = .fill, .height = .fill, .padding = .{ .bottom = foot_height } }, null);
-    _ = c.open(.{ .direction = .row, .height = px(metrics.strip), .align_items = .center, .padding = .{ .left = 10 + reserve } }, null);
-    tab_bar.helm(b, c, p);
-    c.end();
+    if (icons_only) {
+        _ = c.open(.{ .height = px(metrics.strip) }, null);
+        c.end();
+    } else {
+        _ = c.open(.{ .direction = .row, .height = px(metrics.strip), .align_items = .center, .padding = .{ .left = 10 + reserve } }, null);
+        tab_bar.helm(b, c, p);
+        c.end();
+    }
     pages(b, c, p);
     c.end();
 
@@ -178,7 +193,7 @@ pub fn sideBar(b: *Browser, c: *ui.Context, p: *const Palette, on_frame: bool, x
 
     const inner_x: f32 = if (on_right) 0 else w - 1;
     if (!on_frame) _ = c.leaf(.{ .absolute = true, .offset = .{ .x = inner_x }, .width = px(1), .height = .fill, .background = p.hairline }, .none, null);
-    side_panels.edgeHandle(b, c, p, "side_width", metrics.side_min, metrics.side_max, metrics.side, !on_right, if (on_right) 0 else w - 9);
+    if (!icons_only) side_panels.edgeHandle(b, c, p, "side_width", metrics.side_min, metrics.side_max, metrics.side, !on_right, if (on_right) 0 else w - 9);
 }
 
 /// The column's ground: the window's beside the card, the page's otherwise,
@@ -197,7 +212,7 @@ fn rowsEnd(b: *Browser, c: *ui.Context) f32 {
     const squares = b.squarePins(arena) catch @panic("OOM");
     var pin_block: f32 = 0;
     if (squares.len > 0) {
-        const cells = pin_grid.pinCells(arena, squares.len, b.prefs.side_width) catch @panic("OOM");
+        const cells = pin_grid.pinCells(arena, squares.len, b.prefs.effectiveSideWidth()) catch @panic("OOM");
         pin_block = pin_grid.extent(cells).h + 10;
     }
     const listed: f32 = @floatFromInt((b.listedPins(arena) catch @panic("OOM")).len);
@@ -228,7 +243,7 @@ fn spaceAt(b: *Browser) usize {
 /// The page on screen, and while the fingers bring one in, the one they
 /// bring, a page's width away.
 fn pages(b: *Browser, c: *ui.Context, p: *const Palette) void {
-    const w = b.prefs.side_width;
+    const w = b.prefs.effectiveSideWidth();
     const shift = if (b.prefs.uses_spaces) b.swipe else 0;
     const at = spaceAt(b);
     _ = c.open(.{ .width = .fill, .grow = 1 }, "pages");
@@ -243,7 +258,7 @@ fn page(b: *Browser, c: *ui.Context, p: *const Palette, index: usize, shift: f32
     const id = c.open(.{
         .absolute = true,
         .offset = .{ .x = shift },
-        .width = px(b.prefs.side_width),
+        .width = px(b.prefs.effectiveSideWidth()),
         .height = .fill,
         .padding = .xy(10, 0),
         .direction = .column,
@@ -269,6 +284,7 @@ fn current(b: *Browser, c: *ui.Context, p: *const Palette, page_index: u32) void
     st.space = b.space_id;
     std.mem.swap(std.ArrayList(State.SeenRow), &st.last, &st.seen);
     st.seen.clearRetainingCapacity();
+    tab_leaving.collect(&st.last_ids, b.gpa, st.last.items);
     const arena = c.alloc();
     livePill(b, c, page_index);
     const squares = b.squarePins(arena) catch @panic("OOM");
@@ -277,9 +293,10 @@ fn current(b: *Browser, c: *ui.Context, p: *const Palette, page_index: u32) void
         _ = c.open(.{ .padding = .{ .bottom = 10 } }, null);
         pin_grid.grid(b, c, p, squares, b.active_id, true);
         c.end();
-        const cells = pin_grid.pinCells(arena, squares.len, b.prefs.side_width) catch @panic("OOM");
+        const cells = pin_grid.pinCells(arena, squares.len, b.prefs.effectiveSideWidth()) catch @panic("OOM");
         pin_block = if (squares.len > 0) pin_grid.extent(cells).h + 10 else 0;
     }
+    st.grid_bottom = (if (c.rects.get(c.node(page_index).id)) |pr| pr.y else metrics.strip) + pin_block;
     const room = @max(0, c.size.h - metrics.strip - foot_height - pin_block);
     const scroller = c.open(.{ .scroll = true, .direction = .column, .width = .fill, .max_height = room, .scroll_bar = false }, "rows-scroll");
     const rows_box = c.open(.{ .direction = .column, .width = .fill }, "rows");
@@ -293,8 +310,9 @@ fn current(b: *Browser, c: *ui.Context, p: *const Palette, page_index: u32) void
     _ = c.open(.{ .direction = .column, .width = .fill, .gap = side_rows.gap }, "loose");
     side_rows.loose(b, c, p, listed.len);
     c.end();
+    tab_leaving.collect(&st.seen_ids, b.gpa, st.seen.items);
     if (fresh) {
-        tab_leaving.clearIn(&st.leaving, &st.snaps, st.seen.items, b.gpa);
+        tab_leaving.clearIn(&st.leaving, &st.snaps, &st.seen_ids, b.gpa);
     } else {
         leaveRows(b, c, p);
     }
@@ -312,17 +330,14 @@ pub fn rowId(id: u64) u64 {
 fn leaveRows(b: *Browser, c: *ui.Context, p: *const Palette) void {
     const st = &b.column;
     for (st.last.items) |s| {
-        const kept = for (st.seen.items) |cur| {
-            if (cur.id == s.id) break true;
-        } else false;
-        if (kept) continue;
+        if (st.seen_ids.contains(s.id)) continue;
         const kv = st.snaps.fetchRemove(s.id) orelse continue;
         st.leaving.append(b.gpa, .{ .id = s.id, .x = s.x, .y = s.y, .w = s.w, .snap = kv.value }) catch {
             var gone = kv.value;
             gone.deinit(b.gpa);
         };
     }
-    tab_leaving.pruneIn(&st.snaps, st.seen.items, b.gpa);
+    tab_leaving.pruneIn(&st.snaps, &st.seen_ids, b.gpa);
     var k: usize = 0;
     for (st.leaving.items) |*l| {
         const v = presence.presence(c, rowId(l.id), false, motion.settle, null) orelse {
@@ -341,9 +356,10 @@ fn leaveRows(b: *Browser, c: *ui.Context, p: *const Palette) void {
 /// there on `Motion.glide`.
 fn livePill(b: *Browser, c: *ui.Context, page_index: u32) void {
     const st = &b.column;
-    const resized = st.drawn and (st.last_size.w != c.size.w or st.last_size.h != c.size.h or st.last_width != b.prefs.side_width or b.edge_drag != null);
+    const ew = b.prefs.effectiveSideWidth();
+    const resized = st.drawn and (st.last_size.w != c.size.w or st.last_size.h != c.size.h or st.last_width != ew or b.edge_drag != null);
     st.last_size = c.size;
-    st.last_width = b.prefs.side_width;
+    st.last_width = ew;
     const pill = st.pill orelse return;
     const page_id = c.node(page_index).id;
     const at = c.rects.get(pill.item) orelse return;
@@ -438,7 +454,7 @@ fn foot(b: *Browser, c: *ui.Context, p: *const Palette) void {
     // Every door is 26 points, with 2 between them: the puzzle and bookmarks stay.
     const door: f32 = 26 + 2;
     const kept: f32 = 2 + @as(f32, if (b.prefs.uses_spaces) 1 else 0) + @as(f32, if (fetching.shows(b)) 1 else 0);
-    const free = b.prefs.side_width - 2 * 10 + 2 - kept * door;
+    const free = b.prefs.effectiveSideWidth() - 2 * 10 + 2 - kept * door;
     @import("../ext/slot_view.zig").slot(b, c, p, @as(usize, @intFromFloat(@max(0, @floor(free / door)))));
     @import("bookmarks/door.zig").door(b, c, p, .trailing);
     // Only while a download is running, and a moment after.

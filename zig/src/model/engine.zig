@@ -54,6 +54,21 @@ pub const Engine = enum {
         if (self != .custom) return gpa.dupe(u8, self.title());
         return try bareHost(gpa, custom) orelse gpa.dupe(u8, standard.title());
     }
+
+    pub fn suggestUrl(self: Engine, gpa: std.mem.Allocator, query: []const u8) !?[]u8 {
+        const tmpl: []const u8 = switch (self) {
+            .google => "https://suggestqueries.google.com/complete/search?client=firefox&q=%s",
+            .duckduckgo => "https://duckduckgo.com/ac/?type=list&q=%s",
+            .bing => "https://api.bing.com/osjson.aspx?query=%s",
+            .ecosia => "https://ac.ecosia.org/autocomplete?type=list&q=%s",
+            .startpage => "https://www.startpage.com/osuggestions?q=%s",
+            .kagi => "https://kagi.com/api/autosuggest?q=%s",
+            .brave => "https://search.brave.com/api/suggest?q=%s",
+            .qwant => "https://api.qwant.com/v3/suggest?q=%s",
+            .custom => return null,
+        };
+        return url(gpa, query, tmpl);
+    }
 };
 
 fn trim(s: []const u8) []const u8 {

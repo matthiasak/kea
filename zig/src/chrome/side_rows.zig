@@ -52,7 +52,14 @@ pub const Section = union(enum) {
 pub fn section(b: *Browser, c: *ui.Context, p: *const Palette, tabs: []const *Tab, which: Section, interactive: bool, live: u64) void {
     const step = row_height + gap;
     // A group's rows are set in under its heading, grounds and all.
-    if (which == .group) _ = c.open(.{ .direction = .column, .width = .fill, .gap = gap, .padding = .{ .left = group_indent } }, null);
+    const grp_pad: f32 = if (b.prefs.glyph == .icons_only) 0 else group_indent;
+    if (which == .group) {
+        _ = c.open(.{ .direction = .column, .width = .fill, .gap = gap, .padding = .{ .left = grp_pad } }, null);
+        if (b.prefs.glyph == .icons_only and tabs.len > 0) {
+            const bh = @max(0, @as(f32, @floatFromInt(tabs.len)) * step - gap - 6);
+            _ = c.leaf(.{ .absolute = true, .offset = .{ .x = -5, .y = 3 }, .width = px(2), .height = px(bh), .radius = 1, .background = p.hairline }, .none, null);
+        }
+    }
     defer if (which == .group) c.end();
     var held: ?struct { t: *Tab, slot: u32, shift: f32 } = null;
     const st = &b.column;
@@ -66,9 +73,7 @@ pub fn section(b: *Browser, c: *ui.Context, p: *const Palette, tabs: []const *Ta
         const row = item.row;
         if (!interactive) continue;
         const rid = side_bar.rowId(t.id);
-        const known = for (st.last.items) |s| {
-            if (s.id == t.id) break true;
-        } else false;
+        const known = st.last_ids.contains(t.id);
         const v = presence.presenceFrom(c, rid, if (!fresh and !known) 0 else 1, true, if (which == .group) snappy else motion.bounce, null) orelse 1;
         const r = tab_drag.carried(b, c, row.it, t, index, tabs.len, step, true);
         const node = c.node(row.index);
@@ -95,7 +100,7 @@ pub fn section(b: *Browser, c: *ui.Context, p: *const Palette, tabs: []const *Ta
             const ry = if (rows_box) |rb| rr.y - rb.y else rr.y;
             st.seen.append(b.gpa, .{ .id = t.id, .x = rx, .y = ry, .w = rr.w }) catch {};
         } else {
-            st.seen.append(b.gpa, .{ .id = t.id, .x = if (which == .group) group_indent else 0, .y = 0, .w = b.prefs.side_width - 20 - (if (which == .group) group_indent else 0) }) catch {};
+            st.seen.append(b.gpa, .{ .id = t.id, .x = if (which == .group) grp_pad else 0, .y = 0, .w = b.prefs.effectiveSideWidth() - 20 - (if (which == .group) grp_pad else 0) }) catch {};
         }
         if (r.target) |to| move(b, t, which, to);
         if (r.dropped) |at| dropOnGroup(b, t, at);
@@ -145,6 +150,14 @@ fn move(b: *Browser, t: *Tab, which: Section, to: usize) void {
 
 /// `SideBar.drop`: let go over a group's heading, a loose tab joins it.
 fn dropOnGroup(b: *Browser, t: *Tab, at: ui.Point) void {
+    if (t.pin == null and b.splitFor(t) == null and !t.isBlank() and at.y < b.column.grid_bottom) {
+        b.pin(t, false);
+        return;
+    }
+    if (t.pin != null and t.listed and at.y > b.column.grid_bottom + 36) {
+        b.unpin(t);
+        return;
+    }
     if (!b.prefs.uses_tab_groups or t.pin != null) return;
     for (b.column.heading_rects.items) |h| if (h.rect.contains(at)) return b.moveToGroup(t, h.id);
 }
@@ -155,6 +168,10 @@ fn act(b: *Browser, c: *ui.Context, t: *Tab, live: bool, it: ui.Interaction, clo
     if (close.clicked or it.middle_clicked) return b.close(t);
     if (it.right_clicked) return tab_menu.popup(b, c, t);
     if (!it.clicked) return;
+    if (b.pickForSplit(t, (c.input.cmd or c.input.shift) and !live)) {
+        c.changed = true;
+        return;
+    }
     if (live) b.beginTabEdit(t) else b.select(t);
 }
 
@@ -196,6 +213,8 @@ pub fn sideRow(b: *Browser, c: *ui.Context, p: *const Palette, t: *Tab, live: bo
     if (live and interactive) st.live(it.id, p.side_wash, 9);
     c.node(i).style.background = if (live)
         (if (interactive and st.pill_drawn) null else p.side_wash)
+    else if (b.picked_tab == t.id)
+        p.side_wash.alpha(0.65)
     else
         p.side_hover.alpha(h);
     if (live and b.prefs.shows_reading) {
@@ -207,11 +226,23 @@ pub fn sideRow(b: *Browser, c: *ui.Context, p: *const Palette, t: *Tab, live: bo
     const base = p.muted.mix(p.ink.alpha(0.7), h);
     const lv = std.math.clamp(motion.liveTo(c, it.id, 2, if (live) 1 else 0), 0, 1);
     const colour = base.mix(p.ink, lv);
+    const icons_only = b.prefs.glyph == .icons_only;
     if (editing) {
         tab_address.field(b, c, p, t);
         c.node(i).style.offset.x += tab_address.shake(b, c);
+    } else if (icons_only) {
+        c.node(i).style.justify = .center;
+        c.node(i).style.padding = .{};
+        if (b.prefs.shows_cmd_numbers and b.cmd_held) {
+            @import("tab_title.zig").drawCmdBadge(b, c, p, t);
+        } else if (t.loading) {
+            ring.ring(c, 11);
+        } else {
+            var buf: [4]u8 = undefined;
+            mark.mark(c, p, iconOf(b, t), t.monogram(&buf), 16, t.asleep());
+        }
     } else {
-        if (b.prefs.glyph == .icons and !t.isBlank()) {
+        if (b.prefs.glyph != .letters and !t.isBlank()) {
             var buf: [4]u8 = undefined;
             mark.mark(c, p, iconOf(b, t), t.monogram(&buf), 15, false);
         }
@@ -225,14 +256,16 @@ pub fn sideRow(b: *Browser, c: *ui.Context, p: *const Palette, t: *Tab, live: bo
         // The title keeps its length under the pointer and fades out beneath
         // the cross, rather than being cut shorter.
         const f_t = motion.quickTo(c, it.id, 4, if (hovering and !status) 1 else 0);
-        ui.text(c, label, .{ .size = 12.5, .color = colour, .truncate = .ellipsis, .fade = if (f_t > 0.001) .{ .clear = 26 * f_t, .ramp = 16 * f_t } else null });
+        @import("tab_title.zig").draw(b, c, p, t, live, hovering, colour, 12.5, if (f_t > 0.001) .{ .clear = 26 * f_t, .ramp = 16 * f_t } else null);
     }
 
     var close: ui.Interaction = .{ .id = 0, .rect = null, .hovered = false, .pressed = false, .clicked = false, .focused = false };
-    if (status) {
+    if (!editing and !icons_only and (status or t.blocked_popups.items.len > 0 or (b.prefs.shows_cmd_numbers and b.cmd_held))) {
         ui.spacer(c);
-        // The cross takes this place while the pointer is here; the speaker
-        // moves one place in, clear of the cross's reach.
+        @import("tab_title.zig").drawPopupBadge(b, c, p, t, interactive);
+        @import("tab_title.zig").drawCmdBadge(b, c, p, t);
+    }
+    if (status and !icons_only) {
         const slot = c.open(.{
             .width = px(15),
             .height = px(15),

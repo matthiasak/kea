@@ -72,6 +72,7 @@ pub const StageHost = struct {
     stage_view: objc.Object,
     slots: std.ArrayList(PaneSlot) = .empty,
     peek_slot: PaneSlot = .{},
+    web_panel_slot: PaneSlot = .{},
     card_radius: f32 = 10,
     dirty: bool = false,
     last_holes: [8]ui.Rect = undefined,
@@ -160,12 +161,13 @@ pub const StageHost = struct {
             if (slot.webview == webview) slot.* = .{};
         }
         if (self.peek_slot.webview == webview) self.peek_slot = .{};
+        if (self.web_panel_slot.webview == webview) self.web_panel_slot = .{};
         self.detach(webview);
     }
 
     pub fn holds(self: *const StageHost, webview: objc.Object) bool {
         for (self.slots.items) |slot| if (slot.webview == webview) return true;
-        return self.peek_slot.webview == webview;
+        return self.peek_slot.webview == webview or self.web_panel_slot.webview == webview;
     }
 
     pub fn setPeek(self: *StageHost, webview: ?objc.Object) void {
@@ -180,6 +182,21 @@ pub const StageHost = struct {
             objc.msg(void, wv, "setHidden:", .{objc.NO});
             objc.msg(void, wv, "setAlphaValue:", .{@as(f64, init_alpha)});
             applyCornerRadius(wv, 12);
+        }
+    }
+
+    pub fn setWebPanel(self: *StageHost, webview: ?objc.Object) void {
+        if (self.web_panel_slot.webview == webview) return;
+        if (self.web_panel_slot.webview) |old| self.detach(old);
+        const unpaid = if (webview) |wv| page_view.unpainted(wv) else false;
+        const init_alpha: f32 = if (unpaid) 0 else 1;
+        self.web_panel_slot = .{ .webview = webview, .applied_alpha = init_alpha, .held = unpaid };
+        self.dirty = true;
+        if (webview) |wv| {
+            objc.msg(void, self.stage_view, "addSubview:", .{wv});
+            objc.msg(void, wv, "setHidden:", .{objc.NO});
+            objc.msg(void, wv, "setAlphaValue:", .{@as(f64, init_alpha)});
+            applyCornerRadius(wv, 0);
         }
     }
 
@@ -215,8 +232,13 @@ pub const StageHost = struct {
             if (slot.place(wv, holes, i, s.reduce_motion)) changed = true;
         }
         // The peek's hole is drawn after the panes'.
+        var next_hole = n;
         if (self.peek_slot.webview) |wv| {
-            if (self.peek_slot.place(wv, if (holes.len > n) holes else &.{}, n, s.reduce_motion)) changed = true;
+            if (self.peek_slot.place(wv, if (holes.len > next_hole) holes else &.{}, next_hole, s.reduce_motion)) changed = true;
+            next_hole += 1;
+        }
+        if (self.web_panel_slot.webview) |wv| {
+            if (self.web_panel_slot.place(wv, if (holes.len > next_hole) holes else &.{}, next_hole, s.reduce_motion)) changed = true;
         }
         return changed;
     }

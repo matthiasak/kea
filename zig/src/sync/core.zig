@@ -86,6 +86,15 @@ pub fn open(gpa: std.mem.Allocator, data: []const u8, k: Key) error{ Damaged, Ou
     return zlibData(gpa, plain, "decompressedDataUsingAlgorithm:error:");
 }
 
+/// Raw deflate, as `seal` packs it, on `gpa`.
+pub fn compress(gpa: std.mem.Allocator, bytes: []const u8) error{ Damaged, OutOfMemory }![]u8 {
+    return zlibData(gpa, bytes, "compressedDataUsingAlgorithm:error:");
+}
+
+pub fn decompress(gpa: std.mem.Allocator, bytes: []const u8) error{ Damaged, OutOfMemory }![]u8 {
+    return zlibData(gpa, bytes, "decompressedDataUsingAlgorithm:error:");
+}
+
 fn zlibData(gpa: std.mem.Allocator, bytes: []const u8, comptime selector: [:0]const u8) error{ Damaged, OutOfMemory }![]u8 {
     const pool = objc.Pool.push();
     defer pool.pop();

@@ -58,6 +58,8 @@ pub const Content = union(enum) {
         /// Colored byte ranges, sorted; the rest is drawn in `color`.
         spans: []const types.Span = &.{},
         cut_lay: ?text.Layout = null,
+        /// Copied in place of `str`'s bytes when selected.
+        copy: ?types.CopyMap = null,
     };
 };
 
@@ -164,8 +166,8 @@ pub const Context = struct {
     stack: std.ArrayList(u32) = .empty,
 
     transparent_root: bool = false,
-    stage_rects: [4]types.Rect = @splat(.{}),
-    stage_nodes: [4]u32 = @splat(none),
+    stage_rects: [6]types.Rect = @splat(.{}),
+    stage_nodes: [6]u32 = @splat(none),
     stage_count: usize = 0,
     a11y_items: std.ArrayList(A11yItem) = .empty,
     // Kept across frames.

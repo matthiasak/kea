@@ -28,6 +28,8 @@ const link_script = @embedFile("js/hovered_link.js");
 /// cross exactly 1, so the sound isn't torn down every few seconds.
 const live_rate_script = @embedFile("js/live_rate.js");
 /// AutoScroll.swift's `script`, and `off` for a page already up.
+const youtube_shield_script = @embedFile("js/youtube_shield.js");
+const gpc_script = "Object.defineProperty(Navigator.prototype, 'globalPrivacyControl', { get: () => true, configurable: true, enumerable: true });";
 pub const auto_scroll_script = @embedFile("js/auto_scroll.js");
 pub const auto_scroll_off = "window.__keaAutoScrollOff = true;";
 
@@ -46,6 +48,7 @@ pub fn install(t: *Tab) void {
     const ucc = controller(wv);
     config.release(ucc);
     for (handled) |name| objc.msg(void, ucc, "addScriptMessageHandler:contentWorld:name:", .{ delegate, config.world(), objc.nsString(name) });
+    objc.msg(void, ucc, "addScriptMessageHandler:contentWorld:name:", .{ delegate, config.pageWorld(), objc.nsString("keaReader") });
     favicons.install(ucc, delegate);
     if (t.kea.ext != null) objc.msg(void, ucc, "addScriptMessageHandler:contentWorld:name:", .{ delegate, config.world(), objc.nsString(store_relay.name) });
     // Passkeys answer the page (Tab.swift 644): a handler with a reply.
@@ -78,6 +81,8 @@ const Cached = struct {
     var passkeys_on: ?objc.Object = null;
     var passkeys_off: ?objc.Object = null;
     var passkeys_bridge: ?objc.Object = null;
+    var gpc: ?objc.Object = null;
+    var youtube_shield: ?objc.Object = null;
 };
 
 /// `WKUserInjectionTimeAtDocumentStart` = 0, `AtDocumentEnd` = 1.
@@ -113,7 +118,7 @@ pub fn arm(t: *Tab, css: []const u8) void {
     const prefs = &t.kea.prefs;
     var h = std.hash.Wyhash.init(0);
     h.update(t.veils);
-    h.update(&.{ @intFromBool(prefs.auto_scroll), @intFromBool(prefs.shows_links), @intFromBool(prefs.passkeys) });
+    h.update(&.{ @intFromBool(prefs.auto_scroll), @intFromBool(prefs.shows_links), @intFromBool(prefs.passkeys), @intFromBool(t.shy or prefs.gpc), @intFromBool(prefs.shielded) });
     const ext_gen: u64 = if (t.kea.ext) |x| (if (x.contexts.count() > 0) @import("../ext/external.zig").generation else 0) else 0;
     h.update(std.mem.asBytes(&ext_gen));
     const key = h.final() | 1;
@@ -143,6 +148,8 @@ pub fn arm(t: *Tab, css: []const u8) void {
     if (t.kea.ext != null) addCached(ucc, &Cached.store, store_relay.script, false, true, w);
     // Every frame, in the page's own world and ahead of its scripts.
     addCached(ucc, &Cached.live_rate, live_rate_script, true, false, pw);
+    if (t.shy or prefs.gpc) addCached(ucc, &Cached.gpc, gpc_script, true, false, pw);
+    if (prefs.shielded) addCached(ucc, &Cached.youtube_shield, youtube_shield_script, true, false, pw);
     if (external) |e| add(ucc, e, true, false, pw);
     // Passkeys stand in the page's own world, replacing its functions, and
     // reach Kea through a bridge in Kea's, off or on (Tab.swift 799-814).
@@ -235,6 +242,10 @@ pub fn received(t: *Tab, message: objc.Object) void {
         // `HoveredLink`: only from this tab's own page.
         if (objc.msg(?objc.Object, message, "webView", .{}) != t.web or !isKind(body, "NSString")) return;
         @import("../chrome/link_bubble.zig").relayed(t, objc.fromNSString(body));
+        return;
+    }
+    if (std.mem.eql(u8, name, "keaReader")) {
+        if (isKind(body, "NSString")) @import("reader.zig").handleMessage(t, objc.fromNSString(body));
         return;
     }
     if (!isKind(body, "NSDictionary")) return;

@@ -69,6 +69,8 @@ pub const Tester = struct {
             .theme = opts.theme orelse if (opts.dark) Theme.dark_theme else Theme.light,
         };
         t.text.setScale(opts.scale);
+        // Pictures go straight to the GPU, as a window's do: no copy of their atlas in memory.
+        if (!portable) t.text.images.sink = .{ .ctx = &t.renderer, .upload = metal.Renderer.uploadImage };
         t.ctx = .init(gpa, &t.text);
         t.ctx.clipboard = .{ .ctx = t, .write = clipWrite };
         t.frame();
@@ -298,13 +300,59 @@ pub const Tester = struct {
         return out;
     }
 
+    /// The last frame as JSON, for tools: its size and cost, where web
+    /// content shows (`stage_rects`), what VoiceOver reads (`a11y_items`)
+    /// and the text on screen (`texts`). Free with `gpa`.
+    pub fn dumpJson(t: *Tester, gpa: std.mem.Allocator) ![]u8 {
+        const c = &t.ctx;
+        var aw: std.Io.Writer.Allocating = .init(gpa);
+        errdefer aw.deinit();
+        var s: std.json.Stringify = .{ .writer = &aw.writer };
+        try s.beginObject();
+        try s.objectField("size");
+        try s.write(t.size);
+        try s.objectField("scale");
+        try s.write(t.scale);
+        try s.objectField("stats");
+        try s.write(c.stats);
+        try s.objectField("stage_rects");
+        try s.write(c.stage_rects[0..c.stage_count]);
+        try s.objectField("a11y_items");
+        try s.beginArray();
+        for (c.a11y_items.items) |it| try s.write(.{
+            .role = it.role,
+            .label = it.label,
+            .value = it.value,
+            .rect = if (it.node_index < c.nodes.items.len) c.nodes.items[it.node_index].rect else types.Rect{},
+        });
+        try s.endArray();
+        try s.objectField("texts");
+        try s.beginArray();
+        for (c.nodes.items) |n| switch (n.content) {
+            .text => |tx| if (n.rect.x < t.size.w and n.rect.y < t.size.h and n.rect.x + n.rect.w > 0 and n.rect.y + n.rect.h > 0)
+                try s.write(.{ .text = tx.str, .rect = n.rect }),
+            .icon, .image, .texture, .canvas, .none => {},
+        };
+        try s.endArray();
+        try s.endObject();
+        return aw.toOwnedSlice();
+    }
+
+    /// Writes `dumpJson` to a file.
+    pub fn dump(t: *Tester, path: []const u8) !void {
+        const bytes = try t.dumpJson(t.gpa);
+        defer t.gpa.free(bytes);
+        try std.Io.Dir.cwd().writeFile(std.Io.Threaded.global_single_threaded.io(), .{ .sub_path = path, .data = bytes });
+    }
+
     /// Runs a script of steps separated by `;`: `click:TEXT`, `move:TEXT`,
     /// `type:TEXT`, `key:enter|backspace|tab|escape|left|right`,
     /// `scroll:DY` (at the pointer), `wait:SECONDS` (simulated time),
     /// `live:SECONDS` (the real event loop: replies, processes, timers),
     /// `resize:WxH`; `at:X,Y` and `hover:X,Y` (a click, or the pointer, at
     /// points), `chord:cmd+shift+n` (a key combination, as a window offers
-    /// it), `snap:PNG` (the frame so far, written: one per step of a run).
+    /// it), `snap:PNG` (the frame so far, written: one per step of a run),
+    /// `dump:JSON` (the frame so far as `dumpJson` describes it).
     pub fn runScript(t: *Tester, script: []const u8) !void {
         var steps = std.mem.splitScalar(u8, script, ';');
         while (steps.next()) |raw| {
@@ -344,6 +392,10 @@ pub const Tester = struct {
             } else if (std.mem.eql(u8, op, "snap")) {
                 t.settle(2);
                 try t.screenshot(arg);
+                continue;
+            } else if (std.mem.eql(u8, op, "dump")) {
+                t.settle(2);
+                try t.dump(arg);
                 continue;
             } else if (std.mem.eql(u8, op, "resize")) {
                 const x = std.mem.indexOfScalar(u8, arg, 'x') orelse return error.BadSize;

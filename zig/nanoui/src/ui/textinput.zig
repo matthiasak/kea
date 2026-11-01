@@ -271,9 +271,7 @@ pub fn validateMenuItem(obj: objc.Object, _: objc.SEL, item: objc.Object) callco
         if (std.mem.eql(u8, name, "copy:")) return if (s.ctx.selection.text.items.len > 0) objc.YES else objc.NO;
         return objc.NO;
     }
-    if (std.mem.eql(u8, name, "paste:")) {
-        return objc.YES;
-    }
+    if (std.mem.eql(u8, name, "paste:")) return if (f != null) objc.YES else objc.NO;
     if (std.mem.eql(u8, name, "selectAll:") or std.mem.eql(u8, name, "delete:")) {
         return if (f != null) objc.YES else objc.NO;
     }
@@ -301,24 +299,28 @@ pub fn popMenu(s: *Surface) void {
     defer pool.pop();
     const m = objc.new("NSMenu");
     defer objc.release(m);
+    // Over selected text (no field focused): Copy alone.
+    const field = s.ctx.focused_text != null;
     const entries = .{
-        .{ "Cut", "cut:" },
-        .{ "Copy", "copy:" },
-        .{ "Paste", "paste:" },
+        .{ "Cut", "cut:", false },
+        .{ "Copy", "copy:", true },
+        .{ "Paste", "paste:", false },
     };
-    inline for (entries) |e| {
+    inline for (entries) |e| if (field or e[2]) {
         const it = objc.msg(objc.Object, objc.alloc("NSMenuItem"), "initWithTitle:action:keyEquivalent:", .{
             objc.nsString(e[0]), objc.sel(e[1]), objc.nsString(""),
         });
         defer objc.release(it);
         objc.msg(void, m, "addItem:", .{it});
+    };
+    if (field) {
+        objc.msg(void, m, "addItem:", .{objc.msg(objc.Object, objc.class("NSMenuItem"), "separatorItem", .{})});
+        const all = objc.msg(objc.Object, objc.alloc("NSMenuItem"), "initWithTitle:action:keyEquivalent:", .{
+            objc.nsString("Select All"), objc.sel("selectAll:"), objc.nsString(""),
+        });
+        defer objc.release(all);
+        objc.msg(void, m, "addItem:", .{all});
     }
-    objc.msg(void, m, "addItem:", .{objc.msg(objc.Object, objc.class("NSMenuItem"), "separatorItem", .{})});
-    const all = objc.msg(objc.Object, objc.alloc("NSMenuItem"), "initWithTitle:action:keyEquivalent:", .{
-        objc.nsString("Select All"), objc.sel("selectAll:"), objc.nsString(""),
-    });
-    defer objc.release(all);
-    objc.msg(void, m, "addItem:", .{all});
     const at: objc.CGPoint = .{ .x = s.ctx.input.mouse.x, .y = s.ctx.input.mouse.y };
     _ = objc.msg(objc.BOOL, m, "popUpMenuPositioningItem:atLocation:inView:", .{ @as(?objc.Object, null), at, s.nsview });
 }

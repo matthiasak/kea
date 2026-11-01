@@ -410,7 +410,7 @@ const StreamStub = struct {
 var stream_stub: StreamStub = .{};
 
 fn stubStream(_: ?*anyopaque, _: *app.ai_core.Ai, q: app.ai_client.Ask, sink: app.ai_client.Sink) ?app.ai_client.Handle {
-    if (std.mem.startsWith(u8, q.system, "Name this chat")) {
+    if (std.mem.startsWith(u8, q.system, "Name this chat") or std.mem.startsWith(u8, q.system, "Suggest 3")) {
         sink.piece(sink.ctx, "Streamed");
         sink.done(sink.ctx, null);
         return null;

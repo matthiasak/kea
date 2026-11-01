@@ -43,6 +43,8 @@ pub const TabSwitcher = struct {
     reveal_asked: bool = false,
     reveal_at: ?f64 = null,
     previews_requested: bool = false,
+    /// When it last went away (`ui.clock`), for `dropIdlePictures`.
+    closed_at: f64 = 0,
     generation: u64 = 0,
     /// The pick the 120 ms wait before pictures is for (`.task(id: selectedID)`).
     waited_for: ?u64 = null,
@@ -214,6 +216,24 @@ pub fn commitTabSwitch(b: *Browser, picking: ?u64) void {
     b.select(b.entry(tab));
 }
 
+/// ⌃W while the switcher is open: closes the highlighted tab and moves to the next candidate.
+pub fn closeSelected(b: *Browser) void {
+    const s = &b.switcher;
+    const sel = s.selected orelse return;
+    if (std.mem.indexOfScalar(u64, s.candidates.items, sel) == null) return;
+    defer b.redraw();
+    if (b.tabById(sel)) |t| b.close(t);
+    // A pin sleeps in place: still there to pick.
+    if (b.tabById(sel) != null) return;
+    const idx = std.mem.indexOfScalar(u64, s.candidates.items, sel) orelse return;
+    _ = s.candidates.orderedRemove(idx);
+    if (s.candidates.items.len == 0) {
+        cancel(b);
+    } else {
+        s.selected = s.candidates.items[@min(idx, s.candidates.items.len - 1)];
+    }
+}
+
 /// The gesture ends with nothing picked: the pictures of the ten tabs left
 /// last stay.
 pub fn cancel(b: *Browser) void {
@@ -232,7 +252,16 @@ pub fn cancel(b: *Browser) void {
     s.queued = 0;
     s.prune(b.gpa, TabSwitcher.kept);
     s.previews_requested = false;
+    s.closed_at = ui.clock.now();
     b.redraw();
+}
+
+/// A minute after it went away, its pictures go too (`sleepIdle`); the order stays.
+pub fn dropIdlePictures(b: *Browser) void {
+    const s = &b.switcher;
+    if (s.active() or s.visible or s.previews.count() == 0 or ui.clock.now() - s.closed_at <= 60) return;
+    for (s.previews.values()) |p| TabSwitcher.free(b.gpa, p);
+    s.previews.clearRetainingCapacity();
 }
 
 /// A click while the switcher is up, at a point in the window's top-left

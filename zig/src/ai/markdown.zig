@@ -14,6 +14,9 @@ pub const Block = union(enum) {
     quote: []const Block,
     code: struct { language: []const u8, text: []const u8, closed: bool },
     table: struct { header: []const []const u8, rows: []const []const []const u8 },
+    /// Display math: `text` the LaTeX inside `$$…$$` / `\[…\]` (an
+    /// environment's `\begin…\end` kept whole), `raw` its lines as written.
+    math: struct { text: []const u8, raw: []const u8, closed: bool },
     rule,
 };
 
@@ -80,6 +83,13 @@ fn parseBlocks(a: std.mem.Allocator, lines: []const []const u8, depth: usize) er
                 i += 1;
             }
             try out.append(a, .{ .code = .{ .language = try lower(a, fence.language), .text = try joinLines(a, body.items), .closed = closed } });
+            continue;
+        }
+
+        // 1b. Display math
+        if (try mathBlock(a, lines, i)) |m| {
+            try out.append(a, m.block);
+            i = m.next;
             continue;
         }
 
@@ -169,6 +179,12 @@ fn parseBlocks(a: std.mem.Allocator, lines: []const []const u8, depth: usize) er
                         i += 1;
                         continue;
                     }
+                    if (mathOpen(next_trim) != null) {
+                        // Display math right under an item stays in it (`1. Foo:\n$$\n…\n$$\n2. Bar:`).
+                        const m = (try mathBlock(a, lines, i)).?;
+                        while (i < m.next) : (i += 1) try item.append(a, trim(lines[i]));
+                        continue;
+                    }
                     if (parseListMarker(next) != null or startsNonParagraphBlock(lines, i)) break;
                     try item.append(a, next_trim);
                     i += 1;
@@ -197,12 +213,58 @@ fn parseBlocks(a: std.mem.Allocator, lines: []const []const u8, depth: usize) er
 fn startsNonParagraphBlock(lines: []const []const u8, index: usize) bool {
     const line = lines[index];
     const trimmed = trim(line);
-    if (fenceOpen(trimmed) != null) return true;
+    if (fenceOpen(trimmed) != null or mathOpen(trimmed) != null) return true;
     if (isRule(line)) return true;
     if (parseHeading(trimmed) != null) return true;
     if (isQuoteLine(line)) return true;
     if (std.mem.indexOfScalar(u8, line, '|') != null and index + 1 < lines.len and isTableDelimiter(lines[index + 1])) return true;
     return parseListMarker(line) != null;
+}
+
+const MathFence = struct { close: []const u8, env: bool };
+
+/// `$$`, `\[` or `\begin{equation|align|gather|multline}` (starred too)
+/// opening display math; a `$$…$$` with text after it is inline.
+fn mathOpen(trimmed: []const u8) ?MathFence {
+    for ([_][2][]const u8{ .{ "$$", "$$" }, .{ "\\[", "\\]" } }) |d| if (std.mem.startsWith(u8, trimmed, d[0])) {
+        const rest = trimmed[2..];
+        if (std.mem.indexOf(u8, rest, d[1])) |k| if (k + 2 != rest.len) return null;
+        return .{ .close = d[1], .env = false };
+    };
+    if (!std.mem.startsWith(u8, trimmed, "\\begin{")) return null;
+    const end = std.mem.indexOfScalarPos(u8, trimmed, 7, '}') orelse return null;
+    const names = [_][]const u8{ "equation", "equation*", "align", "align*", "gather", "gather*", "multline", "multline*" };
+    for (names) |n| if (std.mem.eql(u8, trimmed[7..end], n)) return .{ .close = n, .env = true };
+    return null;
+}
+
+const MathRead = struct { block: Block, next: usize };
+
+/// The display math opening at `lines[start]`, through the line that
+/// closes it (or the end, still open while it streams).
+fn mathBlock(a: std.mem.Allocator, lines: []const []const u8, start: usize) !?MathRead {
+    const f = mathOpen(trim(lines[start])) orelse return null;
+    const shut = if (f.env) try std.fmt.allocPrint(a, "\\end{{{s}}}", .{f.close}) else f.close;
+    const skip: usize = if (f.env) 0 else 2;
+    var i = start;
+    var closed = false;
+    while (i < lines.len) {
+        const t = trim(lines[i]);
+        i += 1;
+        if (std.mem.indexOf(u8, if (i - 1 == start) t[skip..] else t, shut) != null) {
+            closed = true;
+            break;
+        }
+    }
+    var kept: std.ArrayList([]const u8) = .empty;
+    for (lines[start..i]) |l| try kept.append(a, trim(l));
+    const raw = try joinLines(a, kept.items);
+    var text = raw;
+    if (!f.env) {
+        text = text[2..];
+        if (closed) text = text[0 .. std.mem.lastIndexOf(u8, text, shut) orelse text.len];
+    }
+    return .{ .block = .{ .math = .{ .text = std.mem.trim(u8, text, " \t\r\n"), .raw = raw, .closed = closed } }, .next = i };
 }
 
 const Fence = struct { marker: []const u8, language: []const u8 };
@@ -375,4 +437,36 @@ test "unicode spaces count as Swift's do" {
     try std.testing.expect(got[0] == .rule);
     try std.testing.expectEqualStrings("äbc", got[1].code.language);
     try std.testing.expectEqualStrings("Title", got[2].heading.text);
+}
+
+test "display math: in a numbered list, indented or not, the list goes on" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const got = try blocks(a, "1. Softmax:\n   $$\n   p_i = \\frac{e^{z_i}}{Z}\n   $$\n2. Loss:\n$$\n\\mathcal{L} = -\\log(p_y)\n$$\n3. Done $x$");
+    try std.testing.expectEqual(@as(usize, 1), got.len);
+    const l = got[0].list;
+    try std.testing.expectEqual(@as(usize, 3), l.items.len);
+    try std.testing.expectEqualStrings("Softmax:", l.items[0][0].paragraph);
+    try std.testing.expectEqualStrings("p_i = \\frac{e^{z_i}}{Z}", l.items[0][1].math.text);
+    try std.testing.expectEqualStrings("$$\np_i = \\frac{e^{z_i}}{Z}\n$$", l.items[0][1].math.raw);
+    try std.testing.expectEqualStrings("\\mathcal{L} = -\\log(p_y)", l.items[1][1].math.text);
+    try std.testing.expect(l.items[1][1].math.closed);
+    try std.testing.expectEqualStrings("Done $x$", l.items[2][0].paragraph);
+}
+
+test "display math: brackets, environments, one line, and still open" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const got = try blocks(a, "Text\n\\[ x^2 \\]\n\\begin{align}\na &= b \\\\\nc &= d\n\\end{align}\n$$\\frac{a}{b}$$\n$$x$$ is inline\n$$\n\\sum_{j=1");
+    try std.testing.expectEqual(@as(usize, 6), got.len);
+    try std.testing.expectEqualStrings("Text", got[0].paragraph);
+    try std.testing.expectEqualStrings("x^2", got[1].math.text);
+    try std.testing.expectEqualStrings("\\begin{align}\na &= b \\\\\nc &= d\n\\end{align}", got[2].math.text);
+    try std.testing.expectEqualStrings(got[2].math.text, got[2].math.raw);
+    try std.testing.expectEqualStrings("\\frac{a}{b}", got[3].math.text);
+    try std.testing.expectEqualStrings("$$x$$ is inline", got[4].paragraph);
+    try std.testing.expect(!got[5].math.closed);
+    try std.testing.expectEqualStrings("\\sum_{j=1", got[5].math.text);
 }

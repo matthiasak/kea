@@ -16,13 +16,14 @@ const Browser = @import("../model/browser.zig").Browser;
 const Kea = @import("../app/kea.zig").Kea;
 const address = @import("../model/address.zig");
 const url = @import("../data/url.zig");
+const pdf_text = @import("pdf_text.zig");
 const app_name = "Kea";
 
 pub const Slash = struct { name: []const u8, hint: []const u8 };
 pub const Starter = struct { label: []const u8, prompt: []const u8 };
 
 pub const commands = [_]Slash{
-    .{ .name = "/summarize", .hint = "Summarize this page" },
+    .{ .name = "/summarize", .hint = "Deep Feynman explanation of this page" },
     .{ .name = "/clear", .hint = "A new chat with the same pins" },
     .{ .name = "/clear-pins", .hint = "Unpin everything" },
     .{ .name = "/rename-ws", .hint = "Name this chat: /rename-ws NAME" },
@@ -30,9 +31,17 @@ pub const commands = [_]Slash{
     .{ .name = "/help", .hint = "What you can type here" },
     .{ .name = "/compact", .hint = "Fold earlier turns into a summary; they stay below" },
     .{ .name = "/clean-up", .hint = "Remove failed and empty turns, and empty chats" },
+    .{ .name = "/researcher", .hint = "Feynman explanations per section of this page (on, off)" },
 };
 
-pub const summary = "Summarize this page in a few sentences, or up to six short bullet points if it covers several things.";
+pub const summary =
+    "Summarize this page with deep Feynman explanations: walk through each major section or idea from first principles, " ++
+    "explain the core mechanism in plain, concrete language using intuitive analogies without skipping the real math, code, or logic, " ++
+    "state the key assumptions and why they hold, and point out subtle takeaways or edge cases.";
+pub const followups_system =
+    "Suggest 3 short, incisive follow-up questions (each under 60 characters) the reader might ask next " ++
+    "to test intuition, unpack a mechanism from first principles, or explore an edge case. " ++
+    "Reply with 3 plain lines only: no numbering, no bullets, no quotes, no Markdown.";
 pub const naming = "Name this chat in two to six words, in the language of the question. Reply with the name alone: no quotes, no Markdown, no punctuation at the end.";
 pub const compacting = "Summarize the conversation so far for your own later use: the person's questions, what was answered and decided, names, numbers and open questions. Under 300 words, as Markdown bullet points. Add nothing new.";
 pub const recap = "A summary of this chat so far:\n\n";
@@ -211,6 +220,11 @@ fn isWeb(s: []const u8) bool {
     return p.isWeb();
 }
 
+/// A web page, or a PDF on this Mac.
+pub fn isShareableUrl(s: []const u8) bool {
+    return isWeb(s) or (std.ascii.startsWithIgnoreCase(s, "file://") and pdf_text.isPdfUrl(s));
+}
+
 /// Pages to pin, matching `query` (lowercased), from the sources asked;
 /// at most 8, none in `except`. On `a`; strings borrowed or on `a`.
 pub fn pages(a: std.mem.Allocator, query: []const u8, sources: []const Source, b: *Browser, except: []const []const u8) ![]Suggestion {
@@ -237,12 +251,9 @@ pub fn pages(a: std.mem.Allocator, query: []const u8, sources: []const Source, b
         }
         var kept: std.ArrayList(*Tab) = .empty;
         for (tabs.items) |t| {
-            if (isPrivatePage(t) or t.isBlank() or !isWeb(t.url())) continue;
-            if (query.len > 0) {
-                const label = try std.ascii.allocLowerString(a, t.label());
-                const u = try std.ascii.allocLowerString(a, t.url());
-                if (std.mem.indexOf(u8, label, query) == null and std.mem.indexOf(u8, u, query) == null) continue;
-            }
+            if (isPrivatePage(t) or t.isBlank() or !(isShareableUrl(t.url()) or pdf_text.isPdfTab(t))) continue;
+            // `query` is lowercased: matching without case is the same test, without copies.
+            if (query.len > 0 and std.ascii.findIgnoreCase(t.label(), query) == null and std.ascii.findIgnoreCase(t.url(), query) == null) continue;
             try kept.append(a, t);
         }
         std.mem.sort(*Tab, kept.items, {}, struct {
@@ -255,13 +266,13 @@ pub fn pages(a: std.mem.Allocator, query: []const u8, sources: []const Source, b
     if (has(sources, .bookmark) and query.len > 0) {
         for (try b.kea.bookmarks.matches(a, query)) |hit| {
             const u = hit.node.url orelse continue;
-            if (!isWeb(u)) continue;
+            if (!isShareableUrl(u)) continue;
             try Add.add(a, &out, &seen, .bookmark, try hit.node.label(a), u);
         }
     }
     if (has(sources, .history)) {
         for (try b.kea.history.everything(a, query, 16)) |trace| {
-            if (!isWeb(trace.url)) continue;
+            if (!isShareableUrl(trace.url)) continue;
             try Add.add(a, &out, &seen, .history, if (trace.title.len == 0) try address.pretty(a, trace.url) else trace.title, trace.url);
         }
     }

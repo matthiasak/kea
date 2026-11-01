@@ -43,33 +43,6 @@ fn push(c: *Context, out: *std.ArrayList(metal.Instance), inst: metal.Instance) 
     out.append(c.gpa, inst) catch {};
 }
 
-/// A canvas's shapes, moved to its box and clipped to it; those wholly
-/// outside what shows of it are left out.
-fn paintCanvas(c: *Context, out: *std.ArrayList(metal.Instance), cv: *const @import("draw.zig").Canvas, r: types.Rect, visible: types.Rect, opacity: f32) void {
-    const clip = metal.clip4(visible);
-    out.ensureUnusedCapacity(c.gpa, cv.shapes.items.len) catch return;
-    for (cv.shapes.items) |shape| {
-        var i = shape;
-        i.rect[0] += r.x;
-        i.rect[1] += r.y;
-        if (i.rect[0] > clip[2] or i.rect[1] > clip[3] or i.rect[0] + i.rect[2] < clip[0] or i.rect[1] + i.rect[3] < clip[1]) continue;
-        if (i.kind == metal.Kind.segment or i.kind == metal.Kind.triangle) {
-            i.uv[0] += r.x;
-            i.uv[1] += r.y;
-            i.uv[2] += r.x;
-            i.uv[3] += r.y;
-        }
-        if (i.kind == metal.Kind.triangle) {
-            i.border_color[0] += r.x;
-            i.border_color[1] += r.y;
-        }
-        i.color[3] *= opacity;
-        i.border_color[3] *= if (i.kind == metal.Kind.quad) opacity else 1;
-        i.clip = clip;
-        out.appendAssumeCapacity(i);
-    }
-}
-
 /// `scrolled`: how far the scrolling boxes it's in have scrolled it up.
 fn paintNode(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, clip: types.Rect, opacity_in: f32, selectable_in: bool, scrolled: f32) void {
     const n = c.node(index).*;
@@ -124,10 +97,18 @@ fn paintNode(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, clip:
     const start = out.items.len;
 
     if (visible.w > 0 and visible.h > 0) {
-        if (st.shadow) |sh| paintShadow(c, out, sh, r, rad, opacity, clip4);
-        for (st.shadows) |sh| paintShadow(c, out, sh, r, rad, opacity, clip4);
         // Glass takes the background's place.
         const fill: ?types.Color = if (st.glass != null) null else st.background;
+        // Under an opaque borderless sheet the shadow's inside is hidden:
+        // knocked out, the GPU skips it. Only for spread <= 0, as the
+        // knockout is the shadow's own (spread-grown) shape.
+        const sheet = fill != null and fill.?.a >= 0.999 and opacity >= 0.999 and st.border == null;
+        if (st.shadow) |sh| {
+            var s2 = sh;
+            if (sheet and sh.spread <= 0) s2.knockout = true;
+            paintShadow(c, out, s2, r, rad, opacity, clip4);
+        }
+        for (st.shadows) |sh| paintShadow(c, out, sh, r, rad, opacity, clip4);
         if (st.glass) |g| push(c, out, glass.instance(glass.material(g, rect4[2], rect4[3], c.theme.dark, c.scale), rect4, st.radius, clip4, opacity));
         if (fill != null or st.border != null) push(c, out, .{
             .rect = rect4,
@@ -175,7 +156,7 @@ fn paintNode(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, clip:
                 .border_width = @floatFromInt(tx.slot),
                 .clip = clip4,
             }),
-            .canvas => |cv| paintCanvas(c, out, cv, r, visible, opacity),
+            .canvas => |cv| @import("paint_canvas.zig").paintCanvas(c, out, n.id, index, cv, r, visible, opacity, selectable, moving),
             .none => {},
         }
     }
@@ -207,6 +188,7 @@ fn paintNode(c: *Context, out: *std.ArrayList(metal.Instance), index: u32, clip:
         if (d[0] != 0 or d[1] != 0) for (out.items[start..]) |*it| {
             it.rect[0] += d[0];
             it.rect[1] += d[1];
+            @import("paint_canvas.zig").shiftPoints(it, d[0], d[1]);
             if (!std.mem.eql(f32, &it.clip, &clip4) and it.clip[0] > -1e5) it.clip = .{ it.clip[0] + d[0], it.clip[1] + d[1], it.clip[2] + d[0], it.clip[3] + d[1] };
         };
     }
@@ -249,6 +231,7 @@ fn scaleItems(items: []metal.Instance, box: types.Rect, s: f32, anchor: types.Po
     const ay = box.y + box.h * anchor.y;
     for (items) |*i| {
         i.rect = .{ ax + (i.rect[0] - ax) * s, ay + (i.rect[1] - ay) * s, i.rect[2] * s, i.rect[3] * s };
+        @import("paint_canvas.zig").scalePoints(i, ax, ay, s);
         if (i.xf[0] != 0 or i.xf[1] != 0 or i.pulse[0] > 0) {
             i.xf[2] = ax + (i.xf[2] - ax) * s;
             i.xf[3] = ay + (i.xf[3] - ay) * s;
@@ -338,7 +321,7 @@ fn truncated(c: *Context, out: *std.ArrayList(metal.Instance), t: ctx_mod.Conten
 /// horizontal extent.
 const Sel = struct { id: u64, index: u32, x0: f32, x1: f32 };
 
-fn textRun(c: *Context, out: *std.ArrayList(metal.Instance), t: ctx_mod.Content.Text, start: usize, end: usize, x: f32, y: f32, f: text_mod.Font, lh: f32, clip4: [4]f32, opacity: f32, sel: ?Sel, inner_right: f32, moving: bool) void {
+pub fn textRun(c: *Context, out: *std.ArrayList(metal.Instance), t: ctx_mod.Content.Text, start: usize, end: usize, x: f32, y: f32, f: text_mod.Font, lh: f32, clip4: [4]f32, opacity: f32, sel: ?Sel, inner_right: f32, moving: bool) void {
     textRunLimit(c, out, t, start, end, x, y, f, lh, clip4, opacity, sel, null, inner_right, moving);
 }
 
@@ -364,7 +347,7 @@ fn textRunLimit(c: *Context, out: *std.ArrayList(metal.Instance), t: ctx_mod.Con
     const raw_baseline = y + (lh - f.lineHeight()) / 2 + f.leading / 2 + f.ascent;
     const baseline = if (moving) raw_baseline else snap(raw_baseline, scale);
     const base = metal.color4(t.color.alpha(opacity));
-    if (sel) |s| @import("selection.zig").line(c, out, s.id, s.index, t.str, start, end, lay, x, y, lh, s.x0, s.x1, clip4);
+    if (sel) |s| @import("selection.zig").line(c, out, s.id, s.index, t.str, start, end, lay, x, y, lh, s.x0, s.x1, clip4, t.copy);
     if (t.spans.len > 0) decorations(c, out, &t, lay, start, end, x, baseline, f, clip4, opacity);
     var span_i: usize = 0;
     for (lay.glyphs) |g| {
@@ -428,17 +411,24 @@ fn xAt(lay: text_mod.Layout, at: usize) f32 {
 fn decorations(c: *Context, out: *std.ArrayList(metal.Instance), t: *const ctx_mod.Content.Text, lay: text_mod.Layout, start: usize, end: usize, x: f32, baseline: f32, f: text_mod.Font, clip4: [4]f32, opacity: f32) void {
     for (t.spans) |sp| {
         if (sp.end <= start or sp.start >= end) continue;
-        if (sp.background == null and !sp.underline and !sp.strike) continue;
+        if (sp.background == null and sp.border == null and !sp.underline and !sp.strike) continue;
         const a = @max(sp.start, start) - start;
         const b = @min(sp.end, end) - start;
         const x0 = x + xAt(lay, a);
         const x1 = x + xAt(lay, b);
         if (x1 <= x0) continue;
         const color = sp.color orelse t.color;
-        if (sp.background) |bg| push(c, out, .{
-            .rect = .{ x0 - 3, baseline - f.ascent * 0.92 - 2, x1 - x0 + 6, (f.ascent + f.descent) * 0.92 + 4 },
-            .color = metal.color4(bg.alpha(opacity)),
-            .radius = 4,
+        // A pill keeps to the room its kerning made (`Span.pad_x`).
+        const pad = sp.pad_x;
+        if (sp.background != null or sp.border != null) push(c, out, .{
+            .rect = if (pad > 0)
+                .{ x0 - pad + 0.5, baseline - f.ascent * 0.92 - 2, x1 - x0 + pad - 1, (f.ascent + f.descent) * 0.92 + 4 }
+            else
+                .{ x0 - 3, baseline - f.ascent * 0.92 - 2, x1 - x0 + 6, (f.ascent + f.descent) * 0.92 + 4 },
+            .color = metal.color4((sp.background orelse types.Color.transparent).alpha(opacity)),
+            .border_color = metal.color4((sp.border orelse types.Color.transparent).alpha(opacity)),
+            .border_width = if (sp.border != null) 0.75 else 0,
+            .radius = if (sp.border != null) 4.5 else 4,
             .clip = clip4,
         });
         if (sp.underline) push(c, out, .{

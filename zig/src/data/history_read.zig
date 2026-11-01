@@ -15,8 +15,8 @@ const Visit = text_mod.Visit;
 /// The list is on `alloc`; its strings borrow from the history.
 pub fn suggestions(self: *History, alloc: std.mem.Allocator, typed: []const u8, limit: usize) ![]Suggestion {
     self.ensureIndexed();
-    const needle = try text_mod.stripped(self.gpa, typed);
-    defer self.gpa.free(needle);
+    const needle = try text_mod.stripped(alloc, typed);
+    defer alloc.free(needle);
     // An empty field proposes nothing.
     if (needle.len == 0) return &.{};
     const now = json.now();
@@ -24,20 +24,19 @@ pub fn suggestions(self: *History, alloc: std.mem.Allocator, typed: []const u8, 
     defer alloc.free(top.items);
     // Titles too, every word somewhere in one, from three letters up.
     var words: std.ArrayList([]const u8) = .empty;
-    defer words.deinit(self.gpa);
+    defer words.deinit(alloc);
     if (text_mod.chars(needle) >= 3) {
         var it = std.mem.tokenizeScalar(u8, needle, ' ');
-        while (it.next()) |w| try words.append(self.gpa, w);
+        while (it.next()) |w| try words.append(alloc, w);
     }
     for (self.visits.values()) |e| {
         const text = e.text orelse continue;
-        // How often and how lately, flattened.
-        const standing = std.math.log1p(text_mod.score(e.visit, now));
+        // How often and how lately, flattened: worked out only for a match.
         const s: f64 = if (text_mod.rank(text.searchable, needle)) |r|
             // The front door before the room inside it.
-            r + 4 + standing + @as(f64, if (text.homepage) 1.5 else 0)
+            r + 4 + std.math.log1p(text_mod.score(e.visit, now)) + @as(f64, if (text.homepage) 1.5 else 0)
         else if (words.items.len > 0 and text.title.len > 0 and allIn(words.items, text.title))
-            1 + 4 + standing
+            1 + 4 + std.math.log1p(text_mod.score(e.visit, now))
         else
             continue;
         if (!top.wants(s, text.address, limit) or Parts.parse(e.visit.url) == null) continue;
@@ -98,8 +97,8 @@ pub fn completion(self: *History, typed: []const u8, options: []const Suggestion
 /// `alloc`; strings borrowed.
 pub fn everything(self: *History, alloc: std.mem.Allocator, typed: []const u8, limit: usize) ![]Trace {
     self.ensureIndexed();
-    const low = try url_mod.lower(self.gpa, typed);
-    defer self.gpa.free(low);
+    const low = try url_mod.lower(alloc, typed);
+    defer alloc.free(low);
     var out: std.ArrayList(Trace) = .empty;
     errdefer out.deinit(alloc);
     for (self.visits.values()) |e| {

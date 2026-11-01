@@ -118,6 +118,7 @@ pub fn create(owner: *Extensions, path: []const u8, why: []const []const u8, con
     // keep working, with WebKit's background CPU throttling still in place
     // (WKInactiveSchedulingPolicyThrottle).
     objc.msg(void, prefs, "setInactiveSchedulingPolicy:", .{@as(objc.NSInteger, 1)});
+    @import("../web/config.zig").inspector(prefs, true);
     // One made to record from the microphone may start while nobody sees it,
     // as in Chrome; Kea still asks first, and the pill says it is listening.
     for (why) |r| if (std.mem.eql(u8, r, "USER_MEDIA")) capture.set("_setGetUserMediaRequiresFocus:", false, prefs);
@@ -146,6 +147,7 @@ fn make(owner: *Extensions, id: []const u8, to: objc.Object, why: []const []cons
     const web = objc.msg(objc.Object, objc.alloc("WKWebView"), "initWithFrame:configuration:", .{
         objc.CGRect{ .size = .{ .width = 800, .height = 600 } }, configuration,
     });
+    @import("../web/inspector.zig").inspectable(web);
     const delegate = objc.msg(objc.Object, @import("offscreen_page.zig").class(), "new", .{});
     doc.* = .{
         .serial = serials,

@@ -68,6 +68,7 @@ pub const Strip = struct {
     inside: bool = false,
     last_size: ui.Size = .{},
     known_set: std.AutoHashMapUnmanaged(u64, void) = .empty,
+    seen_ids: tab_leaving.Ids = .empty,
     /// Boxes last drawn, for what reads their rects (tests, the reveal).
     run_node: u64 = 0,
     doors_node: u64 = 0,
@@ -79,6 +80,7 @@ pub const Strip = struct {
         s.seen.deinit(gpa);
         s.last.deinit(gpa);
         s.known_set.deinit(gpa);
+        s.seen_ids.deinit(gpa);
         tab_leaving.deinit(s, gpa);
     }
 };
@@ -439,6 +441,7 @@ fn click(b: *Browser, c: *ui.Context, t: *Tab, d: tab_pill.Drawn, r: tab_drag.Re
         return;
     }
     if (r.swallowsClick() or !d.it.clicked) return;
+    if (b.pickForSplit(t, (c.input.cmd or c.input.shift) and !live)) return;
     if (live and tab_pill.pinned(b, t)) {
         if (d.it.double_clicked) st.act = .{ .home = t.id };
     } else if (live) {
@@ -572,20 +575,19 @@ pub fn helm(b: *Browser, c: *ui.Context, p: *const Palette) void {
     };
     const back = !tab.isBlank() and tab.can_go_back;
     const forward = !tab.isBlank() and tab.can_go_forward;
-    if (door(c, p, "chevron.left", "Back   ⌘[", back)) tab.goBack();
-    if (door(c, p, "chevron.right", "Forward   ⌘]", forward)) tab.goForward();
     const loading = tab.loading;
-    if (door(c, p, if (loading) "xmark" else "arrow.clockwise", if (loading) "Stop   ⌘." else "Reload   ⌘R", !tab.isBlank())) {
-        if (loading) tab.stopLoading() else tab.reload(false);
-    }
+    const back_it = door(c, p, "chevron.left", "Back   ⌘[", back);
+    const fwd_it = door(c, p, "chevron.right", "Forward   ⌘]", forward);
+    const rel_it = door(c, p, if (loading) "xmark" else "arrow.clockwise", if (loading) "Stop   ⌘." else "Reload   ⌘R", !tab.isBlank());
+    @import("tab_title.zig").helmAction(b, c, tab, back_it, back, fwd_it, forward, rel_it, loading);
 }
 
 /// A door that can't be used fades to .3 (`Motion.quick`) and takes no clicks.
-fn door(c: *ui.Context, p: *const Palette, icon: []const u8, help: []const u8, enabled: bool) bool {
+fn door(c: *ui.Context, p: *const Palette, icon: []const u8, help: []const u8, enabled: bool) ui.Interaction {
     const id = c.peekId(null);
     ui.row(c, .{ .opacity = motion.quickTo(c, id, 0x6f6e, if (enabled) 1 else 0.3) });
     defer ui.end(c);
-    return controls.door(c, p, icon, .{ .help = help }).clicked and enabled;
+    return controls.door(c, p, icon, .{ .help = help });
 }
 
 /// `BookmarkDoor`, its list hanging below it.

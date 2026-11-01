@@ -30,6 +30,7 @@ const page_find = @import("../web/page_find.zig");
 const curtain_js = @import("../web/curtain_js.zig");
 const little = @import("../web/little.zig");
 const popup = @import("../ext/popup.zig");
+const inspector = @import("../web/inspector.zig");
 
 const command = shortcuts.flag.command;
 const shift = shortcuts.flag.shift;
@@ -80,6 +81,11 @@ pub fn clicked(b: *Browser, event: objc.Object) bool {
 /// a ⌘K walk wherever it stopped.
 pub fn modifiers(b: *Browser, event: objc.Object) void {
     const flags = objc.msg(objc.NSUInteger, event, "modifierFlags", .{});
+    const cmd_only = (flags & held) == command;
+    if (b.cmd_held != cmd_only) {
+        b.cmd_held = cmd_only;
+        b.redraw();
+    }
     if (b.switcher.active() and flags & control == 0) b.commitTabSwitch(null);
     if (flags & command == 0) b.landSummon();
 }
@@ -102,6 +108,7 @@ pub fn take(b: *Browser, event: objc.Object) bool {
     const window = objc.msg(?objc.Object, event, "window", .{});
     // A question hanging from the window (Ask) answers its own keys.
     if (window) |w| if (objc.msg(?objc.Object, w, "sheetParent", .{}) != null) return false;
+    if (inspecting(b, event, window)) return true;
     // A small window's keys are its own (web/little.zig has its monitor).
     if (little.owning(window) != null) return false;
     if (popup.owns(window)) {
@@ -138,6 +145,10 @@ pub fn take(b: *Browser, event: objc.Object) bool {
     defer pool.pop();
     const flags = objc.msg(objc.NSUInteger, event, "modifierFlags", .{}) & held;
     if (flags & command == 0 and hasMarkedText(b, event)) return false;
+    if (b.cmd_held) {
+        b.cmd_held = false;
+        b.redraw();
+    }
     const code = objc.msg(u16, event, "keyCode", .{});
     const own = if (b.window) |w| window == w.nswindow else window == null;
     const control_tab = code == 48 and flags & control != 0 and flags & (command | option) == 0;
@@ -159,6 +170,25 @@ pub fn take(b: *Browser, event: objc.Object) bool {
             };
             if (direction) |d| {
                 tab_switcher.move(b, d);
+                return true;
+            }
+            if (plainIs(event, "w")) {
+                tab_switcher.closeSelected(b);
+                return true;
+            }
+            if (plainIs(event, "r")) {
+                if (b.switcher.selected) |sel| if (b.tabById(sel)) |t| t.reload(false);
+                return true;
+            }
+            if (plainIs(event, "m")) {
+                if (b.switcher.selected) |sel| if (b.tabById(sel)) |t| t.toggleMute();
+                b.redraw();
+                return true;
+            }
+            if (plainIs(event, "o")) {
+                // The newest small window, kept as a tab; the switcher has done its job.
+                if (little.open.items.len > 0) little.open.items[little.open.items.len - 1].keep();
+                tab_switcher.cancel(b);
                 return true;
             }
         }
@@ -250,6 +280,20 @@ pub fn take(b: *Browser, event: objc.Object) bool {
     if (flags & option != 0 and !shifted and flags & control == 0 and plainIs(event, "r")) {
         if (pageFirst(b, event, "r", false)) return false;
         if (b.activeTab()) |t| t.reload(true);
+        return true;
+    }
+    if (flags & option != 0 and !shifted and flags & control == 0) {
+        if (plainIs(event, "[")) {
+            b.foldAllGroups();
+            return true;
+        }
+        if (plainIs(event, "]")) {
+            b.unfoldAllGroups();
+            return true;
+        }
+    }
+    if (flags & option != 0 and shifted and flags & control == 0 and plainIs(event, "c")) {
+        b.copyCleanAddress();
         return true;
     }
     // Other shortcuts with ⌥ or ⌃ on top are somebody else's: the menus'.
@@ -344,6 +388,7 @@ fn arrows(b: *Browser, event: objc.Object, code: u16, shifted: bool) bool {
 /// nothing wanted it: it goes on to the page or the field.
 pub fn escape(b: *Browser) bool {
     defer b.redraw();
+    b.picked_tab = null;
     if (b.overlay != null) {
         b.overlay = null;
         return true;
@@ -366,6 +411,23 @@ pub fn escape(b: *Browser) bool {
     // A new tab never sent anywhere is itself what is open: Escape takes it
     // away, back to the tab touched last. Anything typed keeps it; so does
     // being the last tab.
+    const fs_tab = @import("../chrome/window_view.zig").fullscreenTab(b);
+    const win_fs = if (b.window) |w| w.isFullScreen() else false;
+    if (!b.editing and (fs_tab != null or win_fs)) {
+        if (b.prefs.double_esc_fullscreen and ui.clock.now() - b.esc_fullscreen_at > 2.0) {
+            b.esc_fullscreen_at = ui.clock.now();
+            b.announce("Press Esc again to exit full screen");
+            return true;
+        }
+        b.esc_fullscreen_at = 0;
+        b.hush();
+        if (fs_tab) |ft| {
+            ft.evaluate("if(document.fullscreenElement)document.exitFullscreen();else if(document.webkitFullscreenElement)document.webkitExitFullscreen();", .page, null, 0);
+        } else if (b.window) |w| {
+            w.setFullScreen(false);
+        }
+        return true;
+    }
     const front = b.activeTab();
     if (front) |blank| if (blank.isBlank() and b.omni.typed.items.len == 0) {
         var back: ?*Tab = null;
@@ -468,6 +530,22 @@ fn paste(b: *Browser, event: objc.Object) void {
 fn plainIs(event: objc.Object, want: []const u8) bool {
     const s = objc.msg(?objc.Object, event, "charactersByApplyingModifiers:", .{@as(objc.NSUInteger, 0)}) orelse return false;
     return std.mem.eql(u8, objc.fromNSString(objc.msg(objc.Object, s, "lowercaseString", .{})), want);
+}
+
+/// F12 anywhere, and ⌥⌘I/J/C/U in a small window or an extension's popup
+/// (whose keys skip the menus): the Web Inspector, on the page in front.
+fn inspecting(b: *Browser, event: objc.Object, window: ?objc.Object) bool {
+    const flags = objc.msg(objc.NSUInteger, event, "modifierFlags", .{}) & held;
+    if (objc.msg(u16, event, "keyCode", .{}) == 111 and flags == 0) {
+        inspector.toggleInspector(b);
+        return true;
+    }
+    if (flags != command | option or (little.owning(window) == null and !popup.owns(window))) return false;
+    const pool = objc.Pool.push();
+    defer pool.pop();
+    const run: *const fn (*Browser) void = if (plainIs(event, "i")) inspector.toggleInspector else if (plainIs(event, "j")) inspector.showConsole else if (plainIs(event, "c")) inspector.inspectElement else if (plainIs(event, "u")) inspector.showPageSource else return false;
+    run(b);
+    return true;
 }
 
 /// `ContentView.digits`: the top row by where it sits, 1…9 and 0.

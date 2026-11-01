@@ -89,6 +89,8 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette) void {
 
     searchWith(b, c, p);
     frame.rule(c, p);
+    _ = frame.prefLine(b, c, p, "search_suggestions", "Suggestions from your search engine", "Asks your search engine for suggestions as you type in the address field — never in private tabs");
+    frame.rule(c, p);
     siteShortcuts(b, c, p);
     frame.rule(c, p);
 
@@ -165,6 +167,10 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette) void {
     _ = frame.prefLine(b, c, p, "floats_away", "Float the video when you switch apps", "A video playing on the site you're on comes out into its floating window as another app comes to the front, and goes back into its tab when you return");
     frame.rule(c, p);
     _ = frame.prefLine(b, c, p, "kea_facts", "Kea facts on new tabs", "One fact about the bird under the address field, a new one each day");
+    frame.rule(c, p);
+    _ = frame.prefLine(b, c, p, "double_esc_fullscreen", "Press Esc twice to leave full screen", "Prevents leaving a full-screen video or window by pressing Esc once inside a page");
+    frame.rule(c, p);
+    _ = frame.prefLine(b, c, p, "confirm_quit", "Confirm before quitting", "Asks before quitting " ++ app_name ++ " with ⌘Q");
 }
 
 /// `Preferences.zooms`: every 5% from 50% to 300%.

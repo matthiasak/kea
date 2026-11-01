@@ -27,19 +27,24 @@ fn px(n: f32) ui.Length {
 pub const SidePanel = enum {
     chat,
     bookmarks,
+    web,
 
     pub fn min(self: SidePanel) f32 {
-        return if (self == .chat) metrics.chat_min else metrics.side_min;
+        return if (self == .bookmarks) metrics.side_min else metrics.chat_min;
     }
     pub fn max(self: SidePanel) f32 {
-        return if (self == .chat) metrics.chat_max else metrics.side_max;
+        return if (self == .bookmarks) metrics.side_max else metrics.chat_max;
     }
     pub fn standard(self: SidePanel) f32 {
-        return if (self == .chat) metrics.chat else metrics.side;
+        return if (self == .bookmarks) metrics.side else metrics.chat;
     }
-    /// Its width's prefs field (`ai.width`, `bookmarks.width`).
+    /// Its width's prefs field (`ai.width`, `bookmarks.width`, `web_panel.width`).
     fn field(comptime self: SidePanel) []const u8 {
-        return if (self == .chat) "chat_width" else "marks_width";
+        return switch (self) {
+            .chat => "chat_width",
+            .bookmarks => "marks_width",
+            .web => "web_width",
+        };
     }
 };
 
@@ -85,7 +90,11 @@ pub fn togglePopped(b: *Browser, panel: SidePanel) void {
 
 pub fn setPanelWidth(b: *Browser, panel: SidePanel, width: f32) void {
     const w = std.math.clamp(width, panel.min(), panel.max());
-    if (panel == .chat) b.prefs.set("chat_width", w) else b.prefs.set("marks_width", w);
+    switch (panel) {
+        .chat => b.prefs.set("chat_width", w),
+        .bookmarks => b.prefs.set("marks_width", w),
+        .web => b.prefs.set("web_width", w),
+    }
     b.redraw();
 }
 
@@ -96,11 +105,44 @@ pub fn toggleBookmarks(kea: *Kea) void {
     redrawAll(kea);
 }
 
+pub fn openWebPanel(b: *Browser, url: []const u8) void {
+    if (url.len == 0) return;
+    if (b.web_panel_tab) |t| {
+        t.go(url);
+    } else {
+        b.web_panel_tab = b.make(url, false);
+    }
+    b.redraw();
+}
+
+pub fn closeWebPanel(b: *Browser) void {
+    const t = b.web_panel_tab orelse return;
+    b.web_panel_tab = null;
+    if (b.expanded_panel == .web) b.expanded_panel = null;
+    if (b.stage_host) |sh| sh.setWebPanel(null);
+    b.letGo(t);
+    b.redraw();
+}
+
+pub fn keepWebPanelAsTab(b: *Browser) void {
+    const t = b.web_panel_tab orelse return;
+    b.web_panel_tab = null;
+    if (b.expanded_panel == .web) b.expanded_panel = null;
+    if (b.stage_host) |sh| sh.setWebPanel(null);
+    b.insert(t, b.placeForNew());
+    b.select(t);
+    b.redraw();
+}
+
 /// Esc's step for a panel let out over the page (`ContentView.take`):
 /// back to its column, when it is open at all.
 pub fn collapse(b: *Browser) bool {
     const panel = b.expanded_panel orelse return false;
-    const open = if (panel == .chat) b.assisting != null else b.prefs.bookmarks_sidebar;
+    const open = switch (panel) {
+        .chat => b.assisting != null,
+        .bookmarks => b.prefs.bookmarks_sidebar,
+        .web => b.web_panel_tab != null,
+    };
     if (!open) return false;
     toggleExpanded(b, panel);
     return true;
@@ -147,8 +189,10 @@ pub fn beside(b: *Browser, c: *ui.Context, p: *const Palette, r: Room, left: boo
     if (!left) st.panel_win_w = r.window_width;
     const chat = r.chatShown() and panelOnLeft(b, .chat) == left;
     const marks = r.marksShown() and panelOnLeft(b, .bookmarks) == left;
+    const web = r.webShown() and panelOnLeft(b, .web) == left;
     if (left) columnSlot(b, c, p, .chat, true, chat, r.chatWidth(), win_resized);
     columnSlot(b, c, p, .bookmarks, left, marks, r.marksWidth(), win_resized);
+    columnSlot(b, c, p, .web, left, web, r.webWidth(), win_resized);
     if (!left) columnSlot(b, c, p, .chat, false, chat, r.chatWidth(), win_resized);
 }
 
@@ -160,6 +204,7 @@ pub fn letOut(b: *Browser, c: *ui.Context, p: *const Palette, r: Room) void {
     const shown: ?SidePanel = if (b.expanded_panel) |e| switch (e) {
         .chat => if (r.chatColumn() and !r.chat_popped) e else null,
         .bookmarks => if (r.marksColumn() and !r.marks_popped) e else null,
+        .web => if (r.webColumn()) e else null,
     } else null;
     if (shown) |s| b.let_out = s;
     const v = presence.presence(c, let_out_id, shown != null, motion.glide, null) orelse {
@@ -177,6 +222,7 @@ pub fn panelView(b: *Browser, c: *ui.Context, p: *const Palette, panel: SidePane
     switch (panel) {
         .bookmarks => bookmarksView(b, c, p, on_left, width, expanded, is_popped),
         .chat => @import("../ai/chat_view.zig").view(b, c, p, on_left, width, expanded, is_popped),
+        .web => webPanelView(b, c, p, on_left, width, expanded),
     }
 }
 
@@ -199,6 +245,31 @@ fn bookmarksView(b: *Browser, c: *ui.Context, p: *const Palette, on_left: bool, 
     c.end();
     bookmarks_sidebar.content(b, c, p);
     end(b, c, p, .bookmarks, on_left, width);
+}
+
+fn webPanelView(b: *Browser, c: *ui.Context, p: *const Palette, on_left: bool, width: ?f32, expanded: bool) void {
+    begin(c, p, .web, width, expanded);
+    const head = c.open(.{ .direction = .row, .width = .fill, .gap = 6, .align_items = .center, .padding = .{ .left = 12, .right = 6, .top = 6, .bottom = 6 } }, "kea.web_panel.head");
+    headerGesture(b, c, head, .web, true);
+    const label = if (b.web_panel_tab) |wt| @import("site_card.zig").site(wt.url()) else "Side Panel";
+    ui.text(c, label, .{ .size = 12.5, .weight = .medium, .color = p.ink, .truncate = .ellipsis });
+    ui.spacer(c);
+    if (controls.door(c, p, "arrow.up.left.and.arrow.down.right", .{ .help = "Open in a Tab" }).clicked) {
+        c.end();
+        end(b, c, p, .web, on_left, width);
+        keepWebPanelAsTab(b);
+        return;
+    }
+    if (controls.door(c, p, "xmark", .{ .help = "Close Side Panel" }).clicked) {
+        c.end();
+        end(b, c, p, .web, on_left, width);
+        closeWebPanel(b);
+        return;
+    }
+    c.end();
+    const hole = c.leaf(.{ .width = .fill, .grow = 1 }, .none, "kea.web_panel.hole");
+    b.web_panel_hole_node = hole;
+    end(b, c, p, .web, on_left, width);
 }
 
 // MARK: a panel's frame
@@ -372,6 +443,11 @@ pub fn edgeHandle(b: *Browser, c: *ui.Context, p: *const Palette, comptime field
         b.edge_drag = null;
         if (width != d.width) b.prefs.set(field, width);
     };
-    _ = c.leaf(.{ .width = px(2), .height = .fill, .background = if (it.hovered or it.pressed) p.muted else ui.Color.transparent }, .none, null);
+    const active = it.hovered or (b.edge_drag != null and b.edge_drag.?.id == it.id);
+    const a = motion.quickTo(c, it.id, 1, if (active) 1 else 0);
+    if (a > 0.001) {
+        const h_px: f32 = 28 + 8 * a;
+        _ = c.leaf(.{ .width = px(4), .height = px(h_px), .radius = 2, .background = p.muted.alpha(0.55 + 0.35 * a) }, .none, null);
+    }
     c.end();
 }

@@ -300,7 +300,7 @@ pub const Surface = struct {
         self.ctx.transparent_root = self.transparent;
         c.reduce_motion = self.reduce_motion;
         c.reduced_motion = self.reduce_motion;
-        c.window_focused = if (vis) self.window.isFocused() else true;
+        c.window_focused = vis and self.window.isFocused();
         self.pacing_log.note(now);
         // What scrolling gathered since the last frame, applied at once.
         const dy = self.scroll.take();

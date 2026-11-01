@@ -33,7 +33,11 @@ pub fn run(c: *Context, view: View, ts: *text.TextSystem, instances: *std.ArrayL
     @import("scroll.zig").updateScrollbarDrag(c);
 
     const t0 = now();
-    if (c.input.pressed and c.input.button == .left) c.selection.pressed = true;
+    // A new press: a text field it lands on blocks the selection again.
+    if (c.input.pressed and c.input.button == .left) {
+        c.selection.pressed = true;
+        c.selection.blocked = false;
+    }
     c.copy_done = false;
     c.copy_requested = false;
     for (c.input.ops) |op| if (op == .command and op.command == .copy) {

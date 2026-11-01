@@ -4,8 +4,11 @@
 //! strikethrough over text kept as written (no blocks, whitespace kept):
 //! strong and emphasis, code spans, links, autolinks, images (their alt
 //! text), escapes and entities. What it gives is the text shown and its
-//! styled runs; the view maps them to spans.
+//! styled runs; the view maps them to spans. Beside them: inline math
+//! (`$…$`, `$$…$$`, `\(…\)`, `\[…\]`, shown as written) and where every
+//! shown byte came from, so a selection copies the Markdown (`ui.CopyMap`).
 const std = @import("std");
+const Wrap = @import("nanoui").ui.CopyMap.Wrap;
 
 pub const Flags = packed struct(u8) {
     bold: bool = false,
@@ -13,7 +16,8 @@ pub const Flags = packed struct(u8) {
     code: bool = false,
     strike: bool = false,
     link: bool = false,
-    _: u3 = 0,
+    math: bool = false,
+    _: u2 = 0,
 
     fn with(a: Flags, b: Flags) Flags {
         return @bitCast(@as(u8, @bitCast(a)) | @as(u8, @bitCast(b)));
@@ -27,7 +31,21 @@ pub const Flags = packed struct(u8) {
 pub const Run = struct { start: u32, end: u32, flags: Flags };
 /// Bytes [start, end) of the shown text that link to `url`.
 pub const Link = struct { start: u32, end: u32, url: []const u8 };
-pub const Shown = struct { text: []const u8, runs: []const Run, links: []const Link };
+/// Inline math over bytes [start, end) of the shown text (its source as
+/// written, `raw`); `tex` the LaTeX inside the delimiters.
+pub const MathSpan = struct { start: u32, end: u32, tex: []const u8, raw: []const u8, display: bool = false };
+pub const Shown = struct {
+    text: []const u8,
+    runs: []const Run,
+    links: []const Link,
+    maths: []const MathSpan = &.{},
+    /// `ui.CopyMap.open` / `.close` / `.wraps` over the source.
+    open_map: []const u32 = &.{},
+    close_map: []const u32 = &.{},
+    wraps: []const Wrap = &.{},
+};
+
+const Role = enum { none, opener, closer };
 
 const Piece = struct {
     text: []const u8,
@@ -41,7 +59,17 @@ const Piece = struct {
     open: bool = false,
     close: bool = false,
     active: bool = true,
+    /// Its source, bytes [so, sc); where its shown text starts there when
+    /// `text` is not a slice of it; a run's syntax opening or closing one.
+    so: u32 = 0,
+    sc: u32 = 0,
+    inner: ?u32 = null,
+    role: Role = .none,
+    tex: []const u8 = "",
 };
+
+/// An emphasis or link run between pieces `o` and `cl`, as written.
+const Pair = struct { o: usize, cl: usize, open: []const u8, close: []const u8 };
 
 fn isPunct(ch: u8) bool {
     return std.ascii.isPrint(ch) and !std.ascii.isAlphanumeric(ch) and ch != ' ';
@@ -53,35 +81,76 @@ fn isWs(ch: u8) bool {
 
 /// `text` as shown, everything on `a` (an arena).
 pub fn shown(a: std.mem.Allocator, text: []const u8) !Shown {
+    return shownOpts(a, text, false);
+}
+
+/// `shown`; `streaming`: math still being written (`$$…`, `\(…`, or a `$`
+/// followed by TeX) shows as math to the end.
+pub fn shownOpts(a: std.mem.Allocator, text: []const u8, streaming: bool) !Shown {
     var pieces: std.ArrayList(Piece) = .empty;
     var urls: std.ArrayList([]const u8) = .empty;
+    var pairs: std.ArrayList(Pair) = .empty;
     var i: usize = 0;
     var plain_from: usize = 0;
     while (i < text.len) {
         const ch = text[i];
-        if (std.mem.indexOfScalar(u8, "\\`*_~![]<&", ch) == null) {
+        if (std.mem.indexOfScalar(u8, "\\`*_~![]<&$", ch) == null) {
             i += 1;
             continue;
         }
-        if (plain_from < i) try pieces.append(a, .{ .text = text[plain_from..i] });
-        i = try special(a, text, i, &pieces, &urls);
+        if (plain_from < i) try pieces.append(a, .{ .text = text[plain_from..i], .so = @intCast(plain_from), .sc = @intCast(i) });
+        i = try special(a, text, i, &pieces, &urls, &pairs, streaming);
         plain_from = i;
     }
-    if (plain_from < text.len) try pieces.append(a, .{ .text = text[plain_from..] });
-    emphasis(pieces.items, 0);
+    if (plain_from < text.len) try pieces.append(a, .{ .text = text[plain_from..], .so = @intCast(plain_from), .sc = @intCast(text.len) });
+    try emphasis(a, pieces.items, 0, &pairs);
 
     var out: std.ArrayList(u8) = .empty;
     var runs: std.ArrayList(Run) = .empty;
     var links: std.ArrayList(Link) = .empty;
-    for (pieces.items) |pc| {
-        const s: []const u8 = switch (pc.delim) {
-            '*', '_', '~' => pc.text[0..pc.count],
-            else => pc.text,
-        };
+    var maths: std.ArrayList(MathSpan) = .empty;
+    var open_map: std.ArrayList(u32) = .empty;
+    var close_map: std.ArrayList(u32) = .empty;
+    var wraps: std.ArrayList(Wrap) = .empty;
+    const starts = try a.alloc(u32, pieces.items.len);
+    // Syntax met since the last shown byte: closing (copied with what
+    // went before) and opening (with what comes after).
+    var pend_close: ?u32 = null;
+    var pend_open: ?u32 = null;
+    var prev_end: u32 = 0;
+    for (pieces.items, 0..) |pc, pi| {
+        const run = pc.delim == '*' or pc.delim == '_' or pc.delim == '~';
+        const s: []const u8 = if (run) pc.text[0..pc.count] else pc.text;
+        const used: u32 = if (run) @intCast(pc.orig - pc.count) else 0;
+        starts[pi] = @intCast(out.items.len);
+        if (pc.role == .closer) {
+            pend_close = if (run) pc.so + used else pc.sc;
+            pend_open = null;
+        } else if (pc.role == .opener and s.len == 0 and pend_open == null) pend_open = pc.so;
         if (s.len == 0) continue;
+        // A closer's leftover delimiters come after the syntax it used.
+        const first: u32 = if (pc.role == .closer and run) pc.so + used else pc.so;
+        const inner: ?u32 = if (pc.role == .closer and run) first else pc.inner orelse within(text, s);
+        try close_map.append(a, pend_close orelse prev_end);
+        try open_map.append(a, pend_open orelse first);
+        for (1..s.len) |k| {
+            const m = if (inner) |n| n + @as(u32, @intCast(k)) else first;
+            try open_map.append(a, m);
+            try close_map.append(a, m);
+        }
+        // An opener's leftover delimiters come before the syntax it used.
+        const opens_after = pc.role == .opener and run;
+        prev_end = if (opens_after) pc.so + @as(u32, @intCast(pc.count)) else pc.sc;
+        pend_close = null;
+        pend_open = if (opens_after) prev_end else null;
+
         const start: u32 = @intCast(out.items.len);
         try out.appendSlice(a, s);
         const end: u32 = @intCast(out.items.len);
+        if (pc.flags.code and !run) if (inner) |n| {
+            try wraps.append(a, .{ .start = start, .end = end, .open = text[pc.so..n], .close = text[n + s.len .. pc.sc] });
+        };
+        if (pc.flags.math) try maths.append(a, .{ .start = start, .end = end, .tex = pc.tex, .raw = s, .display = std.mem.startsWith(u8, s, "$$") or std.mem.startsWith(u8, s, "\\[") });
         if (!pc.flags.plain()) {
             if (runs.items.len > 0 and runs.items[runs.items.len - 1].end == start and runs.items[runs.items.len - 1].flags == pc.flags)
                 runs.items[runs.items.len - 1].end = end
@@ -95,20 +164,89 @@ pub fn shown(a: std.mem.Allocator, text: []const u8) !Shown {
                 try links.append(a, .{ .start = start, .end = end, .url = urls.items[l] });
         }
     }
-    return .{ .text = out.items, .runs = runs.items, .links = links.items };
+    try close_map.append(a, pend_close orelse prev_end);
+    try open_map.append(a, pend_open orelse @intCast(text.len));
+    for (pairs.items) |pr| {
+        const o = pieces.items[pr.o];
+        const shown_o: u32 = @intCast(if (o.delim == '*' or o.delim == '_' or o.delim == '~') o.count else o.text.len);
+        try wraps.append(a, .{ .start = starts[pr.o] + shown_o, .end = starts[pr.cl], .open = pr.open, .close = pr.close });
+    }
+    // Outer runs first, so a cut selection opens them in order.
+    std.mem.sort(Wrap, wraps.items, {}, struct {
+        fn lt(_: void, l: Wrap, r: Wrap) bool {
+            return l.start < r.start or (l.start == r.start and l.end > r.end);
+        }
+    }.lt);
+    return .{ .text = out.items, .runs = runs.items, .links = links.items, .maths = maths.items, .open_map = open_map.items, .close_map = close_map.items, .wraps = wraps.items };
+}
+
+/// Where `s` starts in `text`, if it is a slice of it.
+fn within(text: []const u8, s: []const u8) ?u32 {
+    const p = @intFromPtr(s.ptr);
+    const b = @intFromPtr(text.ptr);
+    return if (p >= b and p + s.len <= b + text.len) @intCast(p - b) else null;
+}
+
+/// Where math opened at `text[from]` ends: before `shut`, or (still
+/// streaming, within 240 bytes) at the end.
+fn mathTo(text: []const u8, from: usize, shut: []const u8, streaming: bool) ?usize {
+    if (std.mem.indexOfPos(u8, text, from, shut)) |k| return k;
+    return if (streaming and text.len - from <= 240) text.len else null;
+}
+
+const Dollar = struct { open: usize, end: usize, shut: []const u8 };
+
+/// Math opened by the `$` at `text[i]`: `$$…$$`, or `$…$` hugging its
+/// TeX (no space inside either `$`, none after a letter or before a
+/// digit), so `$5 and $10` stays prose.
+fn dollar(text: []const u8, i: usize, streaming: bool) ?Dollar {
+    if (i + 1 < text.len and text[i + 1] == '$') {
+        return .{ .open = 2, .end = mathTo(text, i + 2, "$$", streaming) orelse return null, .shut = "$$" };
+    }
+    if (i + 1 >= text.len or isWs(text[i + 1]) or (i > 0 and std.ascii.isAlphanumeric(text[i - 1]))) return null;
+    var j = i + 1;
+    var depth: usize = 0;
+    while (j < text.len) : (j += 1) switch (text[j]) {
+        '\\' => j += 1,
+        '{' => depth += 1,
+        '}' => depth -|= 1,
+        '$' => if (depth == 0) {
+            if (!isWs(text[j - 1]) and (j + 1 == text.len or !std.ascii.isDigit(text[j + 1]))) return .{ .open = 1, .end = j, .shut = "$" };
+            return null;
+        },
+        else => {},
+    };
+    // Unclosed: math only while it streams in, and only if it reads as TeX.
+    const rest = text[i + 1 ..];
+    if (!streaming or rest.len > 240 or std.ascii.isDigit(rest[0]) or std.mem.indexOfAny(u8, rest, "\\_^{") == null) return null;
+    return .{ .open = 1, .end = text.len, .shut = "$" };
+}
+
+/// A math piece from `text[i]`, its TeX `text[i + open .. end]`, closed by `shut` if there.
+fn math(a: std.mem.Allocator, text: []const u8, i: usize, open: usize, end: usize, shut: []const u8, pieces: *std.ArrayList(Piece)) !usize {
+    const stop = if (std.mem.startsWith(u8, text[end..], shut)) end + shut.len else end;
+    try pieces.append(a, .{ .text = text[i..stop], .flags = .{ .math = true }, .so = @intCast(i), .sc = @intCast(stop), .tex = text[i + open .. end] });
+    return stop;
 }
 
 /// Reads the inline at `text[i]` (one of the special characters) into
 /// `pieces`; returns where reading goes on.
-fn special(a: std.mem.Allocator, text: []const u8, i: usize, pieces: *std.ArrayList(Piece), urls: *std.ArrayList([]const u8)) !usize {
+fn special(a: std.mem.Allocator, text: []const u8, i: usize, pieces: *std.ArrayList(Piece), urls: *std.ArrayList([]const u8), pairs: *std.ArrayList(Pair), streaming: bool) !usize {
     const ch = text[i];
+    const at: u32 = @intCast(i);
     switch (ch) {
         '\\' => {
+            if (i + 1 < text.len and (text[i + 1] == '(' or text[i + 1] == '[')) {
+                const shut = if (text[i + 1] == '(') "\\)" else "\\]";
+                if (mathTo(text, i + 2, shut, streaming)) |end| return math(a, text, i, 2, end, shut, pieces);
+            }
+            // `\$` among them: a dollar, never math.
             if (i + 1 < text.len and (isPunct(text[i + 1]) or text[i + 1] == '\n')) {
-                try pieces.append(a, .{ .text = text[i + 1 .. i + 2] });
+                try pieces.append(a, .{ .text = text[i + 1 .. i + 2], .so = at, .sc = at + 2 });
                 return i + 2;
             }
         },
+        '$' => if (dollar(text, i, streaming)) |d| return math(a, text, i, d.open, d.end, d.shut, pieces),
         '`' => {
             var n: usize = 0;
             while (i + n < text.len and text[i + n] == '`') n += 1;
@@ -121,19 +259,21 @@ fn special(a: std.mem.Allocator, text: []const u8, i: usize, pieces: *std.ArrayL
                 var m: usize = 0;
                 while (j + m < text.len and text[j + m] == '`') m += 1;
                 if (m == n) {
-                    try pieces.append(a, .{ .text = try codeText(a, text[i + n .. j]), .flags = .{ .code = true } });
+                    const body = try codeText(a, text[i + n .. j]);
+                    const pad = (j - i - n - body.len) / 2;
+                    try pieces.append(a, .{ .text = body, .flags = .{ .code = true }, .so = at, .sc = @intCast(j + m), .inner = @intCast(i + n + pad) });
                     return j + m;
                 }
                 j += m;
             }
-            try pieces.append(a, .{ .text = text[i .. i + n] });
+            try pieces.append(a, .{ .text = text[i .. i + n], .so = at, .sc = @intCast(i + n) });
             return i + n;
         },
         '*', '_', '~' => {
             var n: usize = 0;
             while (i + n < text.len and text[i + n] == ch) n += 1;
             if (ch == '~' and n > 2) {
-                try pieces.append(a, .{ .text = text[i .. i + n] });
+                try pieces.append(a, .{ .text = text[i .. i + n], .so = at, .sc = @intCast(i + n) });
                 return i + n;
             }
             const prev: ?u8 = if (i > 0) text[i - 1] else null;
@@ -146,32 +286,32 @@ fn special(a: std.mem.Allocator, text: []const u8, i: usize, pieces: *std.ArrayL
             const right = !prev_ws and (!prev_p or next_ws or next_p);
             const open = if (ch == '_') left and (!right or prev_p) else left;
             const close = if (ch == '_') right and (!left or next_p) else right;
-            try pieces.append(a, .{ .text = text[i .. i + n], .delim = ch, .count = n, .orig = n, .open = open, .close = close });
+            try pieces.append(a, .{ .text = text[i .. i + n], .delim = ch, .count = n, .orig = n, .open = open, .close = close, .so = at, .sc = @intCast(i + n) });
             return i + n;
         },
         '!' => if (i + 1 < text.len and text[i + 1] == '[') {
-            try pieces.append(a, .{ .text = text[i .. i + 2], .delim = '!' });
+            try pieces.append(a, .{ .text = text[i .. i + 2], .delim = '!', .so = at, .sc = at + 2 });
             return i + 2;
         },
         '[' => {
-            try pieces.append(a, .{ .text = text[i .. i + 1], .delim = '[' });
+            try pieces.append(a, .{ .text = text[i .. i + 1], .delim = '[', .so = at, .sc = at + 1 });
             return i + 1;
         },
-        ']' => return closeBracket(a, text, i, pieces, urls),
+        ']' => return closeBracket(a, text, i, pieces, urls, pairs),
         '<' => if (autolink(text[i + 1 ..])) |end| {
             const body = text[i + 1 .. i + 1 + end];
             const url = if (std.mem.indexOfScalar(u8, body, ':') == null) try std.mem.concat(a, u8, &.{ "mailto:", body }) else body;
             try urls.append(a, url);
-            try pieces.append(a, .{ .text = body, .flags = .{ .link = true }, .link = @intCast(urls.items.len - 1) });
+            try pieces.append(a, .{ .text = body, .flags = .{ .link = true }, .link = @intCast(urls.items.len - 1), .so = at, .sc = @intCast(i + end + 2) });
             return i + end + 2;
         },
         '&' => if (try entity(a, text[i..])) |e| {
-            try pieces.append(a, .{ .text = e.text });
+            try pieces.append(a, .{ .text = e.text, .so = at, .sc = @intCast(i + e.len) });
             return i + e.len;
         },
         else => {},
     }
-    try pieces.append(a, .{ .text = text[i .. i + 1] });
+    try pieces.append(a, .{ .text = text[i .. i + 1], .so = at, .sc = at + 1 });
     return i + 1;
 }
 
@@ -190,7 +330,8 @@ fn codeText(a: std.mem.Allocator, raw: []const u8) ![]const u8 {
 
 /// `]`: closes the nearest open bracket into a link (or an image's alt
 /// text) when an inline destination follows; else it is text.
-fn closeBracket(a: std.mem.Allocator, text: []const u8, i: usize, pieces: *std.ArrayList(Piece), urls: *std.ArrayList([]const u8)) !usize {
+fn closeBracket(a: std.mem.Allocator, text: []const u8, i: usize, pieces: *std.ArrayList(Piece), urls: *std.ArrayList([]const u8), pairs: *std.ArrayList(Pair)) !usize {
+    const at32: u32 = @intCast(i);
     const items = pieces.items;
     var o = items.len;
     const opener: ?usize = while (o > 0) {
@@ -198,18 +339,18 @@ fn closeBracket(a: std.mem.Allocator, text: []const u8, i: usize, pieces: *std.A
         if ((items[o].delim == '[' or items[o].delim == '!') and items[o].active) break o;
     } else null;
     const at = opener orelse {
-        try pieces.append(a, .{ .text = "]" });
+        try pieces.append(a, .{ .text = "]", .so = at32, .sc = at32 + 1 });
         return i + 1;
     };
     const dest = destination(text, i + 1) orelse {
         items[at].active = false;
         items[at].delim = 0;
-        try pieces.append(a, .{ .text = "]" });
+        try pieces.append(a, .{ .text = "]", .so = at32, .sc = at32 + 1 });
         return i + 1;
     };
-    emphasis(items, at + 1);
+    try emphasis(a, items, at + 1, pairs);
     const image = items[at].delim == '!';
-    items[at] = .{ .text = "" };
+    items[at] = .{ .text = "", .so = items[at].so, .sc = items[at].sc, .role = .opener };
     if (!image) try urls.append(a, dest.url);
     for (items[at + 1 ..]) |*pc| {
         if (pc.delim == '*' or pc.delim == '_' or pc.delim == '~') pc.active = false;
@@ -223,6 +364,8 @@ fn closeBracket(a: std.mem.Allocator, text: []const u8, i: usize, pieces: *std.A
         pc.active = false;
         pc.delim = 0;
     };
+    try pairs.append(a, .{ .o = at, .cl = pieces.items.len, .open = text[items[at].so..items[at].sc], .close = text[i..dest.end] });
+    try pieces.append(a, .{ .text = "", .so = at32, .sc = @intCast(dest.end), .role = .closer });
     return dest.end;
 }
 
@@ -301,7 +444,7 @@ fn entity(a: std.mem.Allocator, rest: []const u8) !?Entity {
 /// CommonMark's "process emphasis" over the delimiter runs from `bottom`:
 /// each closer with the nearest opener of its kind; `~` runs of the same
 /// length strike through.
-fn emphasis(items: []Piece, bottom: usize) void {
+fn emphasis(a: std.mem.Allocator, items: []Piece, bottom: usize, pairs: *std.ArrayList(Pair)) !void {
     var ci = bottom;
     while (ci < items.len) {
         const cl = &items[ci];
@@ -331,61 +474,15 @@ fn emphasis(items: []Piece, bottom: usize) void {
             pc.flags = pc.flags.with(flag);
             if (pc.delim == '*' or pc.delim == '_' or pc.delim == '~') pc.active = false;
         }
+        try pairs.append(a, .{ .o = o, .cl = ci, .open = cl.text[0..use], .close = cl.text[0..use] });
+        if (items[o].role == .none) items[o].role = .opener;
+        cl.role = .closer;
         items[o].count -= use;
         cl.count -= use;
         if (cl.count == 0) ci += 1;
     }
 }
 
-const t = std.testing;
-
-// Freed when the test binary exits.
-var test_arena: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
-
-fn expectShown(src: []const u8, want: []const u8) !Shown {
-    const s = try shown(test_arena.allocator(), src);
-    try t.expectEqualStrings(want, s.text);
-    return s;
-}
-
-test "markdown inline: strong, emphasis, both, and what stays text" {
-    var s = try expectShown("a **bold** and *it* and ***both***", "a bold and it and both");
-    try t.expectEqual(@as(usize, 3), s.runs.len);
-    try t.expect(s.runs[0].flags.bold and !s.runs[0].flags.italic);
-    try t.expectEqualStrings("bold", s.text[s.runs[0].start..s.runs[0].end]);
-    try t.expect(s.runs[1].flags.italic and !s.runs[1].flags.bold);
-    try t.expect(s.runs[2].flags.italic and s.runs[2].flags.bold);
-    s = try expectShown("__under__ _it_ snake_case_name", "under it snake_case_name");
-    try t.expectEqual(@as(usize, 2), s.runs.len);
-    s = try expectShown("2 * 3 * 4 and **open", "2 * 3 * 4 and **open");
-    try t.expectEqual(@as(usize, 0), s.runs.len);
-    s = try expectShown("*a **b** c*", "a b c");
-    try t.expect(s.runs[0].flags.italic and !s.runs[0].flags.bold);
-    try t.expect(s.runs[1].flags.italic and s.runs[1].flags.bold);
-}
-
-test "markdown inline: code spans, strikethrough, escapes, entities" {
-    var s = try expectShown("run `a *b* c` now", "run a *b* c now");
-    try t.expectEqual(@as(usize, 1), s.runs.len);
-    try t.expect(s.runs[0].flags.code);
-    s = try expectShown("``x ` y`` and `` `z` ``", "x ` y and `z`");
-    s = try expectShown("~~gone~~ and ~one~", "gone and one");
-    try t.expect(s.runs[0].flags.strike and s.runs[1].flags.strike);
-    s = try expectShown("\\*not\\* &amp; &lt;b&gt; &#65;&#x42; \\q", "*not* & <b> AB \\q");
-    try t.expectEqual(@as(usize, 0), s.runs.len);
-}
-
-test "markdown inline: links, autolinks and images" {
-    var s = try expectShown("See [the **Kea**](https://example.com/kea \"t\") now", "See the Kea now");
-    try t.expectEqual(@as(usize, 1), s.links.len);
-    try t.expectEqualStrings("https://example.com/kea", s.links[0].url);
-    try t.expectEqualStrings("the Kea", s.text[s.links[0].start..s.links[0].end]);
-    try t.expect(s.runs[1].flags.bold and s.runs[1].flags.link);
-    s = try expectShown("<https://a.example/x> and <me@a.example>", "https://a.example/x and me@a.example");
-    try t.expectEqualStrings("mailto:me@a.example", s.links[1].url);
-    s = try expectShown("![a kea](k.png) [no link] [x](y z)", "a kea [no link] [x](y z)");
-    try t.expectEqual(@as(usize, 0), s.links.len);
-    s = try expectShown("[a](u(1)) *[b](v)*", "a b");
-    try t.expectEqualStrings("u(1)", s.links[0].url);
-    try t.expect(s.runs[s.runs.len - 1].flags.italic);
+test {
+    _ = @import("markdown_inline_test.zig");
 }

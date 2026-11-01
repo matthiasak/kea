@@ -35,6 +35,8 @@ pub const Selection = struct {
     /// The selected text as last painted, for Copy.
     text: std.ArrayList(u8) = .empty,
     last_id: u64 = 0,
+    /// Where the last gathered line ended in its `CopyMap.src`.
+    last_src_end: usize = 0,
     /// Where selectable lines were painted, for the pointer's cursor
     /// between frames.
     lines: std.ArrayList(types.Rect) = .empty,
@@ -81,7 +83,7 @@ pub const Selection = struct {
 /// Called by paint for each line `[start, end)` of selectable text `id`,
 /// laid out as `lay` at (x, y), `lh` high, in a box spanning `bx`…`bx_end`:
 /// notes where the pointer is, draws the highlight, gathers the text.
-pub fn line(c: anytype, out: *std.ArrayList(gpu.Instance), id: u64, index: u32, str: []const u8, start: usize, end: usize, lay: text_mod.Layout, x: f32, y: f32, lh: f32, bx: f32, bx_end: f32, clip4: [4]f32) void {
+pub fn line(c: anytype, out: *std.ArrayList(gpu.Instance), id: u64, index: u32, str: []const u8, start: usize, end: usize, lay: text_mod.Layout, x: f32, y: f32, lh: f32, bx: f32, bx_end: f32, clip4: [4]f32, copy: ?types.CopyMap) void {
     const s = &c.selection;
     const count: u32 = @intCast(s.next_order.count());
     if (s.next_order.getOrPut(c.gpa, id) catch null) |g| if (!g.found_existing) {
@@ -117,9 +119,72 @@ pub fn line(c: anytype, out: *std.ArrayList(gpu.Instance), id: u64, index: u32, 
         .color = gpu.color4(c.theme.accent.alpha(0.28)),
         .clip = clip4,
     }) catch {};
-    if (s.text.items.len > 0 and s.last_id != 0) s.text.append(c.gpa, '\n') catch {};
-    s.text.appendSlice(c.gpa, str[a..b]) catch {};
+    const cm = copy orelse {
+        if (s.text.items.len > 0 and s.last_id != 0) s.text.append(c.gpa, '\n') catch {};
+        s.text.appendSlice(c.gpa, str[a..b]) catch {};
+        s.last_id = id;
+        return;
+    };
+    gather(s, c.gpa, id, str.len, a, b, r[1] <= end, cm);
+}
+
+/// Bytes [a, b) of a text of `len` bytes, copied as their source in `cm`:
+/// a line going on from the last one of the same text joins it as the
+/// source does (no newline at a soft wrap); runs cut by the selection are
+/// opened and closed again. `ends`: the selection ends on this line.
+fn gather(s: *Selection, gpa: std.mem.Allocator, id: u64, len: usize, a: usize, b: usize, ends: bool, cm: types.CopyMap) void {
+    const t = &s.text;
+    const src_b = @min(if (b < cm.close.len) cm.close[b] else b, cm.src.len);
+    var src_a = @min(if (a < cm.open.len) cm.open[a] else a, src_b);
+    if (s.last_id == id and t.items.len > 0 and s.last_src_end <= src_b) {
+        src_a = s.last_src_end;
+    } else {
+        if (t.items.len > 0) t.appendSlice(gpa, cm.join) catch {};
+        if (a == 0) t.appendSlice(gpa, cm.prefix) catch {};
+        for (cm.wraps) |w| if (w.start < a and a < w.end) t.appendSlice(gpa, w.open) catch {};
+    }
+    t.appendSlice(gpa, cm.src[src_a..src_b]) catch {};
+    if (ends) {
+        var i = cm.wraps.len;
+        while (i > 0) {
+            i -= 1;
+            const w = cm.wraps[i];
+            if (w.start < b and b < w.end) t.appendSlice(gpa, w.close) catch {};
+        }
+        if (b == len) t.appendSlice(gpa, cm.suffix) catch {};
+    }
     s.last_id = id;
+    s.last_src_end = src_b;
+}
+
+/// Called by paint for a canvas that copies `copy_text` (a formula):
+/// selected and copied whole, its box `r` highlighted.
+pub fn box(c: anytype, out: *std.ArrayList(gpu.Instance), id: u64, index: u32, copy_text: []const u8, join: []const u8, r: types.Rect, clip4: [4]f32) void {
+    const s = &c.selection;
+    const count: u32 = @intCast(s.next_order.count());
+    if (s.next_order.getOrPut(c.gpa, id) catch null) |g| if (!g.found_existing) {
+        g.value_ptr.* = count;
+    };
+    const covered = if (s.cover) |k| index < k and !s.dragging else false;
+    if (!covered) s.lines.append(c.gpa, r) catch {};
+    const m = c.input.mouse;
+    if (!covered and r.contains(m)) {
+        s.hit = .{ .id = id, .at = if (m.x < r.x + r.w * 0.5) 0 else copy_text.len };
+        s.hit_word = .{ 0, copy_text.len };
+        s.hit_line = .{ 0, copy_text.len };
+        s.hit_str = copy_text;
+        c.cursor_text = true;
+    } else if (r.y + r.h <= m.y) s.below = .{ .id = id, .at = copy_text.len };
+    _ = s.range(id, copy_text.len) orelse return;
+    out.append(c.gpa, .{
+        .rect = .{ r.x, r.y, r.w, r.h },
+        .color = gpu.color4(c.theme.accent.alpha(0.28)),
+        .clip = clip4,
+    }) catch {};
+    if (s.text.items.len > 0) s.text.appendSlice(c.gpa, join) catch {};
+    s.text.appendSlice(c.gpa, copy_text) catch {};
+    s.last_id = id;
+    s.last_src_end = 0;
 }
 
 fn xAt(lay: text_mod.Layout, at: usize) f32 {
@@ -154,6 +219,8 @@ pub fn beginPaint(c: anytype) void {
     s.hit_word = null;
     s.hit_line = null;
     s.hit_str = "";
+    s.last_id = 0;
+    s.last_src_end = 0;
     s.below = null;
     s.cover = null;
     if (c.hot != 0) {
@@ -175,6 +242,9 @@ pub fn afterPaint(c: anytype) void {
         s.pressed = false;
         s.moved = false;
         if (s.hit != null and !s.blocked) {
+            // Text selected here, not in the field focused before: ⌘C takes it.
+            c.focus = 0;
+            c.focused_text = null;
             const h = s.hit.?;
             if (c.input.click_count >= 3 and s.hit_line != null) {
                 const hl = s.hit_line.?;

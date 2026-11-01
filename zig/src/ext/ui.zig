@@ -27,6 +27,7 @@ const crx = @import("crx.zig");
 const capture = @import("capture.zig");
 const store_relay = @import("store_relay.zig");
 const slot_view = @import("slot_view.zig");
+const inspector = @import("../web/inspector.zig");
 
 pub const State = struct {
     link: ui.TextBuffer = .{},
@@ -152,13 +153,47 @@ fn detail(c: *ui.Context, e: *Extensions, item: Installed, context: ?objc.Object
     parts.append(a, c.print("Version {s}", .{item.version})) catch {};
     parts.append(a, if (item.fromStore) "Chrome Web Store" else if (item.source) |src| c.print("From “{s}”", .{std.fs.path.basename(src)}) else "From a folder") catch {};
     if (item.enabled and context == null) parts.append(a, "couldn't start") catch {};
-    if (context) |ctx| {
-        if (objc.msg(?objc.Object, ctx, "overrideNewTabPageURL", .{}) != null and (e.kea.store.bool(newTabKey(c, item.id)) orelse false))
-            parts.append(a, "shows in new tabs") catch {};
-        const n = objc.msg(objc.NSUInteger, objc.msg(objc.Object, ctx, "errors", .{}), "count", .{});
-        if (n > 0) parts.append(a, c.print("{d} warning{s}", .{ n, if (n == 1) "" else "s" })) catch {};
-    }
+    if (context) |ctx| if (objc.msg(?objc.Object, ctx, "overrideNewTabPageURL", .{}) != null and (e.kea.store.bool(newTabKey(c, item.id)) orelse false))
+        parts.append(a, "shows in new tabs") catch {};
+    const n = errorCount(e, item.id, context);
+    if (n > 0) parts.append(a, c.print("{d} error{s}", .{ n, if (n == 1) "" else "s" })) catch {};
     return std.mem.join(a, " · ", parts.items) catch "";
+}
+
+fn errorCount(e: *Extensions, id: []const u8, context: ?objc.Object) usize {
+    const own = if (e.errors.get(id)) |l| l.items.len else 0;
+    const ctx = context orelse return own;
+    return own + objc.msg(objc.NSUInteger, objc.msg(objc.Object, ctx, "errors", .{}), "count", .{});
+}
+
+/// The newest few errors, one muted line each, the whole in the tooltip.
+fn errorLines(c: *ui.Context, p: *const Palette, e: *Extensions, id: []const u8, context: ?objc.Object) void {
+    var shown: usize = 0;
+    if (e.errors.get(id)) |l| {
+        var i = l.items.len;
+        while (i > 0 and shown < 3) : (shown += 1) {
+            i -= 1;
+            errorLine(c, p, l.items[i]);
+        }
+    }
+    const ctx = context orelse return;
+    const errs = objc.msg(objc.Object, ctx, "errors", .{});
+    const n = objc.msg(objc.NSUInteger, errs, "count", .{});
+    var i: objc.NSUInteger = 0;
+    while (i < n and shown < 3) : ({
+        i += 1;
+        shown += 1;
+    }) {
+        const err = objc.msg(objc.Object, errs, "objectAtIndex:", .{i});
+        errorLine(c, p, c.alloc().dupe(u8, objc.fromNSString(objc.msg(objc.Object, err, "localizedDescription", .{}))) catch return);
+    }
+}
+
+fn errorLine(c: *ui.Context, p: *const Palette, msg: []const u8) void {
+    const l = c.open(.{ .width = .fill }, null);
+    c.help(l, msg);
+    ui.text(c, msg, .{ .size = 11, .mono = true, .color = p.muted, .truncate = .ellipsis });
+    c.end();
 }
 
 fn row(b: *Browser, c: *ui.Context, p: *const Palette, e: *Extensions, item: Installed, index: usize) void {
@@ -178,6 +213,7 @@ fn row(b: *Browser, c: *ui.Context, p: *const Palette, e: *Extensions, item: Ins
     if (item.source) |src| c.help(d, src);
     ui.text(c, detail(c, e, item, context), .{ .size = 11.5, .color = p.muted, .truncate = .ellipsis });
     c.end();
+    errorLines(c, p, e, item.id, context);
     ui.end(c);
     _ = c.leaf(.{ .min_width = 8, .width = px(8) }, .none, null);
     // Five pills don't fit beside the name: one menu holds them all.
@@ -196,7 +232,7 @@ fn row(b: *Browser, c: *ui.Context, p: *const Palette, e: *Extensions, item: Ins
 const Act = struct {
     b: *Browser,
     id: []const u8,
-    what: enum { pin, new_tab, options, reload, remove },
+    what: enum { pin, new_tab, options, reload, remove, inspect_bg, clear_errors },
 
     fn fire(self: *Act, _: *nanoui.menu.Item) void {
         const e = self.b.kea.ext orelse return;
@@ -212,11 +248,42 @@ const Act = struct {
             .options => e.openOptions(self.id),
             .reload => e.reload(self.id),
             .remove => e.remove(self.id),
+            .inspect_bg => inspectBackground(e.context(self.id) orelse return),
+            .clear_errors => {
+                e.clearErrors(self.id);
+                e.changed();
+            },
         }
     }
 };
 
-/// The row's menu: pin, new tabs, options, reload, remove.
+/// The extension's background page in the inspector, started first when
+/// it is asleep.
+fn inspectBackground(ctx: objc.Object) void {
+    if (background(ctx)) |wv| return inspector.inspectWebView(wv);
+    if (waking != null or !objc.msg(objc.BOOL, ctx, "respondsToSelector:", .{objc.sel("loadBackgroundContentWithCompletionHandler:")})) return;
+    waking = objc.retain(ctx);
+    var block = objc.Block(?objc.Object, &.{?objc.Object}).init(&waking, woke);
+    objc.msg(void, ctx, "loadBackgroundContentWithCompletionHandler:", .{&block});
+}
+
+/// The context whose background page `inspectBackground` is starting (retained).
+var waking: ?objc.Object = null;
+
+fn woke(w: *?objc.Object, _: ?objc.Object) void {
+    const ctx = w.* orelse return;
+    w.* = null;
+    defer objc.release(ctx);
+    if (background(ctx)) |wv| inspector.inspectWebView(wv);
+}
+
+fn background(ctx: objc.Object) ?objc.Object {
+    inline for (.{ "_backgroundWebView", "backgroundWebView" }) |name|
+        if (objc.msg(objc.BOOL, ctx, "respondsToSelector:", .{objc.sel(name)})) return objc.msg(?objc.Object, ctx, name, .{});
+    return null;
+}
+
+/// The row's menu: pin, new tabs, options, background, errors, reload, remove.
 fn actions(arena: std.mem.Allocator, b: *Browser, at: u64) anyerror![]const MenuItem {
     const e = b.kea.ext orelse return &.{};
     if (at >= e.installed.items.len) return &.{};
@@ -241,9 +308,11 @@ fn actions(arena: std.mem.Allocator, b: *Browser, at: u64) anyerror![]const Menu
         }
         if (objc.msg(?objc.Object, ctx, "optionsPageURL", .{}) != null)
             try out.append(arena, .{ .label = "Options", .click = .of(try Make.act(arena, b, id, .options), Act.fire) });
+        try out.append(arena, .{ .label = "Inspect Background", .click = .of(try Make.act(arena, b, id, .inspect_bg), Act.fire) });
     }
-    if (item.source != null or !item.fromStore)
-        try out.append(arena, .{ .label = "Reload", .click = .of(try Make.act(arena, b, id, .reload), Act.fire) });
+    if (e.errors.get(id)) |l| if (l.items.len > 0)
+        try out.append(arena, .{ .label = "Clear Errors", .click = .of(try Make.act(arena, b, id, .clear_errors), Act.fire) });
+    try out.append(arena, .{ .label = "Reload", .click = .of(try Make.act(arena, b, id, .reload), Act.fire) });
     try out.append(arena, .separator);
     try out.append(arena, .{ .label = "Remove", .click = .of(try Make.act(arena, b, id, .remove), Act.fire) });
     return out.items;

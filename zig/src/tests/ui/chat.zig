@@ -10,13 +10,22 @@ const t = std.testing;
 
 pub const answer = "Kea are clever parrots of the Southern Alps.";
 
-/// Every answer `answer`, in two pieces; a chat's name "Kea facts".
+/// What each question is answered with, in two pieces; `answer` unless a test says otherwise.
+pub var reply: []const u8 = answer;
+/// Questions answered (not names or follow-ups).
+pub var answered: usize = 0;
+pub const followups = [_][]const u8{ "Why are kea so curious?", "What do kea eat?", "How smart are kea?" };
+
+/// Every answer `reply`, in two pieces; a chat's name "Kea facts"; `followups` after it.
 pub fn stream(_: ?*anyopaque, _: *app.ai_core.Ai, q: client.Ask, sink: client.Sink) ?client.Handle {
     if (std.mem.startsWith(u8, q.system, "Name this chat")) {
         sink.piece(sink.ctx, "Kea facts");
+    } else if (std.mem.startsWith(u8, q.system, "Suggest 3")) {
+        sink.piece(sink.ctx, "1. " ++ followups[0] ++ "\n- " ++ followups[1] ++ "\n" ++ followups[2]);
     } else {
-        sink.piece(sink.ctx, answer[0..9]);
-        sink.piece(sink.ctx, answer[9..]);
+        answered += 1;
+        sink.piece(sink.ctx, reply[0 .. reply.len / 2]);
+        sink.piece(sink.ctx, reply[reply.len / 2 ..]);
     }
     sink.done(sink.ctx, null);
     return null;

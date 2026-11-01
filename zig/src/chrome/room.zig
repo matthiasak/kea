@@ -29,6 +29,9 @@ pub const Room = struct {
     chat_expanded: bool = false,
     chat_width_pref: f32 = metrics.chat,
     marks_width_pref: f32 = metrics.side,
+    web_asked: bool = false,
+    web_expanded: bool = false,
+    web_width_pref: f32 = metrics.chat,
     /// 0 before the window is measured.
     window_width: f32 = 0,
 
@@ -88,6 +91,14 @@ pub const Room = struct {
         return r.marksColumn() and !r.marks_popped and !r.marks_expanded;
     }
 
+    pub fn webColumn(r: Room) bool {
+        return r.web_asked and !r.fullscreen;
+    }
+
+    pub fn webShown(r: Room) bool {
+        return r.webColumn() and !r.web_expanded;
+    }
+
     /// What the side panels may take: the window less the column and the narrowest page.
     pub fn panelRoom(r: Room) f32 {
         if (r.window_width == 0) return std.math.inf(f32);
@@ -101,6 +112,11 @@ pub const Room = struct {
     pub fn marksWidth(r: Room) f32 {
         const chat: f32 = if (r.chatShown()) r.chatWidth() else 0;
         return @min(r.marks_width_pref, @max(metrics.side_min, r.panelRoom() - chat));
+    }
+
+    pub fn webWidth(r: Room) f32 {
+        const used: f32 = (if (r.chatShown()) r.chatWidth() else 0) + (if (r.marksShown()) r.marksWidth() else 0);
+        return @min(r.web_width_pref, @max(metrics.chat_min, r.panelRoom() - used));
     }
 };
 

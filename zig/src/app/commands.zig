@@ -91,11 +91,14 @@ pub const all = [_]Command{
     c("view.inspector", "Web Inspector", .view, k("i", .{ .option = true }), inspector.toggleInspector),
     c("view.console", "JavaScript Console", .view, k("j", .{ .option = true }), inspector.showConsole),
     c("view.inspect", "Inspect Element", .view, k("c", .{ .option = true }), inspector.inspectElement),
+    c("view.source", "View Page Source", .view, k("u", .{ .option = true }), inspector.showPageSource),
+    c("view.debugHud", "Performance & Memory HUD", .view, k("d", .{ .option = true, .shift = true }), @import("../chrome/debug_hud.zig").toggle),
 
     c("tabs.back", "Back", .tabs, k("[", .{}), act.back),
     c("tabs.forward", "Forward", .tabs, k("]", .{}), act.forward),
     c("tabs.next", "Next Tab", .tabs, k("]", .{ .shift = true }), act.next),
     c("tabs.previous", "Previous Tab", .tabs, k("[", .{ .shift = true }), act.previous),
+    c("tabs.switchRecent", "Switch to Recent Tab", .tabs, .{ .key = "tab", .control = true }, act.switchRecent),
     c("tabs.search", "Search Tabs…", .tabs, k("k", .{}), act.search),
     // ⌥⌘N, Chrome's on the Mac: ⌃⌘S is the Mac's own Show Sidebar.
     c("tabs.split", "Split Current Page", .tabs, k("n", .{ .option = true }), act.split),
@@ -109,7 +112,10 @@ pub const all = [_]Command{
     c("tabs.duplicate", "Duplicate Tab", .tabs, k("d", .{}), Browser.duplicate),
     c("tabs.toggleMute", "Mute Tab", .tabs, k("m", .{ .option = true, .shift = true }), act.toggleMute),
     c("tabs.newGroup", "New Tab Group", .tabs, k("g", .{ .option = true }), act.newGroup),
+    c("tabs.foldGroups", "Fold All Groups", .tabs, k("[", .{ .option = true }), Browser.foldAllGroups),
+    c("tabs.unfoldGroups", "Unfold All Groups", .tabs, k("]", .{ .option = true }), Browser.unfoldAllGroups),
     c("tabs.copyAddress", "Copy Address", .tabs, k("c", .{ .shift = true }), Browser.copyAddress),
+    c("tabs.copyCleanAddress", "Copy Clean Link", .tabs, k("c", .{ .shift = true, .option = true }), Browser.copyCleanAddress),
     c("tabs.copyMarkdown", "Copy as Markdown Link", .tabs, null, Browser.copyMarkdownLink),
     c("tabs.pasteAndGo", "Paste and Go", .tabs, k("v", .{ .shift = true }), Browser.pasteAndGo),
     c("tabs.closeOthers", "Close Other Tabs", .tabs, null, act.closeOthers),
@@ -198,8 +204,20 @@ const act = struct {
     fn search(b: *Browser) void {
         if (b.editing and b.omni.offers.len > 0) b.stepSummon() else b.summon();
     }
+    fn switchRecent(b: *Browser) void {
+        const tab_switcher = @import("../chrome/tab_switcher.zig");
+        if (tab_switcher.canSwitch(b)) b.switchTabs(false) else b.step(1);
+    }
     fn split(b: *Browser) void {
-        if (b.prefs.split_view) b.startSplit();
+        if (!b.prefs.split_view) return;
+        if (b.picked_tab) |pid| {
+            b.picked_tab = null;
+            if (b.activeTab()) |act_t| if (b.tabById(pid)) |other| if (act_t.id != other.id and b.splitFor(other) == null) {
+                b.pair(act_t, other, false);
+                return;
+            };
+        }
+        b.startSplit();
     }
     fn focusLeft(b: *Browser) void {
         if (b.prefs.split_view) b.focusPaneSide(true);

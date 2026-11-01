@@ -10,7 +10,8 @@ const objc = nanoui.objc;
 const tab_mod = @import("tab.zig");
 const Tab = tab_mod.Tab;
 const Browser = @import("../model/browser.zig").Browser;
-const Parts = @import("../data/url.zig").Parts;
+const url_mod = @import("../data/url.zig");
+const Parts = url_mod.Parts;
 const address = @import("../model/address.zig");
 const app_name = @import("../app/kea.zig").app_name;
 const config = @import("config.zig");
@@ -186,6 +187,13 @@ fn decide(self: objc.Object, wv: objc.Object, action: objc.Object) objc.NSIntege
     const kind = objc.msg(objc.NSInteger, action, "navigationType", .{});
     const flags = objc.msg(objc.NSUInteger, action, "modifierFlags", .{});
     const web = std.mem.eql(u8, scheme, "http") or std.mem.eql(u8, scheme, "https");
+    if (main and web and (t.shy or t.kea.prefs.strips_click_trackers)) {
+        if (url_mod.clean(t.gpa, url, .click_ids_only) catch null) |cleaned| {
+            defer t.gpa.free(cleaned);
+            tab_mod.open(wv, cleaned);
+            return cancel;
+        }
+    }
     // A website returning to an extension page, or an extension's page
     // going to a website: the tab is swapped where it stands.
     if (ext_nav.returning(t, wv, action, url, web, isMainTarget(action))) return cancel;
@@ -268,6 +276,7 @@ fn didCommit(self: objc.Object, _: objc.SEL, wv: objc.Object, navigation: ?objc.
     if (t.browser) |b| if (t.id == b.active_id) @import("page_find.zig").invalidatePage(b, false);
     t.setFailure(null);
     t.typing = false;
+    t.clearBlockedPopups();
     state.applyRememberedZoom(t);
     state.uncover(t, 0.45);
     t.changed(.state);
@@ -290,6 +299,8 @@ fn didFinish(self: objc.Object, _: objc.SEL, wv: objc.Object, _: ?objc.Object) c
     @import("../ext/store_relay.zig").tellStore(t);
     // A page that arrived after a password went out: did the sign-in take?
     @import("../passwords/form_relay.zig").settle(t, true);
+    // A paper, a PDF, a repository: explained section by section.
+    @import("../ai/researcher.zig").arrived(t);
     const b = t.browser orelse return;
     if (t.shy or b.restoring) return;
     b.history.record(page, t.page_title);

@@ -358,6 +358,7 @@ fn pane(b: *Browser, c: *ui.Context, p: *const Palette, t: *Tab, at: ui.Rect, ca
     link_bubble.draw(b, c, p, t, i);
     whose(c, p, t, paired and !focused and (hovered or b.folded));
     if (paired) focusCue(c, p, t.id, focused, cards);
+    @import("../ai/researcher_view.zig").draw(b, c, p, t, at, focused);
     if (focused) find_bar.view(b, c, p, if (paired) at.w else null);
     return i;
 }

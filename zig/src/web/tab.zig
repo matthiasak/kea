@@ -61,6 +61,7 @@ pub const Tab = struct {
     address: ?[]u8 = null,
     committed: ?[]u8 = null,
     page_title: []u8 = &.{},
+    url_cache: @import("tab_url_cache.zig").UrlCache = .{}, // What its title shows of `url()` (`tab_title.draw`).
     /// The page never arrived (`failure`), shown in its place.
     failure: ?[]u8 = null,
     /// Its page is out in the floating window (`floating`, Float.swift).
@@ -91,6 +92,7 @@ pub const Tab = struct {
     crashes: std.ArrayList(f64) = .empty,
     /// A window a page opened at a size of its own (`popup`).
     popup: bool = false,
+    blocked_popups: std.ArrayList([]u8) = .empty,
     /// The tab whose page opened this one (`opener`).
     opener: ?u64 = null,
     shy: bool = false,
@@ -200,6 +202,7 @@ pub const Tab = struct {
         // Going: its window, perhaps going too, hears nothing more of it.
         self.browser = null;
         dialogs.dropAll(self);
+        @import("../ai/researcher.zig").forget(self.serial);
         self.discard();
         _ = live.remove(self.serial);
         for ([_]?[]u8{ self.pin, self.home, self.name, self.pending, self.address, self.committed, self.failure, self.picture, self.cover, self.draft, self.held_url, self.held_over }) |s| if (s) |owned| self.gpa.free(owned);
@@ -208,6 +211,8 @@ pub const Tab = struct {
         self.gpa.free(self.veils);
         if (self.store_placed) |s| self.gpa.free(s);
         self.crashes.deinit(self.gpa);
+        self.clearBlockedPopups();
+        self.blocked_popups.deinit(self.gpa);
         self.questions.deinit(self.gpa);
         self.held.deinit(self.gpa);
         self.sign_in.deinit(self.gpa);
@@ -351,6 +356,11 @@ pub const Tab = struct {
         self.own(&self.failure, s);
     }
 
+    pub fn clearBlockedPopups(self: *Tab) void {
+        for (self.blocked_popups.items) |u| self.gpa.free(u);
+        self.blocked_popups.clearRetainingCapacity();
+    }
+
     /// Its speaker or its menu: the page plays on, unheard.
     pub fn toggleMute(self: *Tab) void {
         self.muted = !self.muted;
@@ -377,6 +387,7 @@ pub const Tab = struct {
         self.reading = 0;
         self.reader = false;
         self.typing = false;
+        self.clearBlockedPopups();
         self.own(&self.draft, null);
         self.own(&self.pending, null);
         state.forgetSleep(self);
@@ -553,6 +564,9 @@ pub fn open(wv: objc.Object, target: []const u8) void {
         _ = objc.msg(?objc.Object, wv, "loadFileURL:allowingReadAccessToURL:", .{ nsurl, if (too_wide) nsurl else folder });
         return;
     }
-    const req = objc.msg(objc.Object, objc.class("NSURLRequest"), "requestWithURL:", .{nsurl});
+    const req = objc.msg(objc.Object, objc.class("NSMutableURLRequest"), "requestWithURL:", .{nsurl});
+    if (page_view.tabOf(wv)) |t| if (t.shy or t.kea.prefs.gpc) {
+        objc.msg(void, req, "setValue:forHTTPHeaderField:", .{ objc.nsString("1"), objc.nsString("Sec-GPC") });
+    };
     _ = objc.msg(?objc.Object, wv, "loadRequest:", .{req});
 }

@@ -13,6 +13,7 @@ const web = @import("web.zig");
 pub const cases = [_]Case{
     .{ .name = "summarize page streams into transcript", .run = summarize },
     .{ .name = "ubi chat tool call searches history and answers", .run = toolCallHistory },
+    .{ .name = "ubi chat reads an open pdf", .run = readsPdf },
 };
 
 const pieces = [_][]const u8{ "Kea are ", "alpine parrots ", "of New Zealand, ", "known for their curiosity." };
@@ -33,7 +34,7 @@ const Stub = struct {
 var stub: Stub = .{};
 
 fn stream(_: ?*anyopaque, _: *app.ai_core.Ai, q: client.Ask, sink: client.Sink) ?client.Handle {
-    if (std.mem.startsWith(u8, q.system, "Name this chat")) {
+    if (std.mem.startsWith(u8, q.system, "Name this chat") or std.mem.startsWith(u8, q.system, "Suggest 3")) {
         sink.piece(sink.ctx, "Kea");
         sink.done(sink.ctx, null);
         return null;
@@ -113,7 +114,7 @@ fn summarize(h: *Harness) !void {
 var tool_round: usize = 0;
 
 fn toolStream(_: ?*anyopaque, _: *app.ai_core.Ai, q: client.Ask, sink: client.Sink) ?client.Handle {
-    if (std.mem.startsWith(u8, q.system, "Name this chat")) {
+    if (std.mem.startsWith(u8, q.system, "Name this chat") or std.mem.startsWith(u8, q.system, "Suggest 3")) {
         sink.piece(sink.ctx, "Kea History");
         sink.done(sink.ctx, null);
         return null;
@@ -153,4 +154,27 @@ fn toolCallHistory(h: *Harness) !void {
     try h.expect(std.mem.eql(u8, turn.tools[0].said, "Searched history for “kea”"), "tool said '{s}'", .{turn.tools[0].said});
     try h.expect(std.mem.eql(u8, turn.answer, "Found the kea page in history."), "answer '{s}'", .{turn.answer});
     try h.expect(std.mem.indexOf(u8, stub.asked.items, "https://kea.example/alpine") != null, "tool result not sent on second ask", .{});
+}
+
+fn readsPdf(h: *Harness) !void {
+    stub = .{};
+    defer stub.asked.deinit(std.heap.c_allocator);
+    const b = try h.start();
+    const m = b.kea.ai;
+    m.client = .{ .stream = stream };
+    m.prefs.set("ai", true);
+    m.prefs.set("ai_provider", "ollama");
+    m.prefs.setAIModel("m", "ollama");
+    // The question's own stream only: no section explanations alongside.
+    m.prefs.set("ai_researcher", false);
+    var buf: [128]u8 = undefined;
+    const t = try web.open(h, b, try std.fmt.bufPrint(&buf, "{s}/paper.pdf", .{h.http}));
+    try h.expect(app.pdf_text.isPdfTab(t), "not seen as a PDF tab", .{});
+    b.toggleChat();
+    const a = b.assisting.?;
+    _ = a.ask("What is this paper about?");
+    try h.waitFor(b, answered, 10, "the answer about the PDF");
+    try h.expect(a.chat.turns[0].failed == null, "failed: {s}", .{a.chat.turns[0].failed orelse ""});
+    try h.expect(std.mem.indexOf(u8, stub.asked.items, "Alpine Kea Thermodynamics") != null, "the PDF's text wasn't asked about", .{});
+    try h.expect(std.mem.indexOf(u8, stub.asked.items, "[Page 1]") != null, "no [Page 1] marker", .{});
 }

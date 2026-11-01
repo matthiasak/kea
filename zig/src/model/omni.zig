@@ -1,8 +1,4 @@
-//! The address field's model (`Browser.swift`): `Omni` (296-330), "guessing"
-//! and "the address field" (3873-4163), and "the address, in the tab itself"
-//! (1300-1369). Its functions are `Browser`'s methods through the decls there.
-//! Swift's `didSet`s are the setters here: `setTyped` guesses again, as
-//! `Omni.typed` does; `setEditing(false)` takes the site chip away.
+//! The address field's model (`Browser.swift`: `Omni`, guessing, and the tab field).
 const std = @import("std");
 const Browser = @import("browser.zig").Browser;
 const Tab = @import("../web/tab.zig").Tab;
@@ -39,6 +35,7 @@ pub const Omni = struct {
     /// The row Return goes to with none picked.
     landing: ?usize = null,
     picked: ?usize = null,
+    suggest_seq: u64 = 0,
     /// Holds `offers`, their strings and `ending`: each guess starts it over.
     arena: std.heap.ArenaAllocator,
 
@@ -243,6 +240,93 @@ pub fn guess(self: *Browser) void {
     // A picked row stops being the right row the moment the question changes.
     o.picked = null;
     o.landing = landing(self);
+    o.suggest_seq +%= 1;
+    const shy_active = if (self.activeTab()) |t| t.shy else false;
+    const q = trimmed(typed);
+    if (self.prefs.search_suggestions and !self.kea.opts.headless and !shy_active and q.len >= 2 and q.len <= 64 and (address.url(a, typed) catch null) == null) {
+        fetchSuggestions(self, q, o.suggest_seq);
+    }
+}
+
+const SuggestJob = struct {
+    kea: *@import("../app/kea.zig").Kea,
+    window: @import("../data/json.zig").Uuid,
+    seq: u64,
+    url: []u8,
+    body: ?[]u8 = null,
+
+    fn work(ctx: ?*anyopaque) callconv(.c) void {
+        const nanoui = @import("nanoui");
+        const objc = nanoui.objc;
+        const urlsession = @import("../sys/urlsession.zig");
+        const ca = std.heap.c_allocator;
+        const self: *SuggestJob = @ptrCast(@alignCast(ctx.?));
+        const pool = objc.Pool.push();
+        defer pool.pop();
+        const session = urlsession.ephemeral(2.5);
+        defer objc.release(session);
+        if (urlsession.send(ca, session, "GET", self.url, &.{}, null) catch null) |resp| {
+            if (resp.code == 200 and resp.body.len > 0) self.body = resp.body else ca.free(resp.body);
+        }
+        objc.dispatchMain(self, deliver);
+    }
+
+    fn deliver(ctx: ?*anyopaque) callconv(.c) void {
+        const ca = std.heap.c_allocator;
+        const self: *SuggestJob = @ptrCast(@alignCast(ctx.?));
+        defer {
+            if (self.body) |b| ca.free(b);
+            ca.free(self.url);
+            ca.destroy(self);
+        }
+        const raw = self.body orelse return;
+        const br = for (self.kea.browsers.items) |b| {
+            if (b.record_id.eql(self.window)) break b;
+        } else return;
+        if (br.omni.suggest_seq != self.seq) return;
+        const parsed = std.json.parseFromSlice(std.json.Value, ca, raw, .{}) catch return;
+        defer parsed.deinit();
+        if (parsed.value != .array or parsed.value.array.items.len < 2) return;
+        const arr = parsed.value.array.items[1];
+        if (arr != .array) return;
+        const a = br.omni.arena.allocator();
+        var list: std.ArrayList(Offer) = .empty;
+        list.appendSlice(a, br.omni.offers) catch return;
+        const eng_name = br.prefs.engine.name(a, br.prefs.custom_engine) catch "";
+        var added: usize = 0;
+        for (arr.array.items) |item| {
+            if (added >= 4) break;
+            if (item != .string or item.string.len == 0) continue;
+            const text = item.string;
+            var dup = false;
+            for (list.items) |existing| if (std.ascii.eqlIgnoreCase(existing.key, text)) {
+                dup = true;
+                break;
+            };
+            if (dup) continue;
+            const u = br.searchURL(a, text) orelse continue;
+            list.append(a, .{
+                .key = a.dupe(u8, text) catch continue,
+                .title = eng_name,
+                .url = u,
+                .kind = .search,
+            }) catch break;
+            added += 1;
+        }
+        if (added > 0) {
+            br.omni.offers = list.items;
+            br.redraw();
+        }
+    }
+};
+
+fn fetchSuggestions(self: *Browser, query: []const u8, seq: u64) void {
+    const dispatch = @import("../sys/dispatch.zig");
+    const ca = std.heap.c_allocator;
+    const u = (self.prefs.engine.suggestUrl(ca, query) catch null) orelse return;
+    const job = ca.create(SuggestJob) catch return ca.free(u);
+    job.* = .{ .kea = self.kea, .window = self.record_id, .seq = seq, .url = u };
+    dispatch.dispatch_async_f(dispatch.dispatch_get_global_queue(dispatch.qos_user_initiated, 0), job, SuggestJob.work);
 }
 
 /// What is open, most recently looked at first, filtered by every word

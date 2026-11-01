@@ -125,9 +125,12 @@ pub fn updateCaretBlink(c: *Context, was_focused: bool, changed: bool, moved: bo
     if (!was_focused or changed or moved or c.input.pressed) c.caret_moved_at = c.time;
 }
 
+/// Blinks for 10 s after the last edit or caret move, then holds steady
+/// with no further frames (NSTextView's idle behavior).
 pub fn caretVisible(c: *Context) bool {
     if (!c.window_focused) return false;
     const elapsed = @max(0.0, c.time - c.caret_moved_at);
+    if (elapsed >= 10.0) return true;
     const rem: f32 = 0.5 - @mod(@as(f32, @floatCast(elapsed)), 0.5);
     c.frameIn(@max(0.01, rem));
     return elapsed < 0.5 or @mod(elapsed, 1.0) < 0.5;

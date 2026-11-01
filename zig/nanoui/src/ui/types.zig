@@ -262,11 +262,38 @@ pub const Span = struct {
     background: ?Color = null,
     underline: bool = false,
     strike: bool = false,
+    /// A rounded outline round the background (an inline code pill).
+    border: ?Color = null,
+    /// Points of room kept on both sides (kerning, so the text is unchanged).
+    pad_x: f32 = 0,
 
     /// Whether it changes the font, so the text is shaped with its runs.
     pub fn styled(s: Span) bool {
-        return s.weight != null or s.italic or s.mono;
+        return s.weight != null or s.italic or s.mono or s.pad_x > 0;
     }
+};
+
+/// What a text copies instead of its own bytes (`Content.Text.copy`): the
+/// source it was made from (Markdown), mapped byte for byte.
+pub const CopyMap = struct {
+    /// Underlying source string (e.g. raw Markdown) backing `Content.Text.str`.
+    src: []const u8,
+    /// Length `str.len + 1`, monotonic `0..src.len`:
+    /// `open[i]` is the `src` byte before any opening syntax starting at `str[i]`;
+    /// `close[i]` is the `src` byte after any closing syntax ending at `str[i]`.
+    open: []const u32 = &.{},
+    close: []const u32 = &.{},
+    /// Runs (`**`, `*`, `` ` ``, `~~`, `[...](url)`) active over `[start, end)` in `str`,
+    /// used to balance partial selections that begin or end mid-run.
+    wraps: []const Wrap = &.{},
+    /// Emitted when selection starts at byte `0` of `str` (e.g. `"## "`, `"1. "`, `"> "`).
+    prefix: []const u8 = "",
+    /// Emitted when selection reaches `str.len` (e.g. `"\n```"`).
+    suffix: []const u8 = "",
+    /// Separator before this node when `Selection.text` is non-empty (`""` on same inline row, `"\n"` across blocks).
+    join: []const u8 = "\n",
+
+    pub const Wrap = struct { start: u32, end: u32, open: []const u8, close: []const u8 };
 };
 
 pub const TextStyle = struct {
@@ -300,6 +327,8 @@ pub const TextStyle = struct {
     tracking: f32 = 0,
     /// The system face's rounded design (SF Rounded); others keep their own.
     rounded: bool = false,
+    /// Math typography (STIX Two Math / Text, `fonts.createMath`).
+    math: bool = false,
 
     /// Cut to one line that fits, at its end or in its middle.
     pub fn cuts(s: TextStyle) bool {

@@ -1,4 +1,23 @@
 (function () {
+  // Markdown already rendered into an <article> by Kea: read that, as it is.
+  var mdPrebuilt = !!window.__keaMarkdownArticle;
+  if (mdPrebuilt) delete window.__keaMarkdownArticle;
+  // Its Markdown twin failed to load: the HTML page is what there is.
+  var skipMdLink = !!window.__keaSkipMdLink;
+  if (skipMdLink) delete window.__keaSkipMdLink;
+  if (!mdPrebuilt) {
+    if (document.contentType === 'text/markdown' || document.contentType === 'text/x-markdown' || /\.md$/i.test(location.pathname)) {
+      var rawMd = document.body ? (document.body.innerText || '') : '';
+      if (rawMd.trim().length > 0) return 'md:' + rawMd;
+    }
+    var mdLink = skipMdLink ? null : document.querySelector('link[rel="alternate"][type="text/markdown"], link[rel="alternate"][type="text/x-markdown"]');
+    if (mdLink && mdLink.href) {
+      try {
+        var mdUrl = new URL(mdLink.href, location.href);
+        if (mdUrl.origin === location.origin) return 'mdurl:' + mdUrl.href;
+      } catch (_) {}
+    }
+  }
   function prose(el) {
     var paragraphs = el.querySelectorAll('p');
     if (paragraphs.length < 2) return 0;
@@ -24,7 +43,7 @@
     return top;
   }
 
-  var article = best();
+  var article = mdPrebuilt ? document.querySelector('article') : best();
   if (!article) return 'none';
 
   // Every picture is resolved while the real page is still standing.
@@ -85,7 +104,11 @@
     '#kea-reader pre,#kea-reader code{font-family:ui-monospace,monospace;font-size:14px}',
     '#kea-reader pre{background:var(--kr-code);padding:14px;border-radius:8px;overflow:auto}',
     '#kea-reader blockquote{margin:1.6em 0;padding-left:1.2em;',
-    'border-left:2px solid var(--kr-rule);color:var(--kr-quote)}'
+    'border-left:2px solid var(--kr-rule);color:var(--kr-quote)}',
+    '#kea-reader-theme{position:fixed;top:18px;right:22px;display:flex;gap:4px;padding:3px;border-radius:999px;background:var(--kr-code);border:1px solid var(--kr-rule);opacity:0.35;transition:opacity 0.15s ease;font:500 11px/1 -apple-system,sans-serif;z-index:9999}',
+    '#kea-reader-theme:hover{opacity:1}',
+    '#kea-reader-theme button{all:unset;cursor:pointer;padding:4px 8px;border-radius:999px;color:var(--kr-muted)}',
+    '#kea-reader-theme button[data-active="true"]{background:var(--kr-bg);color:var(--kr-ink);box-shadow:0 1px 2px rgba(0,0,0,0.08)}'
   ].join('');
 
   var wrap = document.createElement('div');
@@ -128,10 +151,30 @@
   from.className = 'kea-from';
   from.textContent = location.host.replace(/^www\./, '');
 
+  var themeBar = document.createElement('div');
+  themeBar.id = 'kea-reader-theme';
+  var themes = [['auto', 'Auto'], ['light', 'Light'], ['sepia', 'Sepia'], ['dark', 'Dark']];
+  var curTheme = document.documentElement.dataset.krTheme || 'auto';
+  themes.forEach(function (pair) {
+    var btn = document.createElement('button');
+    btn.textContent = pair[1];
+    btn.dataset.theme = pair[0];
+    btn.dataset.active = pair[0] === curTheme ? 'true' : 'false';
+    btn.addEventListener('click', function () {
+      document.documentElement.dataset.krTheme = pair[0];
+      var all = themeBar.querySelectorAll('button');
+      for (var b = 0; b < all.length; b++) all[b].dataset.active = all[b] === btn ? 'true' : 'false';
+      if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.keaReader) {
+        window.webkit.messageHandlers.keaReader.postMessage(pair[0]);
+      }
+    });
+    themeBar.appendChild(btn);
+  });
   document.body.innerHTML = '';
   document.head.appendChild(sheet);
   wrap.insertBefore(from, wrap.firstChild);
   wrap.insertBefore(top, wrap.firstChild);
+  wrap.insertBefore(themeBar, wrap.firstChild);
   document.body.appendChild(wrap);
   window.scrollTo(0, 0);
   return 'read';

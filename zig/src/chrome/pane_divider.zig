@@ -79,9 +79,10 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette, s: TabSplit, left: f
     const rested = if (st.over_since) |t0| c.time - t0 >= 0.1 else false;
     if (st.over_since) |t0| if (!rested) c.frameIn(@floatCast(0.1 - (c.time - t0)));
     const lit = rested or st.live != null;
-    const w = ui.tween(c, it.id, 0, if (lit) 3 else 1, motion.quick_duration, ca_default);
     if (it.hovered or st.live != null) c.cursor = .resize_left_right;
-    _ = c.leaf(.{ .width = .{ .px = w }, .height = .fill, .radius = w / 2, .background = p.faint.mix(p.muted, (w - 1) / 2) }, .none, null);
+    _ = c.leaf(.{ .absolute = true, .width = .{ .px = 1 }, .height = .fill, .background = p.hairline }, .none, null);
+    const a = ui.tween(c, it.id, 0, if (lit) 1 else 0, motion.quick_duration, ca_default);
+    _ = c.leaf(.{ .width = .{ .px = 4 }, .height = .{ .px = 28 + 8 * a }, .radius = 2, .background = p.faint.mix(p.muted, a) }, .none, null);
 
     if (it.right_clicked) tab_menu.later(b, c.input.mouse, 0, menu);
     if (it.double_clicked) {

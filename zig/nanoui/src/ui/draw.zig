@@ -29,6 +29,27 @@ pub const Canvas = struct {
     /// The box's size at the last layout: zero in its first frame (which
     /// is built again once it has one).
     size: types.Size = .{},
+    /// Glyph runs, drawn over `shapes` with the frame's other text.
+    texts: std.ArrayList(Text) = .empty,
+    /// Selected and copied whole (a formula's source) when not empty.
+    copy_text: []const u8 = "",
+    /// Put before `copy_text` after other selected text.
+    copy_join: []const u8 = "\n",
+
+    pub const Text = struct {
+        /// `x` = left pen in canvas points; `y` = baseline in canvas points.
+        pos: Point,
+        str: []const u8,
+        style: types.TextStyle,
+        color: Color,
+    };
+
+    /// `str` on one line from `baseline` (its left end), in `style.color`
+    /// (the theme's text color when null).
+    pub fn text(cv: *Canvas, baseline: Point, str: []const u8, style: types.TextStyle) void {
+        const t: Text = .{ .pos = baseline, .str = str, .style = style, .color = style.color orelse cv.c.theme.text };
+        cv.texts.append(cv.c.alloc(), t) catch {};
+    }
 
     fn add(cv: *Canvas, i: gpu.Instance) void {
         cv.shapes.append(cv.c.alloc(), i) catch {};

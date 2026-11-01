@@ -112,6 +112,8 @@ pub fn show(e: *Extensions, url: []const u8, context: objc.Object, anchor_key: [
     // Sized the way Chrome sizes a popup, unseen, while the window already
     // stands at the size this popup had last time.
     const web = objc.msg(objc.Object, objc.alloc("WKWebView"), "initWithFrame:configuration:", .{ CGRect{ .size = .{ .width = 25, .height = 25 } }, configuration });
+    @import("../web/config.zig").inspector(objc.msg(objc.Object, configuration, "preferences", .{}), true);
+    @import("../web/inspector.zig").inspectable(web);
     const d = popup_page.delegate();
     objc.msg(void, web, "setUIDelegate:", .{d});
     objc.msg(void, web, "setNavigationDelegate:", .{d});
@@ -436,6 +438,11 @@ pub fn close() void {
 /// The popup of `kea`'s, as it goes.
 pub fn closeFor(kea: *Kea) void {
     if (current) |p| if (p.kea == kea) close();
+}
+
+/// The open popup's page, for the Web Inspector.
+pub fn currentWebView() ?objc.Object {
+    return if (current) |p| p.web else null;
 }
 
 /// The popup showing `web`, if one is up.

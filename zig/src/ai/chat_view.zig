@@ -52,10 +52,13 @@ pub const State = struct {
     appeared: bool = false,
     /// The chat shown, to fold its earlier turns again when it changes.
     chat_id: ?Uuid = null,
-    /// What the transcript showed: its end is followed when it changes.
+    /// What the transcript showed: its end is followed again when a turn joins or an answer starts.
     seen_turns: usize = 0,
-    seen_live: ?usize = null,
+    seen_live: bool = false,
     last_transcript_h: f32 = 0,
+    /// The answer coming in: its box, and its height as last laid out.
+    live_box: u64 = 0,
+    live_height: f32 = 0,
     heights: std.AutoHashMapUnmanaged(Uuid, f32) = .empty,
     heights_width: f32 = 0,
     heights_zoom: f32 = 1,
@@ -63,6 +66,17 @@ pub const State = struct {
     list_arena: ?std.heap.ArenaAllocator = null,
     list_hash: u64 = std.math.maxInt(u64),
     list_rows: []const ListItem = &.{},
+    /// ↑/↓ through the chat's inputs: where, the draft before, and whether
+    /// the composer holds only what was recalled (or nothing).
+    history_idx: ?usize = null,
+    history_saved: std.ArrayList(u8) = .empty,
+    history_clean: bool = true,
+    /// "Ask anything." folded to its title.
+    dock_folded: bool = false,
+    /// The question being edited in place, its text, and whether it takes the keys next frame.
+    editing_turn: ?Uuid = null,
+    edit_buf: ui.TextBuffer = .{},
+    edit_focus: bool = false,
 
     pub const RenderedTurn = struct { id: Uuid, box_id: u64 };
     pub const ListItem = union(enum) {
@@ -79,6 +93,8 @@ pub const State = struct {
         if (s.list_arena) |*la| la.deinit();
         s.draft.deinit();
         s.search.deinit();
+        s.edit_buf.deinit();
+        s.history_saved.deinit(gpa);
     }
 
     /// The chat closed: what the panel held begins afresh; its window stays
@@ -112,6 +128,10 @@ pub const Do = union(enum) {
     pick: ubi.Suggestion,
     submit,
     stop,
+    /// Answer again: the turn and the ones after it go.
+    retry: Uuid,
+    /// The question edited, asked again in its place (on the frame's arena).
+    edit_retry: struct { id: Uuid, question: []const u8 },
 };
 
 /// The panel, `width` wide in its column (null: let out or popped).
@@ -131,14 +151,19 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette, on_left: bool, width
         st.heights.clearRetainingCapacity();
         st.rendered_turns.clearRetainingCapacity();
         st.answers.clearCache(b.gpa);
+        st.history_idx = null;
+        st.history_saved.clearRetainingCapacity();
+        st.editing_turn = null;
+        st.edit_buf.clear();
+        st.seen_turns = std.math.maxInt(usize);
+        st.history_clean = a.draft.items.len == 0;
+        st.draft.set(a.draft.items);
     }
     if (!a.listing) {
         if (st.search.text().len > 0) st.search.clear();
         st.all_starred = false;
         st.hovered = null;
     }
-    // ponytail: pieces redraw through `Assistant.changed`; this also catches a frame they miss.
-    if (a.busy() or a.compacting) c.frameIn(0.1);
 
     side_panels.begin(c, p, .chat, width, expanded);
     const body = c.open(.{ .width = .fill, .height = .fill }, "kea.chat.body");
@@ -179,6 +204,10 @@ fn header(b: *Browser, c: *ui.Context, p: *const Palette, a: *Assistant, todo: *
         a.listing = !a.listing;
         c.changed = true;
     }
+    if (controls.door(c, p, "graduationcap", .{ .on = b.prefs.ai_researcher, .help = "Automatic Researcher Mode" }).clicked) {
+        run(b, .{ .kea = b.kea, .window = b.record_id, .chat = a.chat.id, .what = .researcher_toggle });
+        c.changed = true;
+    }
     if (controls.door(c, p, "square.and.pencil", .{ .help = "New Chat" }).clicked) todo.* = .new;
     if (!is_popped) {
         const icon = if (expanded) "arrow.down.right.and.arrow.up.left" else "arrow.up.left.and.arrow.down.right";
@@ -192,7 +221,7 @@ fn chatColumn(b: *Browser, c: *ui.Context, p: *const Palette, a: *Assistant, st:
     // Keyed: the composer keeps the focus as the chat list comes and goes beside it.
     _ = c.open(if (in_row) .{ .grow = 1, .min_width = 0, .height = .fill } else .{ .width = .fill, .grow = 1 }, "kea.chat.column");
     defer ui.end(c);
-    const sc = c.open(.{ .scroll = true, .scroll_bar = false, .width = .fill, .grow = 1 }, "kea.chat.transcript");
+    const sc = c.open(.{ .scroll = true, .scroll_bar = false, .follow_end = true, .width = .fill, .grow = 1 }, "kea.chat.transcript");
     const sc_id = c.node(sc).id;
     if (c.rects.get(sc_id)) |r| {
         if (st.last_transcript_h > r.h and r.h > 0) {
@@ -200,15 +229,21 @@ fn chatColumn(b: *Browser, c: *ui.Context, p: *const Palette, a: *Assistant, st:
         }
         st.last_transcript_h = r.h;
     }
-    // `scrollTo(last, anchor: .bottom)` as the answer grows or a turn joins.
-    const live: ?usize = if (a.live) |l| l.answer.items.len else null;
-    if (a.chat.turns.len != st.seen_turns or !std.meta.eql(live, st.seen_live)) {
-        st.seen_turns = a.chat.turns.len;
-        st.seen_live = live;
-        c.setScroll(sc_id, .y, std.math.floatMax(f32));
+    // `scrollTo(last, anchor: .bottom)` when a turn joins or an answer starts; scrolled up, the reader stays.
+    const live = a.live != null;
+    if ((a.chat.turns.len != st.seen_turns and !st.seen_live) or (live and !st.seen_live)) c.scroll_follow.put(c.gpa, sc_id, true) catch {};
+    st.seen_turns = a.chat.turns.len;
+    st.seen_live = live;
+    // While words arrive (a live answer, or the Researcher's unfinished turn), the end is eased to, not jumped to.
+    const streaming = live or (a.chat.turns.len > 0 and !a.chat.turns[a.chat.turns.len - 1].done);
+    if (streaming and !c.reduce_motion and (c.scroll_follow.get(sc_id) orelse true)) {
+        const cur = c.scroll.get(sc_id) orelse 0;
+        const max_s = c.scroll_max.get(sc_id) orelse 0;
+        c.capScroll(sc_id, cur + (max_s - cur) * @min(1.0, c.dt * 18.0) + 1.5);
     }
     if (a.chat.turns.len > 8) turns.virtualConversation(b, c, p, a, st, todo, z, sc_id) else turns.conversation(b, c, p, a, st, todo, z);
     c.end();
+    if (a.notice == null) turns.askAnythingDock(b, c, p, a, st, todo, z);
     composer.view(b, c, p, a, st, todo);
 }
 /// `todo` done, once the panel is built.
@@ -243,6 +278,8 @@ fn apply(b: *Browser, a: *Assistant, todo: Do, roomy: bool) void {
         .pick => |s| a.pick(s),
         .submit => a.submit(),
         .stop => a.stop(),
+        .retry => |id| a.retry(id),
+        .edit_retry => |er| a.editAndRetry(er.id, er.question),
     }
     redraw(b);
 }
@@ -281,7 +318,7 @@ pub const Act = struct {
     /// A model's name (`.model`), or the name Rename… starts with.
     text: []const u8 = "",
 
-    pub const What = enum { rename, star, task, clone, compact, clean_up, copy, delete, zoom_in, zoom_out, zoom_reset, model, thinking_toggle, effort_low, effort_medium, effort_high, effort_max, web_search_toggle, tools_toggle, settings };
+    pub const What = enum { rename, star, task, clone, compact, clean_up, copy, delete, zoom_in, zoom_out, zoom_reset, model, thinking_toggle, effort_low, effort_medium, effort_high, effort_max, web_search_toggle, tools_toggle, researcher_toggle, settings };
 
     fn fire(self: *Act, _: *nanoui.menu.Item) void {
         const b = find(self.kea, self.window) orelse return;
@@ -327,6 +364,11 @@ pub fn run(b: *Browser, act: Act) void {
         },
         .web_search_toggle => return b.prefs.set("ai_web_search", !b.prefs.ai_web_search),
         .tools_toggle => return b.prefs.set("ubi_tools", !b.prefs.ubi_tools),
+        .researcher_toggle => {
+            b.prefs.set("ai_researcher", !b.prefs.ai_researcher);
+            if (b.prefs.ai_researcher) @import("researcher.zig").runOnActive(b, false);
+            return;
+        },
         .settings => if (b.kea.ai.open_settings) |open| return open(b),
         else => {},
     }

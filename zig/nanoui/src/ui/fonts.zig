@@ -75,6 +75,16 @@ fn italicOf(base: cf.CTFontRef, size: f32) cf.CTFontRef {
     return CTFontCreateCopyWithAttributes(base, size, &slant, null) orelse @ptrCast(cf.CFRetain(base));
 }
 
+/// A retained math font: STIX Two Math (upright) or STIX Two Text
+/// (italic, bold), then Times New Roman, then the system's.
+pub fn createMath(size: f32, weight: types.Weight, italic: bool) cf.CTFontRef {
+    if (italic) return named("STIX Two Text", size, weight, true) orelse
+        named("Times New Roman", size, weight, true) orelse create(null, size, weight, true, false);
+    const first = if (weight == .regular) named("STIX Two Math", size, .regular, false) else named("STIX Two Text", size, weight, false);
+    return first orelse named("STIX Two Math", size, weight, false) orelse
+        named("Times New Roman", size, weight, false) orelse create(null, size, weight, false, false);
+}
+
 fn named(name: []const u8, size: f32, weight: types.Weight, italic: bool) ?cf.CTFontRef {
     const family = cf.string(name);
     defer cf.CFRelease(family);

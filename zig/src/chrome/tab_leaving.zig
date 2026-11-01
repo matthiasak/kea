@@ -99,7 +99,7 @@ pub fn draw(b: *Browser, c: *ui.Context, p: *const Palette, s: *const Snap, x: f
     }
     _ = c.open(style, null);
     defer c.end();
-    const icon: ?mark.Icon = if (b.prefs.glyph == .icons) b.kea.favicons.icon(s.url()) else null;
+    const icon: ?mark.Icon = if (b.prefs.glyph != .letters) b.kea.favicons.icon(s.url()) else null;
     if (s.pinned) {
         _ = c.open(.{ .width = px(16), .height = px(16), .align_items = .center, .justify = .center }, null);
         defer c.end();
@@ -108,7 +108,7 @@ pub fn draw(b: *Browser, c: *ui.Context, p: *const Palette, s: *const Snap, x: f
     }
     const mono = s.mono[0..s.mono_len];
     if (compact) return mark.mark(c, p, icon, mono, 15, s.asleep);
-    if (b.prefs.glyph == .icons and !s.blank) mark.mark(c, p, icon, mono, 15, false);
+    if (b.prefs.glyph != .letters and !s.blank) mark.mark(c, p, icon, mono, 15, false);
     if (s.shy) ui.icon(c, "eye.slash", .{ .size = 9, .color = p.muted.alpha(0.7) });
     if (s.recording) ui.icon(c, "record.circle", .{ .size = 10, .color = p.muted.alpha(0.8) });
     ui.text(c, s.label(), .{ .size = 12.5, .color = p.muted, .truncate = .ellipsis });
@@ -117,9 +117,13 @@ pub fn draw(b: *Browser, c: *ui.Context, p: *const Palette, s: *const Snap, x: f
 /// A pill or row gone, where it stood, with what it showed.
 pub const Leaving = struct { id: u64, x: f32, y: f32 = 0, w: f32, h: f32 = 28, snap: Snap };
 
-fn has(seen: anytype, id: u64) bool {
-    for (seen) |s| if (s.id == id) return true;
-    return false;
+/// Ids drawn in a frame, to look up (`collect`): reused, so a steady row allocates nothing.
+pub const Ids = std.AutoHashMapUnmanaged(u64, void);
+
+/// `ids` made the ids of `seen`.
+pub fn collect(ids: *Ids, gpa: std.mem.Allocator, seen: anytype) void {
+    ids.clearRetainingCapacity();
+    for (seen) |s| ids.put(gpa, s.id, {}) catch {};
 }
 
 /// Tab `t` drawn in the row this frame: what its pill shows, kept.
@@ -137,15 +141,16 @@ pub fn keepIn(snaps: *std.AutoHashMapUnmanaged(u64, Snap), gpa: std.mem.Allocato
 /// are drawn until they are gone.
 pub fn leave(b: *Browser, c: *ui.Context, p: *const Palette, last: anytype, each: f32) void {
     const st = &b.strip;
+    collect(&st.seen_ids, b.gpa, st.seen.items);
     for (last) |s| {
-        if (has(st.seen.items, s.id)) continue;
+        if (st.seen_ids.contains(s.id)) continue;
         const kv = st.snaps.fetchRemove(s.id) orelse continue;
         st.leaving.append(b.gpa, .{ .id = s.id, .x = s.x, .w = s.w, .snap = kv.value }) catch {
             var gone = kv.value;
             gone.deinit(b.gpa);
         };
     }
-    pruneIn(&st.snaps, st.seen.items, b.gpa);
+    pruneIn(&st.snaps, &st.seen_ids, b.gpa);
     var k: usize = 0;
     for (st.leaving.items) |*l| {
         const v = presence(c, @import("tab_bar.zig").pillId(l.id), false, motion.settle, null) orelse {
@@ -180,8 +185,8 @@ pub fn drawSideRow(b: *Browser, c: *ui.Context, p: *const Palette, s: *const Sna
         .group = true,
     }, null);
     defer c.end();
-    const icon: ?mark.Icon = if (b.prefs.glyph == .icons) b.kea.favicons.icon(s.url()) else null;
-    if (b.prefs.glyph == .icons and !s.blank) mark.mark(c, p, icon, s.mono[0..s.mono_len], 15, false);
+    const icon: ?mark.Icon = if (b.prefs.glyph != .letters) b.kea.favicons.icon(s.url()) else null;
+    if (b.prefs.glyph != .letters and !s.blank) mark.mark(c, p, icon, s.mono[0..s.mono_len], 15, false);
     if (s.shy) ui.icon(c, "eye.slash", .{ .size = 9, .color = p.muted.alpha(0.7) });
     if (s.recording) ui.icon(c, "record.circle", .{ .size = 10, .color = p.muted.alpha(0.8) });
     const label = if (s.label().len == 0) "New Tab" else s.label();
@@ -209,7 +214,7 @@ pub fn drawPin(b: *Browser, c: *ui.Context, p: *const Palette, s: *const Snap, x
     const glyph = scale * 16 / 34;
     _ = c.open(.{ .width = px(glyph), .height = px(glyph), .align_items = .center, .justify = .center }, null);
     defer c.end();
-    const icon: ?mark.Icon = if (b.prefs.glyph == .icons and !s.blank) b.kea.favicons.icon(s.url()) else null;
+    const icon: ?mark.Icon = if (b.prefs.glyph != .letters and !s.blank) b.kea.favicons.icon(s.url()) else null;
     if (icon) |ic| {
         mark.mark(c, p, ic, s.letter(), glyph, s.asleep);
     } else {
@@ -219,23 +224,36 @@ pub fn drawPin(b: *Browser, c: *ui.Context, p: *const Palette, s: *const Snap, x
 
 /// A row put in wholesale: nothing leaves; what is not in it is forgotten.
 pub fn clear(b: *Browser) void {
-    clearIn(&b.strip.leaving, &b.strip.snaps, b.strip.seen.items, b.gpa);
+    collect(&b.strip.seen_ids, b.gpa, b.strip.seen.items);
+    clearIn(&b.strip.leaving, &b.strip.snaps, &b.strip.seen_ids, b.gpa);
 }
 
-pub fn clearIn(leaving: *std.ArrayList(Leaving), snaps: *std.AutoHashMapUnmanaged(u64, Snap), seen: anytype, gpa: std.mem.Allocator) void {
+pub fn clearIn(leaving: *std.ArrayList(Leaving), snaps: *std.AutoHashMapUnmanaged(u64, Snap), seen: *const Ids, gpa: std.mem.Allocator) void {
     for (leaving.items) |*l| l.snap.deinit(gpa);
     leaving.clearRetainingCapacity();
     pruneIn(snaps, seen, gpa);
 }
 
-pub fn pruneIn(snaps: *std.AutoHashMapUnmanaged(u64, Snap), seen: anytype, gpa: std.mem.Allocator) void {
-    if (snaps.count() <= seen.len) return;
+pub fn pruneIn(snaps: *std.AutoHashMapUnmanaged(u64, Snap), seen: *const Ids, gpa: std.mem.Allocator) void {
+    if (snaps.count() <= seen.count()) return;
     var it = snaps.iterator();
-    while (it.next()) |e| if (!has(seen, e.key_ptr.*)) {
+    while (it.next()) |e| if (!seen.contains(e.key_ptr.*)) {
         e.value_ptr.deinit(gpa);
         snaps.removeByPtr(e.key_ptr);
     };
 }
+
+/// A row not drawn (the strip under a column, or the column under a strip):
+/// its leaving tabs and their pictures go, their memory with them.
+pub fn release(leaving: *std.ArrayList(Leaving), snaps: *std.AutoHashMapUnmanaged(u64, Snap), gpa: std.mem.Allocator) void {
+    if (leaving.capacity == 0 and snaps.capacity() == 0) return;
+    for (leaving.items) |*l| l.snap.deinit(gpa);
+    leaving.clearAndFree(gpa);
+    var it = snaps.valueIterator();
+    while (it.next()) |s| s.deinit(gpa);
+    snaps.clearAndFree(gpa);
+}
+
 pub fn deinit(b_strip: anytype, gpa: std.mem.Allocator) void {
     for (b_strip.leaving.items) |*l| l.snap.deinit(gpa);
     b_strip.leaving.deinit(gpa);

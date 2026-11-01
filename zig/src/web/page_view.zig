@@ -26,6 +26,8 @@ pub const Page = struct {
     open_link: Action = .{},
     behind_since: ?f64 = null,
     web_search: Action = .{},
+    copy_link: Action = .{},
+    clean_link_url: ?[]u8 = null,
     selection: ?[]u8 = null,
     swipe: swipe.State = .{},
 
@@ -45,6 +47,7 @@ fn class() objc.Class {
             .{ .name = "willOpenMenu:withEvent:", .imp = &willOpenMenu, .types = "v@:@@" },
             .{ .name = "keaOpenLinkBehind:", .imp = &openLinkBehind, .types = "v@:@" },
             .{ .name = "keaSearchSelection:", .imp = &searchSelection, .types = "v@:@" },
+            .{ .name = "keaCopyCleanLink:", .imp = &copyCleanLink, .types = "v@:@" },
             .{ .name = "becomeFirstResponder", .imp = &becomeFirstResponder, .types = "B@:" },
             .{ .name = "mouseDown:", .imp = &mouseDown, .types = "v@:@" },
             .{ .name = "otherMouseDown:", .imp = &otherMouseDown, .types = "v@:@" },
@@ -78,6 +81,7 @@ pub fn forget(t: *Tab, wv: objc.Object) void {
     if (t.page) |p| {
         swipe.reset(p);
         if (p.selection) |s| std.heap.c_allocator.free(s);
+        if (p.clean_link_url) |u| std.heap.c_allocator.free(u);
         std.heap.c_allocator.destroy(p);
     }
     t.page = null;
@@ -85,6 +89,12 @@ pub fn forget(t: *Tab, wv: objc.Object) void {
 
 fn pageOf(view: objc.Object) ?*Page {
     return objc.getZig(Page, view);
+}
+
+pub fn tabOf(view: objc.Object) ?*Tab {
+    if (!objc.msg(objc.BOOL, view, "isKindOfClass:", .{class()})) return null;
+    const page = pageOf(view) orelse return null;
+    return page.tab();
 }
 
 // MARK: the page's own right-click menu
@@ -120,6 +130,29 @@ fn willOpenMenu(self: objc.Object, _: objc.SEL, menu: objc.Object, event: objc.O
         objc.msg(void, found.item, "setTarget:", .{self});
         objc.msg(void, found.item, "setAction:", .{objc.sel("keaOpenLinkBehind:")});
     }
+    if (page.clean_link_url) |u| {
+        std.heap.c_allocator.free(u);
+        page.clean_link_url = null;
+    }
+    page.copy_link = .{};
+    if (findItem(menu, "WKMenuItemIdentifierCopyLink")) |found| {
+        page.copy_link = .{ .target = objc.msg(?objc.Object, found.item, "target", .{}), .action = objc.msg(?objc.SEL, found.item, "action", .{}) };
+        if (t.browser) |b| if (b.link_status.destination) |dest| {
+            page.clean_link_url = std.heap.c_allocator.dupe(u8, dest) catch null;
+        };
+        const clean_item = objc.msg(objc.Object, objc.msg(objc.Object, objc.class("NSMenuItem"), "alloc", .{}), "initWithTitle:action:keyEquivalent:", .{ objc.nsString("Copy Clean Link"), objc.sel("keaCopyCleanLink:"), objc.nsString("") });
+        objc.msg(void, clean_item, "setTarget:", .{self});
+        objc.msg(void, menu, "insertItem:atIndex:", .{ clean_item, found.index + 1 });
+        objc.release(clean_item);
+    } else if (!t.isBlank()) {
+        if (@import("../data/url.zig").clean(t.gpa, t.url(), .all_trackers) catch null) |cleaned| {
+            t.gpa.free(cleaned);
+            const clean_item = objc.msg(objc.Object, objc.msg(objc.Object, objc.class("NSMenuItem"), "alloc", .{}), "initWithTitle:action:keyEquivalent:", .{ objc.nsString("Copy Clean Link"), objc.sel("keaCopyCleanLink:"), objc.nsString("") });
+            objc.msg(void, clean_item, "setTarget:", .{self});
+            objc.msg(void, menu, "addItem:", .{clean_item});
+            objc.release(clean_item);
+        }
+    }
     if (findItem(menu, "WKMenuItemIdentifierSearchWeb")) |found| {
         const b = t.browser orelse return;
         const name = b.prefs.engine.name(t.gpa, b.prefs.custom_engine) catch return;
@@ -150,6 +183,32 @@ fn openLinkBehind(self: objc.Object, _: objc.SEL, item: objc.Object) callconv(.c
     const action = page.open_link.action orelse return;
     page.behind_since = ui.clock.now();
     _ = objc.msg(objc.BOOL, nsapp(), "sendAction:to:from:", .{ action, page.open_link.target, item });
+}
+
+fn copyCleanLink(self: objc.Object, _: objc.SEL, item: objc.Object) callconv(.c) void {
+    const page = pageOf(self) orelse return;
+    const t = page.tab() orelse return;
+    const b = t.browser orelse return;
+    // The link is known: cleaned here, never through WebKit's async `_copyLink:`,
+    // which would land the raw link after ours.
+    if (page.clean_link_url) |raw| if (raw.len > 0) {
+        const cleaned = (@import("../data/url.zig").clean(t.gpa, raw, .all_trackers) catch null);
+        defer if (cleaned) |c| t.gpa.free(c);
+        b.kea.writeClipboard(cleaned orelse raw);
+        b.announce("Clean link copied");
+        return;
+    };
+    if (page.copy_link.action) |action| {
+        _ = objc.msg(objc.BOOL, nsapp(), "sendAction:to:from:", .{ action, page.copy_link.target, item });
+        const raw = b.kea.readClipboard(t.gpa) orelse return;
+        defer t.gpa.free(raw);
+        const cleaned = (@import("../data/url.zig").clean(t.gpa, raw, .all_trackers) catch null);
+        defer if (cleaned) |c| t.gpa.free(c);
+        b.kea.writeClipboard(cleaned orelse raw);
+        b.announce("Clean link copied");
+        return;
+    }
+    b.copyCleanAddress();
 }
 
 /// `takeBehind`: whether the tab being made now is the menu's, to stay

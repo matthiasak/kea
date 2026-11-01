@@ -18,6 +18,13 @@ extern "c" fn CGContextDrawImage(ctx: cf.CGContextRef, rect: objc.CGRect, image:
 extern "c" fn CGContextTranslateCTM(ctx: cf.CGContextRef, tx: f64, ty: f64) void;
 extern "c" fn CGContextSetAllowsFontSmoothing(ctx: cf.CGContextRef, v: bool) void;
 extern "c" fn CGColorSpaceCreateDeviceGray() ?cf.CGColorSpaceRef;
+
+/// Device gray, made once and kept: every cold glyph draws into it twice.
+var gray_space: ?cf.CGColorSpaceRef = null;
+fn deviceGray() ?cf.CGColorSpaceRef {
+    if (gray_space == null) gray_space = CGColorSpaceCreateDeviceGray();
+    return gray_space;
+}
 extern "c" fn UIGraphicsPushContext(ctx: cf.CGContextRef) void;
 extern "c" fn UIGraphicsPopContext() void;
 
@@ -176,8 +183,7 @@ pub const Atlas = struct {
 
         a.pixels.resize(a.gpa, w * h) catch return null;
         @memset(a.pixels.items, 0);
-        const gray = cf.CGColorSpaceCreateDeviceGray() orelse return null;
-        defer cf.CGColorSpaceRelease(gray);
+        const gray = deviceGray() orelse return null;
         const ctx = cf.CGBitmapContextCreate(a.pixels.items.ptr, w, h, 8, w, gray, cf.image_alpha_only) orelse return null;
         defer cf.CGContextRelease(ctx);
         const smooth = a.smoothFonts();
@@ -197,8 +203,7 @@ pub const Atlas = struct {
         a.upload(origin, w, h);
 
         // Dark-on-light mask (AppKit's stem dilation for dark ink on light backgrounds).
-        if (CGColorSpaceCreateDeviceGray()) |light_gray| {
-            defer cf.CGColorSpaceRelease(light_gray);
+        if (deviceGray()) |light_gray| {
             @memset(a.pixels.items, 255);
             if (cf.CGBitmapContextCreate(a.pixels.items.ptr, w, h, 8, w, light_gray, 0)) |lctx| {
                 defer cf.CGContextRelease(lctx);

@@ -17,6 +17,7 @@ pub const Command = enum {
     downloads,
     passwords,
     toggle_sidebar,
+    debug_hud,
 
     /// What you'd type to reach it. The first is what the list shows.
     pub fn aliases(self: Command) []const []const u8 {
@@ -30,6 +31,7 @@ pub const Command = enum {
             .downloads => &.{"downloads"},
             .passwords => &.{"passwords"},
             .toggle_sidebar => &.{ "toggle sidebar", "sidebar" },
+            .debug_hud => &.{ "debug", "hud", "perf" },
         };
     }
 
@@ -45,6 +47,7 @@ pub const Command = enum {
             .downloads => "Downloads",
             .passwords => "Passwords",
             .toggle_sidebar => "Toggle Sidebar",
+            .debug_hud => "Toggle Debug HUD",
         };
     }
 
@@ -71,6 +74,7 @@ pub const Command = enum {
                 b.prefs.set("sidebar", !b.prefs.sidebar);
                 b.syncStageHost();
             },
+            .debug_hud => @import("../chrome/debug_hud.zig").toggle(b),
         }
         b.redraw();
     }

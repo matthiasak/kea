@@ -1,7 +1,9 @@
 //! `AnswerView` (AIAssist.swift:1325-1441): an answer's Markdown, block by
-//! block — headings, paragraphs, lists, quotes, tables, rules and code
-//! (`CodeBlock`, markdown_view_code.zig) — its inline emphasis from
-//! markdown_inline.zig. Text selects, as `.textSelection(.enabled)`.
+//! block — headings, paragraphs, lists, quotes, tables
+//! (markdown_view_table.zig), rules, code (`CodeBlock`,
+//! markdown_view_code.zig) and display math (markdown_view_math.zig) —
+//! its inlines from markdown_view_rich.zig. Text selects, as
+//! `.textSelection(.enabled)`, and copies as the Markdown it came from.
 const std = @import("std");
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
@@ -10,10 +12,18 @@ const Palette = @import("../design/palette.zig").Palette;
 const markdown = @import("markdown.zig");
 const inline_ = @import("markdown_inline.zig");
 const code = @import("markdown_view_code.zig");
+const table = @import("markdown_view_table.zig");
 const mermaid = @import("mermaid/mermaid.zig");
 const draw = @import("mermaid/draw.zig");
 const controls = @import("../chrome/controls.zig");
 const plate = @import("../chrome/controls_plate.zig");
+const theme = @import("markdown_theme.zig");
+const rich_ = @import("markdown_view_rich.zig");
+const math_view = @import("markdown_view_math.zig");
+const math_layout = @import("math/layout.zig");
+const stream = @import("markdown_stream.zig");
+const presence = @import("../chrome/presence.zig");
+const motion = @import("../design/motion.zig");
 
 const pictures_kept = 24;
 
@@ -33,13 +43,17 @@ pub const State = struct {
     inlines_cache: std.AutoHashMapUnmanaged(u64, inline_.Shown) = .empty,
     diagrams_cache: std.AutoHashMapUnmanaged(u64, ?mermaid.Diagram) = .empty,
     boxes: std.AutoHashMapUnmanaged(u64, BoxState) = .empty,
+    /// Laid-out formulas (in `cache_arena`), by TeX, style, size and zoom.
+    math_cache: std.AutoHashMapUnmanaged(u64, math_layout.Box) = .empty,
+    /// How much of each streaming answer is shown, by `Options.stream_id`.
+    streams: std.AutoHashMapUnmanaged(u64, stream.Cursor) = .empty,
 
     pub const Picture = struct { bytes: []u8, used: f64 };
     pub const BoxState = struct {
         scale: f32 = 1.0,
         height: f32 = 0,
         pan_x: f32 = 0,
-        wrapped: bool = false,
+        wrapped: bool = true,
         col_scale: f32 = 1.0,
         drag_start: f32 = 0,
         drag_base: f32 = 0,
@@ -66,6 +80,8 @@ pub const State = struct {
         s.inlines_cache.deinit(gpa);
         s.diagrams_cache.deinit(gpa);
         s.boxes.deinit(gpa);
+        s.math_cache.deinit(gpa);
+        s.streams.deinit(gpa);
         if (s.cache_arena) |*ca| ca.deinit();
         s.* = .{};
     }
@@ -81,6 +97,8 @@ pub const State = struct {
         s.blocks_cache.clearRetainingCapacity();
         s.inlines_cache.clearRetainingCapacity();
         s.diagrams_cache.clearRetainingCapacity();
+        s.math_cache.clearRetainingCapacity();
+        s.streams.clearRetainingCapacity();
     }
 
     pub fn arenaAlloc(s: *State, gpa: std.mem.Allocator) std.mem.Allocator {
@@ -102,7 +120,9 @@ pub const State = struct {
     }
 };
 
-pub const Options = struct { zoom: f32 = 1, drawn: bool = false, cache: bool = true };
+/// `stream_id`: the answer is still coming in, paced out and its unfinished tail
+/// parsed each frame (markdown_stream.zig); null draws it whole at once.
+pub const Options = struct { zoom: f32 = 1, drawn: bool = false, cache: bool = true, stream_id: ?u64 = null };
 
 /// What every block of one answer is drawn with.
 pub const Ctx = struct {
@@ -129,12 +149,34 @@ pub fn cachedBlocks(st: *State, gpa: std.mem.Allocator, text: []const u8, cache:
 }
 
 /// `AnswerView(text:zoom:drawn:)`.
-pub fn answer(b: *Browser, c: *ui.Context, p: *const Palette, st: *State, text: []const u8, o: Options) void {
-    const x: Ctx = .{ .b = b, .c = c, .p = p, .st = st, .o = o };
-    const parsed = cachedBlocks(st, b.gpa, text, o.cache, c.alloc()) orelse return;
+pub fn answer(b: *Browser, c: *ui.Context, p: *const Palette, st: *State, full: []const u8, o: Options) void {
+    var x: Ctx = .{ .b = b, .c = c, .p = p, .st = st, .o = o };
     ui.column(c, .{ .gap = 10 * o.zoom, .width = .fill });
     defer ui.end(c);
-    for (parsed) |blk| block(&x, blk, 0);
+    const sid = o.stream_id orelse {
+        const parsed = cachedBlocks(st, b.gpa, full, o.cache, c.alloc()) orelse return;
+        for (parsed) |blk| block(&x, blk, 0, .{ .join = "\n\n" });
+        return;
+    };
+    // The finished blocks parsed once and kept; only the tail each frame, as it will look done.
+    const text = stream.visibleSlice(st, b.gpa, c, sid, full);
+    const cut = stream.splitSettled(text);
+    x.o.stream_id = null;
+    x.o.cache = true;
+    const settled = cachedBlocks(st, b.gpa, text[0..cut], true, c.alloc()) orelse &.{};
+    var tail_x = x;
+    tail_x.o = o;
+    tail_x.o.cache = false;
+    const tail_src = stream.stabilizeTail(c.alloc(), text[cut..]) catch text[cut..];
+    const tail = markdown.blocks(c.alloc(), tail_src) catch &.{};
+    for (0..settled.len + tail.len) |i| {
+        // Each block arriving fades up into place.
+        const fresh = i >= settled.len;
+        const v = std.math.clamp(presence.presenceFrom(c, sid ^ (i + 1), if (fresh) 0 else 1, true, motion.settle, null) orelse 1, 0, 1);
+        ui.column(c, .{ .width = .fill, .opacity = 0.18 + 0.82 * v, .offset = .{ .y = (1 - v) * 5 } });
+        defer ui.end(c);
+        if (fresh) block(&tail_x, tail[i - settled.len], 0, .{ .join = "\n\n" }) else block(&x, settled[i], 0, .{ .join = "\n\n" });
+    }
 }
 
 fn headingSize(level: u8, zoom: f32) f32 {
@@ -146,21 +188,23 @@ fn headingSize(level: u8, zoom: f32) f32 {
     });
 }
 
-/// `.lineSpacing(2.5 * zoom)` as a multiple of `style`'s line.
+/// `.lineSpacing(3.6 * zoom)` as a multiple of `style`'s line: airy prose.
 fn spaced(c: *ui.Context, style: ui.TextStyle, zoom: f32) ui.TextStyle {
     var s = style;
     const lh = c.text.font(style).lineHeight();
-    s.leading = (lh + 2.5 * zoom) / lh;
+    s.leading = (lh + 3.6 * zoom) / lh;
     return s;
 }
 
-fn block(x: *const Ctx, blk: markdown.Block, depth: usize) void {
+/// One block, copied with `cp` (a list item's marker, a quote's `> `).
+fn block(x: *const Ctx, blk: markdown.Block, depth: usize, cp: rich_.Copy) void {
     const c = x.c;
     const p = x.p;
     const z = x.o.zoom;
+    const th = theme.MdTheme.of(c.theme.dark, p);
     switch (blk) {
-        .heading => |h| rich(x, h.text, .{ .size = headingSize(h.level, z), .weight = .semibold, .color = p.ink, .wrap = true }, true),
-        .paragraph => |t| rich(x, t, spaced(c, .{ .size = 13 * z, .color = p.ink, .wrap = true }, z), true),
+        .heading => |h| rich_.rich(x, h.text, .{ .size = headingSize(h.level, z), .weight = .semibold, .color = th.strong, .wrap = true }, true, .{ .prefix = c.print("{s}{s} ", .{ cp.prefix, "######"[0..h.level] }), .join = cp.join }),
+        .paragraph => |t| rich_.rich(x, t, spaced(c, .{ .size = 13 * z, .color = th.body, .wrap = true }, z), true, cp),
         .list => |l| {
             ui.column(c, .{ .gap = 5 * z, .width = .fill });
             defer ui.end(c);
@@ -175,26 +219,38 @@ fn block(x: *const Ctx, blk: markdown.Block, depth: usize) void {
                 ui.end(c);
                 ui.column(c, .{ .gap = 6 * z, .grow = 1, .min_width = 0 });
                 defer ui.end(c);
-                for (item) |sub| block(x, sub, depth + 1);
+                // Copied as written: `1. ` or `- ` before the item, its later blocks indented under it.
+                const lead = c.print("{s}{s} ", .{ cp.prefix, if (l.ordered) marker else "-" });
+                const indent: []const u8 = blk: {
+                    const s = c.alloc().alloc(u8, lead.len) catch break :blk "";
+                    @memset(s, ' ');
+                    break :blk s;
+                };
+                for (item, 0..) |sub, k| block(x, sub, depth + 1, .{
+                    .prefix = if (k == 0) lead else indent,
+                    .join = if (k == 0 and i == 0) cp.join else "\n",
+                });
             }
         },
         .quote => |inner| {
             // The VStack's muted foreground yields to each Text's own ink.
-            ui.row(c, .{ .gap = 10, .width = .fill, .align_items = .stretch });
+            ui.row(c, .{ .gap = 10, .width = .fill, .align_items = .stretch, .background = th.quote_bg, .radius = 4, .padding = .{ .right = 10, .top = 6 * z, .bottom = 6 * z } });
             defer ui.end(c);
-            _ = c.leaf(.{ .width = .{ .px = 3 }, .background = p.faint }, .none, null);
+            _ = c.leaf(.{ .width = .{ .px = 3 }, .radius = 1.5, .background = th.quote_bar }, .none, null);
             ui.column(c, .{ .gap = 6 * z, .grow = 1, .min_width = 0 });
             defer ui.end(c);
-            for (inner) |sub| block(x, sub, depth + 1);
+            const lead = c.print("{s}> ", .{cp.prefix});
+            for (inner, 0..) |sub, k| block(x, sub, depth + 1, .{ .prefix = lead, .join = if (k == 0) cp.join else "\n>\n" });
         },
-        .table => |t| table(x, t.header, t.rows),
+        .table => |t| table.table(x, t.header, t.rows, cp),
         .rule => {
             _ = c.leaf(.{ .width = .fill, .height = .{ .px = 1 }, .background = p.hairline }, .none, null);
         },
+        .math => |m| math_view.displayBlock(x, m.text, m.raw, cp),
         .code => |cb| if (std.mem.eql(u8, cb.language, "mermaid") and cb.closed)
             mermaidCodeBlock(x, cb.language, cb.text)
         else
-            code.block(x, cb.language, cb.text, cb.closed),
+            code.block(x, cb.language, cb.text, cb.closed, cp),
     }
 }
 
@@ -220,7 +276,7 @@ fn mermaidCodeBlock(x: *const Ctx, language: []const u8, text: []const u8) void 
     const p = x.p;
     const z = x.o.zoom;
     const peek_id = c.peekId(null);
-    if (x.st.sources.contains(peek_id)) return code.block(x, language, text, true);
+    if (x.st.sources.contains(peek_id)) return code.block(x, language, text, true, .{});
     const pkey = pictureKey(text, c.theme.dark, z);
     var png_bytes: ?[]const u8 = null;
     if (x.st.pictures.getPtr(pkey)) |pic| {
@@ -231,12 +287,12 @@ fn mermaidCodeBlock(x: *const Ctx, language: []const u8, text: []const u8) void 
         if (draw.png(x.b.gpa, d, p, z)) |bytes| {
             x.st.pictures.put(x.b.gpa, pkey, .{ .bytes = bytes, .used = c.time }) catch {
                 x.b.gpa.free(bytes);
-                return code.block(x, language, text, true);
+                return code.block(x, language, text, true, .{});
             };
             png_bytes = bytes;
         } else |_| {}
     }
-    const bytes = png_bytes orelse return code.block(x, language, text, true);
+    const bytes = png_bytes orelse return code.block(x, language, text, true, .{});
 
     const i = c.open(.{ .gap = 8, .width = .fill, .padding = .all(10), .background = p.wash, .radius = 10, .border = p.hairline }, null);
     defer c.end();
@@ -274,17 +330,21 @@ fn mermaidCodeBlock(x: *const Ctx, language: []const u8, text: []const u8) void 
     if (until != null and !copied) _ = x.st.copied.remove(id);
     if (copied) c.frameIn(@floatCast(until.? - c.time));
     if (plate.quick(c, p, if (copied) "Copied" else "Copy", null).clicked) {
-        nanoui.clipboard.writeText(text);
+        x.b.kea.writeClipboard(text);
         x.st.copied.put(x.b.gpa, id, c.time + 1.5) catch {};
         c.frameIn(1.5);
         c.changed = true;
     }
     ui.end(c);
     if (!x.o.drawn) {
-        const sc = c.open(.{ .direction = .row, .width = .fill, .scroll_x = true, .scroll_bar = true }, null);
+        // At 100% or less the diagram fits the box; zoomed in, it scrolls sideways.
+        const zoomed = box.scale > 1.0;
+        const fit_w = if (c.rects.get(id)) |r| @max(80, r.w - 20) else std.math.inf(f32);
+        if (fit_w == std.math.inf(f32)) c.animationFrame();
+        const sc = c.open(.{ .direction = .row, .width = .fill, .scroll_x = zoomed, .scroll_bar = zoomed }, null);
         const sc_id = c.node(sc).id;
         const sc_it = c.interact(sc, .{});
-        if (sc_it.pressed) {
+        if (zoomed and sc_it.pressed) {
             if (box.drag_start == 0) {
                 box.drag_start = c.input.mouse.x;
                 box.drag_base = c.scroll_x.get(sc_id) orelse 0;
@@ -294,13 +354,13 @@ fn mermaidCodeBlock(x: *const Ctx, language: []const u8, text: []const u8) void 
             c.changed = true;
         } else {
             box.drag_start = 0;
-            if (sc_it.hovered) c.cursor = .open_hand;
+            if (zoomed and sc_it.hovered) c.cursor = .open_hand;
         }
-        ui.row(c, .{ .width = .auto, .justify = .center });
+        ui.row(c, .{ .width = if (zoomed) .auto else .fill, .justify = .center });
         _ = ui.image(c, .{
             .key = c.print("mermaid-{x}", .{pkey}),
             .bytes = bytes,
-            .max_width = std.math.inf(f32),
+            .max_width = if (zoomed) std.math.inf(f32) else fit_w,
             .max_height = std.math.inf(f32),
             .radius = 0,
             .scale = 2.0 / box.scale,
@@ -338,259 +398,13 @@ fn mermaidCodeBlock(x: *const Ctx, language: []const u8, text: []const u8) void 
     });
 }
 
-/// `Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 6)`:
-/// the header semibold, a divider, the rows; each column as wide as its
-/// widest cell. Padded 10 on a wash, scrolling sideways unless drawn.
-fn table(x: *const Ctx, header: []const []const u8, rows: []const []const []const u8) void {
-    const c = x.c;
-    const p = x.p;
-    const a = c.alloc();
-    const z = x.o.zoom;
-    const outer = c.open(.{ .gap = 6, .width = if (x.o.drawn) .auto else .fill, .padding = .all(10), .background = p.wash, .radius = 8, .border = p.hairline, .selectable = true }, null);
-    defer c.end();
-    const id = c.node(outer).id;
-    const box = x.st.boxState(x.b.gpa, id);
-    const head_style: ui.TextStyle = .{ .size = 12.5 * z, .weight = .semibold, .color = p.ink };
-    const cell_style: ui.TextStyle = .{ .size = 12.5 * z, .color = p.ink };
-    var columns = header.len;
-    for (rows) |r| columns = @max(columns, r.len);
-    const widths = a.alloc(f32, columns) catch return;
-    @memset(widths, 0);
-    const max_col: f32 = 280 * z * box.col_scale;
-    for (header, 0..) |cell, i| widths[i] = @max(widths[i], @min(max_col, @ceil(measure(x, cell, head_style) * box.col_scale)));
-    for (rows) |r| for (r, 0..) |cell, i| {
-        widths[i] = @max(widths[i], @min(max_col, @ceil(measure(x, cell, cell_style) * box.col_scale)));
-    };
-    const gaps: f32 = 14 * @as(f32, @floatFromInt(columns -| 1));
-    var natural: f32 = 0;
-    for (widths) |w| natural += w;
-    if (!x.o.drawn) if (c.rects.get(id)) |r| {
-        const avail = @max(0, r.w - 20 - gaps);
-        if (natural > 0 and natural < avail) {
-            const stretch = avail / natural;
-            for (widths) |*w| w.* = @round(w.* * stretch);
-            natural = 0;
-            for (widths) |w| natural += w;
-        }
-    };
-    const total = natural + gaps;
-
-    if (!x.o.drawn) {
-        const sc = c.open(.{ .direction = .row, .width = .fill, .scroll_x = true, .scroll_bar = true }, null);
-        const sc_id = c.node(sc).id;
-        const sc_it = c.interact(sc, .{});
-        if (sc_it.pressed and c.selection.hit == null and !c.selection.dragging) {
-            if (box.drag_start == 0) {
-                box.drag_start = c.input.mouse.x;
-                box.drag_base = c.scroll_x.get(sc_id) orelse 0;
-            }
-            c.setScroll(sc_id, .x, @max(0, box.drag_base - (c.input.mouse.x - box.drag_start)));
-            c.changed = true;
-        } else box.drag_start = 0;
-    }
-    ui.column(c, .{ .gap = 6 });
-    gridRow(x, header, widths, head_style);
-    // `Divider()`: the system separator, not a Kea grey.
-    _ = c.leaf(.{ .width = .{ .px = total }, .height = .{ .px = 1 }, .background = @import("../design/menu.zig").separatorColor(c.theme.dark) }, .none, null);
-    for (rows) |r| gridRow(x, r, widths, cell_style);
-    ui.end(c);
-    if (!x.o.drawn) {
-        c.end();
-        const bar = c.open(.{ .width = .fill, .height = .{ .px = 6 }, .align_items = .center, .justify = .center }, null);
-        const bar_it = c.interact(bar, .{});
-        c.addA11y(bar, .splitter, "Stretch table", "", false, true);
-        if (bar_it.hovered or bar_it.pressed) c.cursor = .resize_left_right;
-        if (bar_it.double_clicked) {
-            box.col_scale = 1.0;
-            c.changed = true;
-        } else if (bar_it.pressed) {
-            if (box.pan_x == 0) {
-                box.pan_x = c.input.mouse.x;
-                box.drag_base = box.col_scale;
-            }
-            box.col_scale = std.math.clamp(box.drag_base + (c.input.mouse.x - box.pan_x) / 200.0, 0.6, 3.0);
-            c.changed = true;
-        } else box.pan_x = 0;
-        _ = c.leaf(.{ .width = .{ .px = 32 }, .height = .{ .px = 3 }, .radius = 1.5, .background = if (bar_it.hovered or bar_it.pressed) p.muted else p.hairline }, .none, null);
-        c.end();
-    }
-}
-
-fn gridRow(x: *const Ctx, cells: []const []const u8, widths: []const f32, style: ui.TextStyle) void {
-    const c = x.c;
-    ui.row(c, .{ .gap = 14 });
-    defer ui.end(c);
-    var st = style;
-    st.wrap = true;
-    for (cells, 0..) |cell, i| {
-        ui.column(c, .{ .width = .{ .px = widths[i] } });
-        rich(x, cell, st, true);
-        ui.end(c);
-    }
-}
-
-/// The width of `src` shown on one line in `style`.
-fn cachedShown(x: *const Ctx, src: []const u8) inline_.Shown {
-    const k = textKey(src);
-    if (x.st.inlines_cache.get(k)) |sh| return sh;
-    if (!x.o.cache or x.st.inlines_cache.count() >= 4096) {
-        return inline_.shown(x.c.alloc(), src) catch inline_.Shown{ .text = src, .runs = &.{}, .links = &.{} };
-    }
-    const sh = inline_.shown(x.st.arenaAlloc(x.b.gpa), src) catch return inline_.Shown{ .text = src, .runs = &.{}, .links = &.{} };
-    x.st.inlines_cache.put(x.b.gpa, k, sh) catch {};
-    return sh;
-}
-
-/// The width of `src` shown on one line in `style`.
-fn measure(x: *const Ctx, src: []const u8, style: ui.TextStyle) f32 {
-    const shown = cachedShown(x, src);
-    const spans = toSpans(x, shown) catch return x.c.text.width(shown.text, style);
-    var w: f32 = 0;
-    var it: Segments = .{ .spans = spans, .end = shown.text.len };
-    while (it.next()) |seg| w += x.c.text.width(shown.text[seg.start..seg.end], seg.style(style));
-    return @ceil(w);
-}
-
-/// `Text(Markdown.shown(src))` in `style` (`selectable` as
-/// `.textSelection(.enabled)`); its web links open in a new tab when clicked.
-pub fn rich(x: *const Ctx, src: []const u8, style: ui.TextStyle, selectable: bool) void {
-    const c = x.c;
-    const shown = cachedShown(x, src);
-    const spans = toSpans(x, shown) catch &.{};
-    const i = c.leaf(.{ .width = if (style.wrap) .fill else .auto, .selectable = selectable }, .{ .text = .{ .str = shown.text, .style = style, .color = style.color orelse x.p.ink, .spans = spans } }, null);
-    for (shown.links) |l| {
-        if (opens(l.url)) return follow(x, i, shown, spans, style);
-    }
-}
-
-/// Only web addresses open from an answer.
-fn opens(url: []const u8) bool {
-    return std.ascii.startsWithIgnoreCase(url, "https://") or std.ascii.startsWithIgnoreCase(url, "http://");
-}
-
-/// The pointer over the text `i`: a hand over a link, and a click on one
-/// opens it in a new tab in front.
-fn follow(x: *const Ctx, i: u32, shown: inline_.Shown, spans: []const ui.Span, style: ui.TextStyle) void {
-    const c = x.c;
-    const it = c.interact(i, .{});
-    if (!it.hovered and !it.clicked) return;
-    const r = it.rect orelse return;
-    const at = byteAt(c, shown.text, spans, style, r, c.input.mouse);
-    const url: ?[]const u8 = if (at) |k| for (shown.links) |l| {
-        if (k >= l.start and k < l.end and opens(l.url)) break l.url;
-    } else null else null;
-    if (c.hot == it.id) c.cursor_hand = url != null;
-    if (it.clicked) if (url) |u| {
-        const shy = if (x.b.assisting) |a| a.shy else false;
-        // A private chat's links open private, out of a private tab; none: shut.
-        const from = if (shy) shyTab(x.b) orelse return else x.b.activeTab();
-        _ = x.b.open(u, .{ .foreground = !c.input.cmd or c.input.shift, .from = from, .may_wait = c.input.cmd and !c.input.shift });
-        c.changed = true;
-    };
-}
-
-/// A private tab, the one in front first.
-fn shyTab(b: *Browser) ?*@import("../web/tab.zig").Tab {
-    if (b.activeTab()) |front| if (front.shy) return front;
-    for (b.tabs.items) |t| if (t.shy) return t;
-    return null;
-}
-
-/// The byte of `str` (drawn with `spans` in `style`, wrapped to `r`)
-/// under `m`, if any.
-fn byteAt(c: *ui.Context, str: []const u8, spans: []const ui.Span, style: ui.TextStyle, r: ui.Rect, m: ui.Point) ?usize {
-    if (m.x < r.x or m.y < r.y) return null;
-    const row: usize = @intFromFloat(@floor((m.y - r.y) / c.text.lineHeight(style)));
-    var it: Segments = .{ .spans = spans, .end = str.len };
-    if (style.wrap) {
-        const lines = c.text.wrapAttributed(str, style, spans, r.w);
-        if (row >= lines.len) return null;
-        it.pos = lines[row].start;
-        it.end = lines[row].end;
-    } else if (row > 0) return null;
-    var left = r.x;
-    while (it.next()) |seg| {
-        const st = seg.style(style);
-        const piece = str[seg.start..seg.end];
-        const w = c.text.width(piece, st);
-        if (m.x < left + w) {
-            var k = c.text.indexAt(piece, st, m.x - left);
-            // The caret nearest the pointer may follow the glyph under it.
-            if (k > 0 and c.text.caretX(piece, st, k) > m.x - left) {
-                k -= 1;
-                while (k > 0 and piece[k] & 0xc0 == 0x80) k -= 1;
-            }
-            return seg.start + k;
-        }
-        left += w;
-    }
-    return null;
-}
-
-/// Runs of a line between span edges, each with the span over it.
-const Segments = struct {
-    spans: []const ui.Span,
-    pos: usize = 0,
-    end: usize,
-
-    const Seg = struct {
-        start: usize,
-        end: usize,
-        span: ?ui.Span,
-
-        fn style(s: Seg, base: ui.TextStyle) ui.TextStyle {
-            var st = base;
-            const sp = s.span orelse return st;
-            if (sp.weight) |w| st.weight = w;
-            st.italic = st.italic or sp.italic;
-            st.mono = st.mono or sp.mono;
-            return st;
-        }
-    };
-
-    fn next(it: *Segments) ?Seg {
-        if (it.pos >= it.end) return null;
-        var stop = it.end;
-        var over: ?ui.Span = null;
-        for (it.spans) |sp| {
-            if (sp.start <= it.pos and sp.end > it.pos) {
-                over = sp;
-                stop = @min(stop, sp.end);
-            } else if (sp.start > it.pos) stop = @min(stop, sp.start);
-        }
-        const seg: Seg = .{ .start = it.pos, .end = stop, .span = over };
-        it.pos = stop;
-        return seg;
-    }
-};
-
-/// SwiftUI's look of each inline: strong bold, emphasis italic, code
-/// monospaced on wash (the assignment's; Swift's has no fill), strikethrough
-/// struck, a web link in the accent, underlined.
-fn toSpans(x: *const Ctx, shown: inline_.Shown) ![]const ui.Span {
-    if (shown.runs.len == 0) return &.{};
-    const out = try x.c.alloc().alloc(ui.Span, shown.runs.len);
-    for (shown.runs, out) |r, *sp| {
-        const web = r.flags.link and for (shown.links) |l| {
-            if (r.start >= l.start and r.end <= l.end) break opens(l.url);
-        } else false;
-        sp.* = .{
-            .start = r.start,
-            .end = r.end,
-            .weight = if (r.flags.bold) .bold else null,
-            .italic = r.flags.italic,
-            .mono = r.flags.code,
-            .background = if (r.flags.code) x.p.wash else null,
-            .strike = r.flags.strike,
-            .underline = web,
-            .color = if (web) x.p.blue else null,
-        };
-    }
-    return out;
-}
-
 test {
     _ = inline_;
     _ = code;
+    _ = table;
+    _ = theme;
+    _ = rich_;
+    _ = stream;
+    _ = math_view;
     _ = @import("mermaid/draw.zig");
 }

@@ -121,29 +121,54 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette) void {
     const words = std.mem.trim(u8, s.hunt.text(), " ");
     rebuildCache(b, s, words);
     if (!s.any_shown) plate.nothing(c, p, "No command called that, or on that key");
+    // Only the rows in view (and 200 pt around) are made; the rest is room.
+    const off = c.scroll.get(b.settings.scroll_id) orelse 0;
+    const view_h = if (c.rects.get(b.settings.scroll_id)) |r| r.h else 500;
+    const lo = off - 200;
+    const hi = off + view_h + 200;
+    const cap_h = c.text.lineHeight(.{ .size = 11.5, .weight = .medium });
+    // `plate.line`'s padding around its title or the key box, whichever is taller.
+    const row_h = 22 + @max(24, c.text.lineHeight(.{ .size = 13 }));
+    // Under the hunt and the gap after it.
+    var y: f32 = 16 + c.text.lineHeight(.{ .size = 13 }) + 18;
     inline for (@typeInfo(commands.Section).@"enum".field_names) |name| {
         const section = @field(commands.Section, name);
-        var first = true;
+        var rows: usize = 0;
+        var skipped: f32 = 0;
         for (&commands.all, 0..) |*cmd, n| {
             if (cmd.section != section or !s.shown_mask[n]) continue;
-            if (first) {
+            if (rows == 0) {
                 ui.key(c, name);
                 ui.column(c, .{ .gap = 6, .width = .fill });
                 plate.caption(c, p, section.title());
                 plate.cardBox(c, p);
-            } else frame.rule(c, p);
-            first = false;
+                y += cap_h + 6;
+            }
+            const rule_h: f32 = if (rows == 0) 0 else 1;
+            rows += 1;
+            const top = y + rule_h;
+            y = top + row_h;
+            const mine = s.listening != null and std.mem.eql(u8, s.listening.?, cmd.id);
+            if (!mine and (top + row_h < lo or top > hi)) {
+                skipped += rule_h + row_h;
+                continue;
+            }
+            if (skipped > 0) _ = c.leaf(.{ .width = .fill, .height = .{ .px = skipped } }, .none, null);
+            skipped = 0;
+            if (rule_h > 0) frame.rule(c, p);
             ui.key(c, cmd.id);
-            const row = c.open(.{ .width = .fill }, null);
+            const row = c.open(.{ .width = .fill, .height = .{ .px = row_h } }, null);
             if (c.interact(row, .{}).right_clicked) tab_menu.later(b, c.input.mouse, n, menu);
             plate.line(c, p, cmd.title, null);
             keyBox(b, c, p, cmd.id, n);
             ui.end(c);
             c.end();
         }
-        if (!first) {
+        if (rows > 0) {
+            if (skipped > 0) _ = c.leaf(.{ .width = .fill, .height = .{ .px = skipped } }, .none, null);
             ui.end(c);
             ui.end(c);
+            y += 18;
         }
     }
     if (b.kea.ext) |e| extensionCommands(b, c, p, e, words);

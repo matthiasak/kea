@@ -146,16 +146,17 @@ fn copyData(a: Allocator, d: objc.Object) ![]u8 {
 
 // MARK: another Mac's, put in place
 
-pub fn apply(s: *Sync, kind: Kind, key: []const u8, data: []const u8, joining: bool, a: Allocator) !void {
+/// Whether it was put in place: false when it doesn't decode.
+pub fn apply(s: *Sync, kind: Kind, key: []const u8, data: []const u8, joining: bool, a: Allocator) !bool {
     const kea = s.kea;
     switch (kind) {
         .bookmarks => {
-            if (!std.mem.eql(u8, key, "tree")) return;
-            const remote = json.decode([]Bookmark, a, data) catch return;
+            if (!std.mem.eql(u8, key, "tree")) return false;
+            const remote = json.decode([]Bookmark, a, data) catch return false;
             kea.bookmarks.replace(if (joining) try bookmarks_merge.@"union"(a, remote.value, kea.bookmarks.roots) else remote.value);
         },
         .places => if (std.mem.eql(u8, key, "spaces")) {
-            const remote = json.decode([]spaces.Space, a, data) catch return;
+            const remote = json.decode([]spaces.Space, a, data) catch return false;
             var list: std.ArrayList(spaces.Space) = .empty;
             try list.appendSlice(a, remote.value);
             const local = kea.spaces.value;
@@ -173,7 +174,7 @@ pub fn apply(s: *Sync, kind: Kind, key: []const u8, data: []const u8, joining: b
             spaces.write(kea, list.items);
         } else if (std.mem.eql(u8, key, "pins")) {
             const Entry = std.meta.Child(@typeInfo(@TypeOf(pins_mod.Pins.replaceAll)).@"fn".param_types[1].?);
-            const raw = json.decode(json.Map([]pins_mod.PinDef), a, data) catch return;
+            const raw = json.decode(json.Map([]pins_mod.PinDef), a, data) catch return false;
             var map: std.ArrayList(Entry) = .empty;
             var it = raw.value.map.iterator();
             while (it.next()) |e| try map.append(a, .{ .space = json.Uuid.parse(e.key_ptr.*) catch continue, .defs = e.value_ptr.* });
@@ -201,14 +202,15 @@ pub fn apply(s: *Sync, kind: Kind, key: []const u8, data: []const u8, joining: b
             }
             kea.pins.replaceAll(map.items);
             for (kea.browsers.items) |b| b.pinsChanged(b.space_id);
-        },
-        .settings => applySetting(s, key, data),
+        } else return false,
+        .settings => if (!applySetting(s, key, data)) return false,
         .chats => if (s.chats) |c| {
-            const chat = json.decode(@import("../data/chats_store.zig").Chat, a, data) catch return;
+            const chat = json.decode(@import("../data/chats_store.zig").Chat, a, data) catch return false;
             c.put(chat.value);
         },
         .history, .tabs => {},
     }
+    return true;
 }
 
 fn isKind(v: objc.Object, comptime class: [:0]const u8) bool {
@@ -224,18 +226,23 @@ fn setEnum(p: *prefs_mod.Prefs, comptime field: []const u8, v: objc.Object) void
     if (std.meta.stringToEnum(@FieldType(prefs_mod.Prefs, field), raw)) |e| p.set(field, e);
 }
 
-fn applySetting(s: *Sync, key: []const u8, data: []const u8) void {
+/// Whether `data` was a setting's property list at all.
+fn applySetting(s: *Sync, key: []const u8, data: []const u8) bool {
     const pool = objc.Pool.push();
     defer pool.pop();
-    const kea = s.kea;
-    const p = &kea.prefs;
     const nsdata = objc.msg(objc.Object, objc.class("NSData"), "dataWithBytes:length:", .{ data.ptr, @as(objc.NSUInteger, data.len) });
     const plist = objc.msg(?objc.Object, objc.class("NSPropertyListSerialization"), "propertyListWithData:options:format:error:", .{
         nsdata, @as(objc.NSUInteger, 0), @as(?*anyopaque, null), @as(?*anyopaque, null),
-    }) orelse return;
-    if (!isKind(plist, "NSDictionary")) return;
-    const v = objc.msg(?objc.Object, plist, "objectForKey:", .{objc.nsString("v")}) orelse return;
+    }) orelse return false;
+    if (!isKind(plist, "NSDictionary")) return false;
+    const v = objc.msg(?objc.Object, plist, "objectForKey:", .{objc.nsString("v")}) orelse return false;
+    setValue(s, key, v);
+    return true;
+}
 
+fn setValue(s: *Sync, key: []const u8, v: objc.Object) void {
+    const kea = s.kea;
+    const p = &kea.prefs;
     for (bools) |b| if (std.mem.eql(u8, b, key)) {
         if (!isKind(v, "NSNumber")) return;
         const on = objc.msg(objc.BOOL, v, "boolValue", .{});

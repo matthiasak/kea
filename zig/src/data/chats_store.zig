@@ -50,6 +50,10 @@ pub const Chat = struct {
     /// The model's summary of `turns[0..compacted]`; those turns stay, folded.
     summary: ?[]const u8 = null,
     compacted: ?i64 = null,
+    /// What was typed in this chat, oldest first, for ↑/↓ in the composer.
+    inputs: ?[]const []const u8 = null,
+    /// Questions the model suggested after the last answer.
+    followups: ?[]const []const u8 = null,
 
     /// The name, or the first question until the model names the chat.
     pub fn label(self: Chat) []const u8 {
