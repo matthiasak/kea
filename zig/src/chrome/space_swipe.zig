@@ -9,6 +9,7 @@ const std = @import("std");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;
 const ui = nanoui.ui;
+const platform = @import("../sys/platform.zig");
 const Browser = @import("../model/browser.zig").Browser;
 const Kea = @import("../app/kea.zig").Kea;
 const metrics = @import("../design/metrics.zig");
@@ -52,6 +53,7 @@ pub const SpaceSwipe = struct {
     /// Called by every window's tabs as they draw: the monitor, once. Which
     /// window a gesture is for is read from its events.
     pub fn start(s: *SpaceSwipe, b: *Browser) void {
+        if (comptime platform.is_ios) return;
         s.kea = b.kea;
         if (s.browser == null) s.browser = b;
         if (s.monitor != null or b.window == null) return;
@@ -69,6 +71,7 @@ pub const SpaceSwipe = struct {
 
     /// The window's browser, if it is still open.
     fn browserFor(s: *SpaceSwipe, window: ?objc.Object) ?*Browser {
+        if (comptime platform.is_ios) return null;
         const kea = s.kea orelse return null;
         const w = window orelse return null;
         for (kea.browsers.items) |b| if (b.window) |bw| if (bw.nswindow == w) return b;
@@ -82,6 +85,7 @@ pub const SpaceSwipe = struct {
     }
 
     fn overTabs(b: *Browser, event: objc.Object) bool {
+        if (comptime platform.is_ios) return false;
         const window = objc.msg(?objc.Object, event, "window", .{}) orelse return false;
         const w = b.window orelse return false;
         if (window != w.nswindow) return false;

@@ -5,6 +5,7 @@ const builtin = @import("builtin");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;
 const ans = @import("answer.zig");
+const platform = @import("../../sys/platform.zig");
 
 const Value = ans.Value;
 const no_values = [_]Value{};
@@ -27,9 +28,13 @@ pub fn run(c: *ans.Call) ans.Error!?ans.Out {
         return ans.none;
     }
     if (eql(api, "power.reportActivity")) {
-        var assertion: u32 = 0;
-        // kIOPMUserActiveLocal; Swift keeps no hold on it either.
-        _ = IOPMAssertionDeclareUserActivity(objc.nsString(assertion_name), 0, &assertion);
+        if (comptime !platform.is_ios) {
+            const M = struct {
+                extern "c" fn IOPMAssertionDeclareUserActivity(name: objc.Object, kind: u32, id: *u32) i32;
+            };
+            var assertion: u32 = 0;
+            _ = M.IOPMAssertionDeclareUserActivity(objc.nsString(assertion_name), 0, &assertion);
+        }
         return ans.none;
     }
     if (eql(api, "system.cpu.getInfo")) return cpu(c);
@@ -49,7 +54,10 @@ fn eql(a: []const u8, b: []const u8) bool {
 
 fn fonts(c: *ans.Call, name: []const u8) ans.Error!?ans.Out {
     if (eql(name, "getFontList")) {
-        const families = objc.msg(objc.Object, objc.msg(objc.Object, objc.class("NSFontManager"), "sharedFontManager", .{}), "availableFontFamilies", .{});
+        const families = if (comptime platform.is_ios)
+            objc.msg(objc.Object, objc.class("UIFont"), "familyNames", .{})
+        else
+            objc.msg(objc.Object, objc.msg(objc.Object, objc.class("NSFontManager"), "sharedFontManager", .{}), "availableFontFamilies", .{});
         const Font = struct { fontId: []const u8, displayName: []const u8 };
         const n = objc.msg(objc.NSUInteger, families, "count", .{});
         const out = try c.a.alloc(Font, n);
@@ -121,18 +129,23 @@ fn detectLanguage(c: *ans.Call) ans.Error!?ans.Out {
 
 // MARK: idle
 
-extern "c" fn CGSessionCopyCurrentDictionary() ?objc.Object;
-extern "c" fn CGEventSourceSecondsSinceLastEventType(state: i32, event: u32) f64;
-extern "c" fn CFRelease(cf: *anyopaque) void;
-
 fn idleState(threshold: f64) []const u8 {
-    if (CGSessionCopyCurrentDictionary()) |session| {
-        defer CFRelease(session);
+    if (comptime platform.is_ios) {
+        const app = objc.msg(objc.Object, objc.class("UIApplication"), "sharedApplication", .{});
+        return if (objc.msg(objc.NSInteger, app, "applicationState", .{}) == 0) "active" else "idle";
+    }
+    const M = struct {
+        extern "c" fn CGSessionCopyCurrentDictionary() ?objc.Object;
+        extern "c" fn CGEventSourceSecondsSinceLastEventType(state: i32, event: u32) f64;
+        extern "c" fn CFRelease(cf: *anyopaque) void;
+    };
+    if (M.CGSessionCopyCurrentDictionary()) |session| {
+        defer M.CFRelease(session);
         const locked = objc.msg(?objc.Object, session, "objectForKey:", .{objc.nsString("CGSSessionScreenIsLocked")});
         if (locked) |l| if (objc.msg(objc.BOOL, l, "isKindOfClass:", .{objc.class("NSNumber")}) and objc.msg(objc.BOOL, l, "boolValue", .{})) return "locked";
     }
     // kCGEventSourceStateCombinedSessionState, kCGAnyInputEventType.
-    const quiet = CGEventSourceSecondsSinceLastEventType(0, ~@as(u32, 0));
+    const quiet = M.CGEventSourceSecondsSinceLastEventType(0, ~@as(u32, 0));
     return if (quiet >= threshold) "idle" else "active";
 }
 
@@ -140,22 +153,39 @@ fn idleState(threshold: f64) []const u8 {
 
 const assertion_name = "An extension in " ++ ans.app_name;
 
-extern "c" fn IOPMAssertionCreateWithName(kind: objc.Object, level: u32, name: objc.Object, id: *u32) i32;
-extern "c" fn IOPMAssertionRelease(id: u32) i32;
-extern "c" fn IOPMAssertionDeclareUserActivity(name: objc.Object, kind: u32, id: *u32) i32;
-
 /// An assertion let go: the Mac may sleep again.
 pub fn release(id: u32) void {
-    _ = IOPMAssertionRelease(id);
+    if (comptime platform.is_ios) {
+        const app = objc.msg(objc.Object, objc.class("UIApplication"), "sharedApplication", .{});
+        objc.msg(void, app, "setIdleTimerDisabled:", .{objc.NO});
+        return;
+    }
+    const M = struct {
+        extern "c" fn IOPMAssertionRelease(assertion_id: u32) i32;
+    };
+    _ = M.IOPMAssertionRelease(id);
 }
 
 fn keepAwake(c: *ans.Call) ans.Error!?ans.Out {
     const display = eql(ans.str(c.first()) orelse "", "display");
     ans.releaseAwake(c.owner, c.id);
+    if (comptime platform.is_ios) {
+        const key = try c.owner.gpa.dupe(u8, c.id);
+        c.owner.answer.awake.put(c.owner.gpa, key, 1) catch {
+            c.owner.gpa.free(key);
+            return error.OutOfMemory;
+        };
+        const app = objc.msg(objc.Object, objc.class("UIApplication"), "sharedApplication", .{});
+        objc.msg(void, app, "setIdleTimerDisabled:", .{objc.YES});
+        return ans.none;
+    }
+    const M = struct {
+        extern "c" fn IOPMAssertionCreateWithName(kind: objc.Object, level: u32, name: objc.Object, id: *u32) i32;
+    };
     const kind = if (display) "PreventUserIdleDisplaySleep" else "PreventUserIdleSystemSleep";
     var assertion: u32 = 0;
     // kIOPMAssertionLevelOn; kIOReturnSuccess.
-    if (IOPMAssertionCreateWithName(objc.nsString(kind), 255, objc.nsString(assertion_name), &assertion) != 0) return ans.none;
+    if (M.IOPMAssertionCreateWithName(objc.nsString(kind), 255, objc.nsString(assertion_name), &assertion) != 0) return ans.none;
     const key = try c.owner.gpa.dupe(u8, c.id);
     c.owner.answer.awake.put(c.owner.gpa, key, assertion) catch {
         c.owner.gpa.free(key);
@@ -190,7 +220,6 @@ fn box(r: objc.CGRect) Box {
 }
 
 fn displays(c: *ans.Call) ans.Error!?ans.Out {
-    const screens = objc.msg(objc.Object, objc.class("NSScreen"), "screens", .{});
     const Display = struct {
         id: []const u8,
         name: []const u8,
@@ -203,6 +232,15 @@ fn displays(c: *ans.Call) ans.Error!?ans.Out {
         bounds: Box,
         workArea: Box,
     };
+    if (comptime platform.is_ios) {
+        const sc = objc.msg(objc.Object, objc.class("UIScreen"), "mainScreen", .{});
+        const dpi = 96 * objc.msg(objc.CGFloat, sc, "scale", .{});
+        const b = box(objc.msg(objc.CGRect, sc, "bounds", .{}));
+        const out = try c.a.alloc(Display, 1);
+        out[0] = .{ .id = "0", .name = "Built-in Display", .isPrimary = true, .isInternal = true, .dpiX = dpi, .dpiY = dpi, .bounds = b, .workArea = b };
+        return try c.give(out);
+    }
+    const screens = objc.msg(objc.Object, objc.class("NSScreen"), "screens", .{});
     const out = try c.a.alloc(Display, objc.msg(objc.NSUInteger, screens, "count", .{}));
     for (out, 0..) |*d, i| {
         const screen = objc.msg(objc.Object, screens, "objectAtIndex:", .{i});

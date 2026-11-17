@@ -40,6 +40,8 @@ pub const Window = struct {
     height: f64 = 0,
     title_bar: TitleBar = .default,
     on_close: ?Callback = null,
+    on_resize: ?Callback = null,
+    on_key: ?Callback = null,
     /// Shown when UIKit is up (`visible` in the options, then show/hide).
     wanted: bool = true,
     /// Where it stacks: windows shown later cover those shown before.
@@ -64,6 +66,8 @@ pub const Window = struct {
             .height = options.height,
             .title_bar = options.title_bar,
             .on_close = options.on_close,
+            .on_resize = options.on_resize,
+            .on_key = options.on_key,
             .wanted = options.visible and !app.flags.hidden,
             .order = app.nextOrder(),
         };
@@ -84,7 +88,9 @@ pub const Window = struct {
             std.log.err("nanoui: window: {s}", .{@errorName(err)});
             return;
         };
-        objc.msg(void, vc, "setView:", .{self.surface.?.uiview});
+        const s = self.surface.?;
+        objc.msg(void, vc, "setView:", .{s.host_view orelse s.uiview});
+        if (self.on_key) |cb| cb.func(cb.ctx, self);
     }
 
     /// Off the screen, its owner told, and freed.

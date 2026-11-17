@@ -22,7 +22,7 @@ pub fn class() objc.Class {
     return objc.defineClass(.{
         .name = "KeaOffscreen",
         .protocols = &.{ "WKNavigationDelegate", "WKUIDelegate", "WKWebExtensionTab" },
-        .methods = &.{
+        .methods = &([_]objc.Method{
             .{ .name = "webView:didFinishNavigation:", .imp = &didFinish, .types = "v@:@@" },
             .{ .name = "webView:decidePolicyForNavigationAction:decisionHandler:", .imp = &decideAction, .types = "v@:@@@?" },
             .{ .name = "webView:decidePolicyForNavigationResponse:decisionHandler:", .imp = &decideResponse, .types = "v@:@@@?" },
@@ -30,7 +30,6 @@ pub fn class() objc.Class {
             .{ .name = "webView:didFailProvisionalNavigation:withError:", .imp = &didFail, .types = "v@:@@@" },
             .{ .name = "webViewWebContentProcessDidTerminate:", .imp = &terminated, .types = "v@:@" },
             .{ .name = "webView:requestMediaCapturePermissionForOrigin:initiatedByFrame:type:decisionHandler:", .imp = &askedForCapture, .types = "v@:@@@q@?" },
-            .{ .name = capture.display_selector, .imp = &capture.displayCapture, .types = "v@:@@@B@?" },
             .{ .name = "windowForWebExtensionContext:", .imp = &noObject, .types = "@@:@" },
             .{ .name = "indexInWindowForWebExtensionContext:", .imp = &notFound, .types = "Q@:@" },
             .{ .name = "webViewForWebExtensionContext:", .imp = &webFor, .types = "@@:@" },
@@ -39,7 +38,7 @@ pub fn class() objc.Class {
             .{ .name = "isLoadingCompleteForWebExtensionContext:", .imp = &loadedFor, .types = "B@:@" },
             .{ .name = "isSelectedForWebExtensionContext:", .imp = &no, .types = "B@:@" },
             .{ .name = "closeForWebExtensionContext:completionHandler:", .imp = &closeFor, .types = "v@:@@?" },
-        },
+        } ++ capture.display_methods),
     });
 }
 

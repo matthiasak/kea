@@ -7,6 +7,7 @@ const std = @import("std");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;
 const ui = nanoui.ui;
+const platform = @import("../sys/platform.zig");
 const cg = @import("../sys/cg.zig");
 
 const Flight = struct {
@@ -142,6 +143,11 @@ pub fn appIcon(c: *ui.Context, size: f32) void {
 fn iconPng() ?[]u8 {
     const pool = objc.Pool.push();
     defer pool.pop();
+    if (comptime platform.is_ios) {
+        const image = objc.msg(?objc.Object, objc.class("UIImage"), "imageNamed:", .{objc.nsString("AppIcon")}) orelse return null;
+        const cgi = platform.cgImageOf(image) orelse return null;
+        return png(@ptrCast(cgi));
+    }
     const image = objc.msg(?objc.Object, objc.class("NSImage"), "imageNamed:", .{objc.nsString("NSApplicationIcon")}) orelse return null;
     var rect: objc.CGRect = .{ .origin = .{ .x = 0, .y = 0 }, .size = .{ .width = 144, .height = 144 } };
     const cgi = objc.msg(?*anyopaque, image, "CGImageForProposedRect:context:hints:", .{ &rect, @as(?objc.Object, null), @as(?objc.Object, null) }) orelse return null;

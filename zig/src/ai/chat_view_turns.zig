@@ -30,7 +30,7 @@ fn hug(c: *ui.Context, str: []const u8, style: ui.TextStyle) void {
 }
 
 pub fn conversation(b: *Browser, c: *ui.Context, p: *const Palette, a: *Assistant, st: *State, todo: *Do, z: f32) void {
-    ui.column(c, .{ .gap = 18, .width = .fill, .padding = .xy(16, 12) });
+    ui.column(c, .{ .gap = 22, .width = .fill, .max_width = 760 * z, .padding = .{ .left = 20, .right = 20, .top = 16, .bottom = 28 } });
     defer ui.end(c);
     if (a.notice) |n| noticeCard(c, p, a, n, todo, z);
     if (a.shy) ui.text(c, "A private tab's chat: only an AI on this Mac, and nothing is kept.", .{ .size = 12 * z, .color = p.muted, .wrap = true });
@@ -55,10 +55,11 @@ pub fn conversation(b: *Browser, c: *ui.Context, p: *const Palette, a: *Assistan
 
 /// "Ask anything." over the composer, always: the starters while the chat
 /// is empty, then the model's follow-up questions.
-pub fn askAnythingDock(b: *Browser, c: *ui.Context, p: *const Palette, a: *Assistant, st: *State, todo: *Do, z: f32) void {
-    ui.column(c, .{ .width = .fill, .padding = .{ .left = 10, .right = 10, .top = 6 } });
+pub fn askAnythingDock(b: *Browser, c: *ui.Context, p: *const Palette, a: *Assistant, st: *State, todo: *Do, z: f32, col_w: f32) void {
+    _ = b;
+    ui.column(c, .{ .width = .fill, .padding = .{ .left = 10, .right = 10, .top = 8 } });
     defer ui.end(c);
-    const dock = c.open(.{ .direction = .column, .gap = 7, .width = .fill, .padding = .xy(14, 10), .radius = 14, .background = p.wash.alpha(0.45), .border = p.hairline }, "kea.chat.ask_dock");
+    const dock = c.open(.{ .direction = .column, .gap = 7, .width = .fill, .padding = .xy(14, 10), .radius = 14, .background = p.wash.alpha(0.55), .border = p.hairline }, "kea.chat.ask_dock");
     defer c.end();
     const dock_id = c.node(dock).id;
     {
@@ -77,9 +78,11 @@ pub fn askAnythingDock(b: *Browser, c: *ui.Context, p: *const Palette, a: *Assis
     if (st.dock_folded) return;
     if (a.chat.turns.len == 0 and a.live == null)
         ui.text(c, "The page in front goes with your question unless you close its eye below. Type tabs/, bookmarks/, history/ or @ to pin more pages, and / for commands.", .{ .size = 11.5 * z, .color = p.muted, .wrap = true });
-    if (a.sharesPage()) {
+    if (a.chat.turns.len == 0 and a.live == null and a.sharesPage()) {
         // Greedy rows as wide as the card, so no starter is cut off.
-        const avail = (if (c.rects.get(dock_id)) |r| r.w else b.prefs.chat_width - 20) - 28;
+        const est_dock_w = @max(0, @min(col_w, 760 * z) - 20);
+        const dock_w = if (c.rects.get(dock_id)) |r| (if (@abs(r.w - est_dock_w) <= 2) r.w else est_dock_w) else est_dock_w;
+        const avail = @max(0, dock_w - 28);
         var used: f32 = avail + 1;
         var open_row = false;
         for (ubi.starters) |s| {
@@ -192,9 +195,9 @@ fn estimateTurnHeight(t: Turn, z: f32) f32 {
     return (52.0 + lines * 18.0) * z;
 }
 
-pub fn virtualConversation(b: *Browser, c: *ui.Context, p: *const Palette, a: *Assistant, st: *State, todo: *Do, z: f32, scroll_id: u64) void {
+pub fn virtualConversation(b: *Browser, c: *ui.Context, p: *const Palette, a: *Assistant, st: *State, todo: *Do, z: f32, scroll_id: u64, col_w: f32) void {
     const sc_rect = c.rects.get(scroll_id);
-    const vw: f32 = if (sc_rect) |r| r.w else 0;
+    const vw: f32 = if (col_w > 0) col_w else if (sc_rect) |r| r.w else 0;
     if ((vw > 0 and @abs(vw - st.heights_width) > 0.5) or st.heights_zoom != z) {
         st.heights.clearRetainingCapacity();
         st.rendered_turns.clearRetainingCapacity();
@@ -210,7 +213,7 @@ pub fn virtualConversation(b: *Browser, c: *ui.Context, p: *const Palette, a: *A
     }
     st.rendered_turns.clearRetainingCapacity();
 
-    ui.column(c, .{ .gap = 18, .width = .fill, .padding = .xy(16, 12) });
+    ui.column(c, .{ .gap = 22, .width = .fill, .max_width = 760 * z, .padding = .{ .left = 20, .right = 20, .top = 16, .bottom = 28 } });
     defer ui.end(c);
     if (a.notice) |n| noticeCard(c, p, a, n, todo, z);
     if (a.shy) ui.text(c, "A private tab's chat: only an AI on this Mac, and nothing is kept.", .{ .size = 12 * z, .color = p.muted, .wrap = true });
@@ -231,15 +234,15 @@ pub fn virtualConversation(b: *Browser, c: *ui.Context, p: *const Palette, a: *A
     const start_idx: usize = if (fold > 0 and !st.show_earlier) fold else 0;
     const shown_turns = a.chat.turns[start_idx..];
 
-    var total_h: f32 = 24;
+    var total_h: f32 = 44;
     for (shown_turns, 0..) |t, idx| {
-        if (idx > 0) total_h += 18;
+        if (idx > 0) total_h += 22;
         total_h += st.heights.get(t.id) orelse estimateTurnHeight(t, z);
     }
     // The answer coming in, at its height as last laid out: tall math or code doesn't jump the bounds.
     if (a.liveTurn()) |lt| {
         if (c.rects.get(st.live_box)) |r| st.live_height = r.h;
-        total_h += 18 + if (st.live_height > 0) st.live_height else estimateTurnHeight(lt, z);
+        total_h += 22 + if (st.live_height > 0) st.live_height else estimateTurnHeight(lt, z);
     } else st.live_height = 0;
 
     const vh = if (sc_rect) |r| r.h else c.size.h;
@@ -248,7 +251,7 @@ pub fn virtualConversation(b: *Browser, c: *ui.Context, p: *const Palette, a: *A
     const lo = eff_scroll - 400;
     const hi = eff_scroll + vh + 400;
 
-    var y: f32 = 12;
+    var y: f32 = 16;
     for (shown_turns, start_idx..) |t, abs_idx| {
         const measured = st.heights.get(t.id);
         const h = measured orelse estimateTurnHeight(t, z);
@@ -258,7 +261,7 @@ pub fn virtualConversation(b: *Browser, c: *ui.Context, p: *const Palette, a: *A
             const box_id = turnViewBox(b, c, p, a, st, todo, t, z, if (abs_idx < fold) 0.75 else 1.0);
             st.rendered_turns.append(b.gpa, .{ .id = t.id, .box_id = box_id }) catch {};
         }
-        y += h + 18;
+        y += h + 22;
     }
     if (a.liveTurn()) |lt| {
         st.live_box = turnViewBox(b, c, p, a, st, todo, lt, z, 1.0);
@@ -267,7 +270,7 @@ pub fn virtualConversation(b: *Browser, c: *ui.Context, p: *const Palette, a: *A
 
 fn turnViewBox(b: *Browser, c: *ui.Context, p: *const Palette, a: *const Assistant, st: *State, todo: *Do, t: Turn, z: f32, opacity: f32) u64 {
     c.next_key_int = std.mem.readInt(u64, t.id.bytes[0..8], .little);
-    const box = c.open(.{ .direction = .column, .gap = 8, .width = .fill, .opacity = opacity }, null);
+    const box = c.open(.{ .direction = .column, .gap = 10, .width = .fill, .opacity = opacity }, null);
     defer c.end();
     const box_id = c.node(box).id;
     if (st.editing_turn != null and st.editing_turn.?.eql(t.id)) {

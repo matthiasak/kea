@@ -8,6 +8,7 @@ const std = @import("std");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;
 const ui = nanoui.ui;
+const platform = @import("../sys/platform.zig");
 const CGRect = objc.CGRect;
 const Kea = @import("../app/kea.zig").Kea;
 const Browser = @import("../model/browser.zig").Browser;
@@ -15,9 +16,6 @@ const palette = @import("../design/palette.zig");
 const side_panels = @import("side_panels.zig");
 const SidePanel = side_panels.SidePanel;
 const intersection = @import("../web/float_moves.zig").intersection;
-
-extern fn NSStringFromRect(rect: CGRect) objc.Object;
-extern fn NSRectFromString(string: objc.Object) CGRect;
 
 pub const PanelWindow = struct {
     kea: *Kea,
@@ -52,12 +50,16 @@ pub const PanelWindow = struct {
     }
 
     fn saveFrame(self: *const PanelWindow) void {
+        if (comptime platform.is_ios) return;
+        const M = struct {
+            extern fn NSStringFromRect(rect: CGRect) objc.Object;
+        };
         const kea = self.kea;
         const w = self.window orelse return;
         if (kea.opts.root != null or kea.opts.hidden) return;
         const pool = objc.Pool.push();
         defer pool.pop();
-        kea.store.setString(self.frameKey(), objc.fromNSString(NSStringFromRect(objc.msg(CGRect, w.nswindow, "frame", .{}))));
+        kea.store.setString(self.frameKey(), objc.fromNSString(M.NSStringFromRect(objc.msg(CGRect, w.nswindow, "frame", .{}))));
     }
 };
 
@@ -70,7 +72,7 @@ pub fn open(kea: *Kea, panel: SidePanel, browser: ?*Browser) ?*PanelWindow {
     if (kea.opts.headless) return self;
     const size: objc.CGSize = if (panel == .chat) .{ .width = 420, .height = 640 } else .{ .width = 280, .height = 560 };
     const testing = kea.opts.root != null or kea.opts.hidden;
-    const spot: CGRect = if (testing)
+    const spot: CGRect = if ((comptime platform.is_ios) or testing)
         .{ .origin = .{ .x = -20000, .y = -20000 }, .size = size }
     else if (remembered(kea, self.frameKey())) |saved| saved else blk: {
         const screen = @import("../web/float_moves.zig").mainVisible();
@@ -93,6 +95,10 @@ pub fn open(kea: *Kea, panel: SidePanel, browser: ?*Browser) ?*PanelWindow {
         return null;
     };
     self.window = win;
+    if (comptime platform.is_ios) {
+        if (!testing) win.show();
+        return self;
+    }
     const ns = win.nswindow;
     objc.msg(void, ns, "setStyleMask:", .{@as(objc.NSUInteger, 1 | 2 | 4 | 8 | (1 << 15))}); // titled, closable, miniaturizable, resizable, fullSizeContentView
     objc.msg(void, ns, "setTitlebarAppearsTransparent:", .{objc.YES});
@@ -107,11 +113,15 @@ pub fn open(kea: *Kea, panel: SidePanel, browser: ?*Browser) ?*PanelWindow {
 
 /// A kept frame, when it is a window's and a screen still shows most of it.
 fn remembered(kea: *Kea, key: []const u8) ?CGRect {
+    if (comptime platform.is_ios) return null;
+    const M = struct {
+        extern fn NSRectFromString(string: objc.Object) CGRect;
+    };
     const text = kea.store.string(key) orelse return null;
     defer kea.store.gpa.free(text);
     const pool = objc.Pool.push();
     defer pool.pop();
-    const frame = NSRectFromString(objc.nsString(text));
+    const frame = M.NSRectFromString(objc.nsString(text));
     if (frame.size.width <= 100) return null;
     const screens = objc.msg(objc.Object, objc.class("NSScreen"), "screens", .{});
     for (0..objc.msg(objc.NSUInteger, screens, "count", .{})) |i| {
@@ -145,6 +155,7 @@ fn closed(ctx: *anyopaque, _: *nanoui.Window) void {
 /// `NSWindowDidMove` / `DidResize` for some window (app/browsers.zig's
 /// watch): a panel's keeps its frame.
 pub fn framed(kea: *Kea, nswindow: ?objc.Object) void {
+    if (comptime platform.is_ios) return;
     if (kea.marks_window) |m| if (m.window) |w| if (nswindow == w.nswindow) m.saveFrame();
     for (kea.browsers.items) |b| if (b.chat.window) |m| if (m.window) |w| if (nswindow == w.nswindow) m.saveFrame();
 }

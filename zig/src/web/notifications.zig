@@ -17,6 +17,7 @@ const Tab = @import("tab.zig").Tab;
 const Parts = @import("../data/url.zig").Parts;
 const dialogs = @import("dialogs.zig");
 const page = @import("notifications_page.zig");
+const platform = @import("../sys/platform.zig");
 
 const gpa = std.heap.c_allocator;
 
@@ -168,18 +169,23 @@ pub fn allowed(alloc: std.mem.Allocator, kea: *const Kea) ![][]u8 {
 
 // MARK: WebKit
 
+const center_methods = [_]objc.Method{
+    .{ .name = "userNotificationCenter:willPresentNotification:withCompletionHandler:", .imp = &willPresent, .types = "v@:@@@?" },
+    .{ .name = "userNotificationCenter:didReceiveNotificationResponse:withCompletionHandler:", .imp = &didReceive, .types = "v@:@@@?" },
+};
+
+const store_methods = if (platform.is_ios) [_]objc.Method{} else [_]objc.Method{
+    .{ .name = "notificationPermissionsForWebsiteDataStore:", .imp = &permissions, .types = "@@:@" },
+    .{ .name = "websiteDataStore:showNotification:", .imp = &workerShow, .types = "v@:@@" },
+    .{ .name = "websiteDataStore:getDisplayedNotificationsForWorkerOrigin:completionHandler:", .imp = &displayed, .types = "v@:@@@?" },
+    .{ .name = "websiteDataStore:openWindow:fromServiceWorkerOrigin:completionHandler:", .imp = &openWindow, .types = "v@:@@@@?" },
+};
+
 fn class() objc.Class {
     return objc.defineClass(.{
         .name = "KeaSiteNotifications",
         .protocols = &.{"UNUserNotificationCenterDelegate"},
-        .methods = &.{
-            .{ .name = "notificationPermissionsForWebsiteDataStore:", .imp = &permissions, .types = "@@:@" },
-            .{ .name = "websiteDataStore:showNotification:", .imp = &workerShow, .types = "v@:@@" },
-            .{ .name = "websiteDataStore:getDisplayedNotificationsForWorkerOrigin:completionHandler:", .imp = &displayed, .types = "v@:@@@?" },
-            .{ .name = "websiteDataStore:openWindow:fromServiceWorkerOrigin:completionHandler:", .imp = &openWindow, .types = "v@:@@@@?" },
-            .{ .name = "userNotificationCenter:willPresentNotification:withCompletionHandler:", .imp = &willPresent, .types = "v@:@@@?" },
-            .{ .name = "userNotificationCenter:didReceiveNotificationResponse:withCompletionHandler:", .imp = &didReceive, .types = "v@:@@@?" },
-        },
+        .methods = &(store_methods ++ center_methods),
     });
 }
 
@@ -191,8 +197,10 @@ fn center() objc.Object {
 pub fn attach(kea: *Kea, store: objc.Object) void {
     kea_now = kea;
     if (delegate == null) delegate = objc.msg(objc.Object, class(), "new", .{});
-    if (!objc.msg(objc.BOOL, store, "respondsToSelector:", .{objc.sel("set_delegate:")})) return;
-    objc.msg(void, store, "set_delegate:", .{delegate.?});
+    if (comptime !platform.is_ios) {
+        if (!objc.msg(objc.BOOL, store, "respondsToSelector:", .{objc.sel("set_delegate:")})) return;
+        objc.msg(void, store, "set_delegate:", .{delegate.?});
+    }
     if (testing(kea)) return;
     const c = center();
     if (objc.msg(?objc.Object, c, "delegate", .{}) == null) objc.msg(void, c, "setDelegate:", .{delegate.?});
@@ -467,7 +475,9 @@ fn clicked(info: objc.Object) void {
         if (std.fmt.parseInt(u64, infoText(info, "kea.id"), 10)) |id| page.clicked(id) else |_| {}
         return;
     }
-    if (std.mem.eql(u8, kind, "worker")) tell(from, "_processPersistentNotificationClick:completionHandler:", info);
+    if (comptime !platform.is_ios) {
+        if (std.mem.eql(u8, kind, "worker")) tell(from, "_processPersistentNotificationClick:completionHandler:", info);
+    }
 }
 
 /// Dismissed: the worker hears its notification closed.
@@ -479,7 +489,9 @@ fn closed(info: objc.Object) void {
         if (std.fmt.parseInt(u64, infoText(info, "kea.id"), 10)) |id| page.closed(id) else |_| {}
         return;
     }
-    if (std.mem.eql(u8, kind, "worker")) tell(from, "_processPersistentNotificationClose:completionHandler:", info);
+    if (comptime !platform.is_ios) {
+        if (std.mem.eql(u8, kind, "worker")) tell(from, "_processPersistentNotificationClose:completionHandler:", info);
+    }
 }
 
 fn tell(from: ?objc.Object, name: [:0]const u8, info: objc.Object) void {
@@ -513,7 +525,9 @@ fn bringForward(site: []const u8, from: ?objc.Object) void {
     const b = t.browser orelse return;
     b.select(t);
     @import("../app/browsers.zig").show(b);
-    if (kea.ui_app) |a| objc.msg(void, a.nsapp, "activateIgnoringOtherApps:", .{objc.YES});
+    if (comptime !platform.is_ios) {
+        if (kea.ui_app) |a| objc.msg(void, a.nsapp, "activateIgnoringOtherApps:", .{objc.YES});
+    }
 }
 
 test "origin leaves out the standard port and lowercases" {

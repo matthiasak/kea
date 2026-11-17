@@ -17,6 +17,7 @@ pub const square = decode.square;
 pub const kinds = decode.kinds;
 const Kea = @import("../app/kea.zig").Kea;
 const Tab = @import("tab.zig").Tab;
+const platform = @import("../sys/platform.zig");
 const probe = @embedFile("js/favicons.js");
 /// `IconRelay`: a page that changes its icon says so, at most every 2 s, top page only.
 pub const relay_script = @embedFile("js/icon_relay.js");
@@ -132,11 +133,7 @@ pub const Favicons = struct {
         }
         if (self.memory.count() > 512) self.trimMemory(self.kea);
         const mono = decode.analyzeMono(png);
-        const suffix = switch (mono) {
-            .none => "",
-            .dark => "@d",
-            .light => "@l",
-        };
+        const suffix: []const u8 = switch (mono) { .none => "", .dark => "@d", .light => "@l" };
         self.serial += 1;
         const name = std.fmt.allocPrint(a, "icon:{s}#{d}{s}", .{ key, self.serial, suffix }) catch return null;
         const gop = self.memory.getOrPut(a, key) catch {
@@ -175,14 +172,15 @@ pub const Favicons = struct {
     /// Whether the chrome is dark right now; a dark variant is kept apart.
     fn dark(self: *Favicons) bool {
         if (self.dark_cache) |d| return d;
+        const app = (self.kea orelse return false).ui_app orelse return false;
         const pool = objc.Pool.push();
         defer pool.pop();
-        const app = (self.kea orelse return false).ui_app orelse return false;
-        const look = objc.msg(objc.Object, app.nsapp, "effectiveAppearance", .{});
-        var names = [_]objc.Object{ objc.nsString("NSAppearanceNameAqua"), objc.nsString("NSAppearanceNameDarkAqua") };
-        const list = objc.msg(objc.Object, objc.class("NSArray"), "arrayWithObjects:count:", .{ &names, @as(objc.NSUInteger, 2) });
-        const best = objc.fromNSString(objc.msg(?objc.Object, look, "bestMatchFromAppearancesWithNames:", .{list}));
-        const d = std.mem.eql(u8, best, "NSAppearanceNameDarkAqua");
+        const d = if (comptime platform.is_ios) platform.isSystemDark() else blk: {
+            const look = objc.msg(objc.Object, app.nsapp, "effectiveAppearance", .{});
+            var names = [_]objc.Object{ objc.nsString("NSAppearanceNameAqua"), objc.nsString("NSAppearanceNameDarkAqua") };
+            const list = objc.msg(objc.Object, objc.class("NSArray"), "arrayWithObjects:count:", .{ &names, @as(objc.NSUInteger, 2) });
+            break :blk std.mem.eql(u8, objc.fromNSString(objc.msg(?objc.Object, look, "bestMatchFromAppearancesWithNames:", .{list})), "NSAppearanceNameDarkAqua");
+        };
         self.dark_cache = d;
         return d;
     }

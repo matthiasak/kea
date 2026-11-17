@@ -5,6 +5,7 @@
 const std = @import("std");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;
+const platform = @import("../sys/platform.zig");
 const url = @import("../data/url.zig");
 const Tab = @import("../web/tab.zig").Tab;
 const page_text = @import("page_text.zig");
@@ -25,6 +26,10 @@ pub fn isPdfUrl(u: []const u8) bool {
 }
 
 pub fn isPdfWebView(wv: objc.Object) bool {
+    if (comptime platform.is_ios) {
+        const u = objc.msg(?objc.Object, wv, "URL", .{}) orelse return false;
+        return isPdfUrl(objc.fromNSString(objc.msg(?objc.Object, u, "absoluteString", .{})));
+    }
     if (objc.msg(objc.BOOL, wv, "respondsToSelector:", .{objc.sel("_isDisplayingPDF")}) and objc.msg(objc.BOOL, wv, "_isDisplayingPDF", .{})) return true;
     if (!objc.msg(objc.BOOL, wv, "respondsToSelector:", .{objc.sel("_MIMEType")})) return false;
     const mime = objc.fromNSString(objc.msg(?objc.Object, wv, "_MIMEType", .{}));
@@ -258,6 +263,14 @@ fn start(wv: objc.Object, a: std.mem.Allocator, address: ?[]const u8, fallback_t
         .ctx = ctx,
         .then = then,
     };
+    if (comptime platform.is_ios) {
+        const u_str = address orelse objc.fromNSString(if (objc.msg(?objc.Object, wv, "URL", .{})) |u| objc.msg(?objc.Object, u, "absoluteString", .{}) else null);
+        if (!isPdfUrl(u_str) or !objc.msg(objc.BOOL, wv, "respondsToSelector:", .{objc.sel("createPDFWithConfiguration:completionHandler:")}))
+            return gotData(j, null, null);
+        var block = DataBlock.init(j, gotData);
+        objc.msg(void, wv, "createPDFWithConfiguration:completionHandler:", .{ @as(?objc.Object, null), @as(*anyopaque, @ptrCast(&block)) });
+        return;
+    }
     if (!objc.msg(objc.BOOL, wv, "respondsToSelector:", .{objc.sel("_getMainResourceDataWithCompletionHandler:")}))
         return gotData(j, null, null);
     var block = DataBlock.init(j, gotData);
@@ -358,4 +371,25 @@ test "isHeading and isPdfUrl" {
     try std.testing.expect(isPdfUrl("https://arxiv.org/pdf/1.PDF"));
     try std.testing.expect(isPdfUrl("file:///tmp/a.pdf"));
     try std.testing.expect(!isPdfUrl("https://example.com/a.html"));
+}
+
+test "22-page research PDF stays uncut under cloud budget and preserves middle pages" {
+    const ai = @import("ai.zig");
+    const ubi = @import("ubi_chat.zig");
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const pages = try a.alloc([]const []const u8, 22);
+    for (0..22) |i| {
+        const lines = try a.alloc([]const u8, 28);
+        lines[0] = if (i + 1 == 10) "3 Core Mechanism Hypernetwork" else try std.fmt.allocPrint(a, "Section {d}", .{i + 1});
+        for (1..28) |k| lines[k] = try std.fmt.allocPrint(a, "P{d:0>2}L{d:0>2}: adaptive basis modulation hypernetwork derivation.", .{ i + 1, k });
+        pages[i] = lines;
+    }
+    const bytes = try tinyPdf(a, pages, null);
+    const p = parseBytes(a, bytes, "2609.18842") orelse return error.NotParsed;
+    const r = try page_text.shaped(a, p.title, "https://arxiv.org/pdf/2609.18842", p.text, p.links, @min(page_text.limit, ubi.budget(ai.gemini)));
+    try std.testing.expect(!r.cut);
+    try std.testing.expect(std.mem.indexOf(u8, r.text, "[Page 10]\n3 Core Mechanism Hypernetwork") != null);
+    try std.testing.expect(ubi.budget(ai.ollama) == 60_000 and ubi.budget(ai.gemini) >= 600_000);
 }

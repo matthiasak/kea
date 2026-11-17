@@ -59,6 +59,12 @@ const states = [_]State{
     .{ .name = "p13-slot", .opts = .{ .sidebar = false, .tabs = 2 }, .setup = @import("snapshots_ext.zig").slot },
     .{ .name = "p15-column-icons-only", .opts = .{ .sidebar = true, .tabs = 7 }, .setup = columnIconsOnly },
     .{ .name = "p15-cmd-badges-warnings", .opts = .{ .sidebar = true, .tabs = 3 }, .setup = cmdBadgesWarnings },
+    .{ .name = "p16-cards-panels-bar", .opts = .{ .sidebar = true, .tabs = 3 }, .setup = cardsPanelsAndBar },
+    .{ .name = "p16-strip-panels-bar", .opts = .{ .sidebar = false, .tabs = 3 }, .setup = cardsPanelsAndBar },
+    .{ .name = "p16-devtools-hud", .opts = .{ .sidebar = true, .tabs = 2 }, .setup = devtoolsHud },
+    .{ .name = "p17-bookmarks-categories", .opts = .{ .sidebar = true, .tabs = 2 }, .setup = @import("snapshots_bookmarks.zig").categories },
+    .{ .name = "p17-bookmarks-categories-strip", .opts = .{ .sidebar = false, .tabs = 2 }, .setup = @import("snapshots_bookmarks.zig").categories },
+    .{ .name = "p17-organize-categories", .opts = .{ .sidebar = true, .tabs = 2 }, .setup = @import("snapshots_bookmarks.zig").organizeCategories },
 };
 
 /// Settings open on `page`.
@@ -218,6 +224,24 @@ fn siteChip(f: *Fixture) void {
     b.setTyped("red");
     _ = b.lockSiteOffer();
     b.setTyped("kea");
+}
+
+/// Bookmarks bar + bookmarks sidebar + Ubi Chat together over the page.
+fn cardsPanelsAndBar(f: *Fixture) void {
+    @import("snapshots_bookmarks.zig").bar(f);
+    f.kea.prefs.set("bookmarks_sidebar", true);
+    @import("snapshots_chat.zig").chat(f);
+}
+
+/// DevTools & Frame-Pacing HUD with 6 stepped frames so the sparkline is populated.
+fn devtoolsHud(f: *Fixture) void {
+    const b = f.browser;
+    if (b.activeTab()) |t| {
+        t.own(&t.address, "https://www.example.com/");
+        t.setTitle("Example");
+    }
+    @import("kea").debug_hud.toggle(b);
+    for (0..6) |_| f.tester.frame();
 }
 
 pub fn main(init: std.process.Init) !void {

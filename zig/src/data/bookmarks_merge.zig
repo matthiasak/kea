@@ -122,12 +122,12 @@ fn mergeInto(wa: std.mem.Allocator, incoming: []const Bookmark, nodes: *[]Bookma
     var list: std.ArrayList(Bookmark) = .empty;
     try list.appendSlice(wa, nodes.*);
     var folders: std.StringHashMapUnmanaged(usize) = .empty;
-    var pages: std.StringHashMapUnmanaged(void) = .empty;
+    var pages: std.StringHashMapUnmanaged(usize) = .empty;
     for (list.items, 0..) |b, i| {
         if (b.isFolder()) {
             const gop = try folders.getOrPut(wa, b.title);
             if (!gop.found_existing) gop.value_ptr.* = i;
-        } else try pages.put(wa, b.url.?, {});
+        } else try pages.put(wa, b.url.?, i);
     }
     for (incoming) |node| {
         if (node.isFolder()) {
@@ -141,10 +141,12 @@ fn mergeInto(wa: std.mem.Allocator, incoming: []const Bookmark, nodes: *[]Bookma
                 counts.added += Bookmarks.count(&.{node});
                 if (ids) |out| try out.appendSlice(a, try Bookmarks.ids(a, &.{node}));
             }
-        } else if (pages.contains(node.url.?)) {
+        } else if (pages.get(node.url.?)) |at| {
             counts.already += 1;
+            // Filed under a topic on the other side only: kept (`incoming` is already on `wa`).
+            if (bm.category.norm(list.items[at].category) == null) list.items[at].category = bm.category.norm(node.category);
         } else {
-            try pages.put(wa, node.url.?, {});
+            try pages.put(wa, node.url.?, list.items.len);
             try list.append(wa, node);
             counts.added += 1;
             if (ids) |out| try out.append(a, node.id);

@@ -12,6 +12,7 @@ const Browser = @import("../model/browser.zig").Browser;
 const Tab = @import("tab.zig").Tab;
 const json = @import("../data/json.zig");
 const appkit = @import("../sys/appkit.zig");
+const platform = @import("../sys/platform.zig");
 const dialogs = @import("dialogs.zig");
 const dl = @import("downloads.zig");
 const ext_downloads = @import("../ext/downloads.zig");
@@ -189,6 +190,11 @@ fn whereToSave(f: *Fetches, owner: ?*Browser, name: []const u8, op: *Op, comptim
         defer f.gpa.free(path);
         return then(op, path);
     }
+    if (comptime platform.is_ios) {
+        const chosen = nanoui.dialog.save(f.gpa, .{ .directory = folder, .name = name }) catch null;
+        defer if (chosen) |c| f.gpa.free(c);
+        return then(op, chosen);
+    }
     const pool = objc.Pool.push();
     defer pool.pop();
     const panel = objc.retain(objc.msg(objc.Object, objc.class("NSSavePanel"), "savePanel", .{}));
@@ -278,6 +284,10 @@ pub fn reveal(path: []const u8) void {
     const pool = objc.Pool.push();
     defer pool.pop();
     const url = objc.msg(objc.Object, objc.class("NSURL"), "fileURLWithPath:", .{objc.nsString(path)});
+    if (comptime platform.is_ios) {
+        _ = platform.openExternalURL(url);
+        return;
+    }
     const list = objc.msg(objc.Object, objc.class("NSArray"), "arrayWithObject:", .{url});
     objc.msg(void, objc.msg(objc.Object, objc.class("NSWorkspace"), "sharedWorkspace", .{}), "activateFileViewerSelectingURLs:", .{list});
 }

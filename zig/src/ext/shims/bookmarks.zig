@@ -166,11 +166,22 @@ pub fn run(c: *Call) ans.Error!?ans.Out {
     } else if (eql(u8, api, "create")) {
         const spec = c.first();
         const title = ans.str(ans.field(spec, "title")) orelse "";
-        const made: Bookmark = if (ans.str(ans.field(spec, "url"))) |u|
-            .{ .id = Uuid.random(), .title = title, .url = u }
-        else
-            .{ .id = Uuid.random(), .title = title, .children = &.{} };
-        marks_.insert(made, parseId(ans.str(ans.field(spec, "parentId"))), place(ans.field(spec, "index")));
+        const parent_id = parseId(ans.str(ans.field(spec, "parentId")));
+        const idx = place(ans.field(spec, "index"));
+        if (ans.str(ans.field(spec, "url"))) |u| {
+            if (parent_id == null and idx == null and c.browser.prefs.bookmarks_auto_sort and !marks_.contains(u)) {
+                if (marks.category.addOptimistic(marks_, u, title)) |added| {
+                    @import("../../ai/organize_auto.zig").schedule(c.browser.kea.ai, marks_, added, false);
+                    const id_str = added.id.string();
+                    return found(c, &id_str);
+                }
+            }
+            const made: Bookmark = .{ .id = Uuid.random(), .title = title, .url = u };
+            marks_.insert(made, parent_id, idx);
+            return found(c, try idOf(a, made));
+        }
+        const made: Bookmark = .{ .id = Uuid.random(), .title = title, .children = &.{} };
+        marks_.insert(made, parent_id, idx);
         return found(c, try idOf(a, made));
     } else if (eql(u8, api, "update")) {
         const id = try uuid(c);

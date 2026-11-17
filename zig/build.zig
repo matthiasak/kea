@@ -1,4 +1,5 @@
 const std = @import("std");
+const nanoui_ios = @import("nanoui").ios;
 
 const frameworks = [_][]const u8{
     "AppKit",
@@ -23,8 +24,40 @@ const frameworks = [_][]const u8{
     "PDFKit",
 };
 
+const ios_frameworks = [_][]const u8{
+    "UIKit",
+    "WebKit",
+    "Metal",
+    "QuartzCore",
+    "CoreText",
+    "CoreGraphics",
+    "CoreFoundation",
+    "Foundation",
+    "ImageIO",
+    "UniformTypeIdentifiers",
+    "Security",
+    "UserNotifications",
+    "SystemConfiguration",
+    "AuthenticationServices",
+    "LocalAuthentication",
+    "AVFoundation",
+    "NaturalLanguage",
+    "PDFKit",
+};
+
 fn linkMacFrameworks(mod: *std.Build.Module, b: *std.Build, target: std.Build.ResolvedTarget) void {
-    if (target.result.os.tag != .macos) return;
+    const os = target.result.os.tag;
+    if (os == .ios) {
+        if (std.zig.system.darwin.getSdk(b.allocator, b.graph.io, &target.result)) |sdk| {
+            mod.addSystemFrameworkPath(.{ .cwd_relative = b.pathJoin(&.{ sdk, "System/Library/Frameworks" }) });
+            mod.addLibraryPath(.{ .cwd_relative = b.pathJoin(&.{ sdk, "usr/lib" }) });
+            for (ios_frameworks) |f| mod.linkFramework(f, .{});
+            mod.linkSystemLibrary("objc", .{});
+            mod.linkSystemLibrary("sqlite3", .{});
+        }
+        return;
+    }
+    if (os != .macos) return;
     if (!target.query.isNative()) {
         if (std.zig.system.darwin.getSdk(b.allocator, b.graph.io, &target.result)) |sdk| {
             mod.addSystemFrameworkPath(.{ .cwd_relative = b.pathJoin(&.{ sdk, "System/Library/Frameworks" }) });
@@ -35,7 +68,6 @@ fn linkMacFrameworks(mod: *std.Build.Module, b: *std.Build, target: std.Build.Re
     mod.linkSystemLibrary("objc", .{});
     mod.linkSystemLibrary("sqlite3", .{});
 }
-
 fn appModule(b: *std.Build, root: []const u8, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, imports: []const std.Build.Module.Import, opts: *std.Build.Module) *std.Build.Module {
     const mod = b.createModule(.{
         .root_source_file = b.path(root),
@@ -71,14 +103,39 @@ pub fn build(b: *std.Build) void {
     options.addOption([]const u8, "gdrive_client_secret", b.option([]const u8, "gdrive-client-secret", "That Desktop client's secret (default none)") orelse "");
     const opts = options.createModule();
 
-    // Kea executable (Kea.app/Contents/MacOS/Kea)
+    // Kea executable (macOS Contents/MacOS/Kea, or iOS Kea.app bundle + Simulator runner)
     const exe_mod = appModule(b, "src/main.zig", target, optimize, &.{.{ .name = "nanoui", .module = nanoui }}, opts);
     const exe = b.addExecutable(.{ .name = "Kea", .root_module = exe_mod });
+    if (target.result.os.tag == .ios) {
+        const ios_opts: nanoui_ios.Options = .{
+            .name = "Kea",
+            .id = "app.kea.browser",
+            .version = "0.1.0",
+            .file_sharing = true,
+            .icon = b.path("../Icon/kea.png"),
+            .resources = &.{.{ .name = "kea.gif", .source = b.path("../Icon/kea.gif") }},
+            .url_schemes = &.{ "http", "https", "kea" },
+            .activity_types = &.{"NSUserActivityTypeBrowsingWeb"},
+        };
+        const bundle = nanoui_ios.app(b, exe, ios_opts);
+        b.getInstallStep().dependOn(&b.addInstallDirectory(.{ .source_dir = bundle, .install_dir = .prefix, .install_subdir = "ios/Kea.app" }).step);
+        const run_step = b.step("run", "Run Kea in the booted iOS Simulator");
+        if (target.result.abi == .simulator) {
+            const sim = nanoui_ios.runInSimulator(b, bundle, ios_opts, b.path("nanoui"));
+            sim.addPassthruArgs();
+            run_step.dependOn(&sim.step);
+        } else {
+            run_step.dependOn(&b.addFail("zig build run on iOS requires -Dtarget=aarch64-ios.18.4-simulator").step);
+        }
+        const ios_obj = b.addObject(.{ .name = "Kea-ios", .root_module = exe_mod });
+        const install_obj = b.addInstallFileWithDir(ios_obj.getEmittedBin(), .lib, "Kea-ios.o");
+        b.step("ios-obj", "Compile Kea arm64 iOS Mach-O object without requiring Xcode SDK linker").dependOn(&install_obj.step);
+        return;
+    }
     b.installArtifact(exe);
     const run_exe = b.addRunArtifact(exe);
     run_exe.addPassthruArgs();
     b.step("run", "Run Kea").dependOn(&run_exe.step);
-
     // Unit and HistoryRegression tests. `-Dtest-root=src/<file>.zig` tests one
     // module tree in isolation (parallel work on separate modules).
     const test_root = b.option([]const u8, "test-root", "Root file for `zig build test` (default src/main.zig)");

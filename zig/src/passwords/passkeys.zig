@@ -8,6 +8,7 @@
 //! credentials (`reply.rehearsal`). Main thread.
 const std = @import("std");
 const objc = @import("nanoui").objc;
+const platform = @import("../sys/platform.zig");
 const Kea = @import("../app/kea.zig").Kea;
 const json = @import("../data/json.zig");
 const registrable = @import("../data/registrable.zig");
@@ -343,7 +344,7 @@ pub const Passkeys = struct {
             if (std.mem.eql(u8, o.id, id)) break true;
         } else false;
         if (!has or !p.sameOrigin(web, waiting.origin)) return;
-        const window = objc.msg(?objc.Object, web, "window", .{});
+        const window = objc.msg(?objc.Object, web, "window", .{}) orelse if (p.kea.windows.front) |fb| platform.nativeWindow(fb.window) else null;
         if (!p.testing() and !(appActive() and window != null and objc.msg(objc.BOOL, window.?, "isKeyWindow", .{}))) return;
         const w = p.conditional.fetchSwapRemove(key).?.value;
         defer w.deinit(p.gpa);
@@ -543,6 +544,10 @@ fn freeOffered(gpa: std.mem.Allocator, list: []Offered) void {
 }
 
 fn appActive() bool {
+    if (comptime platform.is_ios) {
+        const app = objc.msg(?objc.Object, objc.class("UIApplication"), "sharedApplication", .{}) orelse return false;
+        return objc.msg(objc.NSInteger, app, "applicationState", .{}) == 0;
+    }
     const app = objc.msg(?objc.Object, objc.class("NSApplication"), "sharedApplication", .{}) orelse return false;
     return objc.msg(objc.BOOL, app, "isActive", .{});
 }

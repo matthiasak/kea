@@ -5,6 +5,7 @@
 const std = @import("std");
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
+const platform = @import("../sys/platform.zig");
 const MenuItem = nanoui.MenuItem;
 const Browser = @import("../model/browser.zig").Browser;
 const Palette = @import("../design/palette.zig").Palette;
@@ -85,9 +86,15 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette, a: *Assistant, st: *
     if (controls.door(c, p, if (a.chat.pageHidden) "eye.slash" else "eye", .{ .on = !a.chat.pageHidden, .help = "Share the page in front" }).clicked) todo.* = .toggle_page;
     ui.text(c, pageLine(c, b, a), .{ .size = 11.5, .color = p.muted, .truncate = .ellipsis });
     _ = c.leaf(.{ .grow = 1, .min_width = 0 }, .none, null);
-    if (pins.len == 0 and controls.door(c, p, "plus", .{ .help = "Add Pins\u{2026}" }).clicked) todo.* = .add_pins;
+    const active_url = if (b.activeTab()) |t| t.url() else "";
+    const is_pinned = active_url.len > 0 and blk: {
+        for (pins) |pn| if (std.mem.eql(u8, pn.url, active_url)) break :blk true;
+        break :blk false;
+    };
+    if ((pins.len == 0 or st.pins_folded) and controls.door(c, p, "plus", .{ .help = "Add Pins\u{2026}" }).clicked) todo.* = .add_pins;
+    if (controls.door(c, p, "paperclip", .{ .on = a.attachments.items.len > 0, .help = "Attach a file\u{2026}" }).clicked) pickAttachmentLater(b);
     if (controls.door(c, p, "camera", .{ .on = a.shot != null, .help = if (a.shot != null) "Remove the screenshot" else "Attach a screenshot of this page" }).clicked) todo.* = .attach_shot;
-    if (controls.door(c, p, "pin", .{ .help = "Pin This Page" }).clicked) todo.* = .pin_page;
+    if (controls.door(c, p, "pin", .{ .on = is_pinned, .help = if (is_pinned) "Unpin This Page" else "Pin This Page" }).clicked) todo.* = .pin_page;
     ui.end(c);
 
     if (suggestions.len > 0) {
@@ -288,6 +295,55 @@ fn pageLine(c: *ui.Context, b: *Browser, a: *Assistant) []const u8 {
     if (a.chat.pageHidden) return c.print("Not shared: {s}", .{t.label()});
     return t.label();
 }
+const PickJob = struct { kea: *@import("../app/kea.zig").Kea, window: Uuid };
+
+fn pickAttachmentLater(b: *Browser) void {
+    if (b.kea.ui_app == null) return;
+    const j = std.heap.c_allocator.create(PickJob) catch return;
+    j.* = .{ .kea = b.kea, .window = b.record_id };
+    nanoui.objc.dispatchMain(j, runPickAttachment);
+}
+
+fn runPickAttachment(raw: ?*anyopaque) callconv(.c) void {
+    const j: *PickJob = @ptrCast(@alignCast(raw orelse return));
+    const job = j.*;
+    std.heap.c_allocator.destroy(j);
+    if (job.kea.ui_app == null) return;
+    const b = for (job.kea.browsers.items) |br| {
+        if (br.record_id.eql(job.window)) break br;
+    } else return;
+    if (comptime platform.is_ios) {
+        const paths = (nanoui.dialog.open(b.gpa, .{ .files = true, .directories = false, .multiple = true }) catch null) orelse return;
+        defer nanoui.dialog.freePaths(b.gpa, paths);
+        const b2 = for (job.kea.browsers.items) |br| {
+            if (br.record_id.eql(job.window)) break br;
+        } else return;
+        const a = b2.assisting orelse return;
+        for (paths) |path| if (path.len > 0) {
+            _ = a.attachFilePath(path);
+        };
+        chat_view.redraw(b2);
+        return;
+    }
+    const objc = nanoui.objc;
+    const pool = objc.Pool.push();
+    defer pool.pop();
+    const panel = objc.msg(objc.Object, objc.class("NSOpenPanel"), "openPanel", .{});
+    objc.msg(void, panel, "setCanChooseFiles:", .{objc.YES});
+    objc.msg(void, panel, "setCanChooseDirectories:", .{objc.NO});
+    objc.msg(void, panel, "setAllowsMultipleSelection:", .{objc.YES});
+    if (objc.msg(objc.NSInteger, panel, "runModal", .{}) != 1) return;
+    const a = b.assisting orelse return;
+    const urls = objc.msg(objc.Object, panel, "URLs", .{});
+    const n = objc.msg(objc.NSUInteger, urls, "count", .{});
+    for (0..n) |i| {
+        const u = objc.msg(objc.Object, urls, "objectAtIndex:", .{i});
+        const path = objc.fromNSString(objc.msg(?objc.Object, u, "path", .{}));
+        if (path.len > 0) _ = a.attachFilePath(path);
+    }
+    chat_view.redraw(b);
+}
+
 
 fn icon(source: ubi.Source) []const u8 {
     return switch (source) {
@@ -317,7 +373,7 @@ fn modelPicker(b: *Browser, c: *ui.Context, p: *const Palette) void {
     }
     {
         const on = b.prefs.ai_thinking;
-        const i = c.open(.{ .direction = .row, .padding = .{ .left = 5, .right = 5, .top = 2, .bottom = 2 }, .radius = 5, .background = if (on) p.wash else null, .align_items = .center, .control = true }, null);
+        const i = c.open(.{ .direction = .row, .padding = .{ .left = 6, .right = 6, .top = 4, .bottom = 4 }, .radius = 5, .background = if (on) p.wash else null, .align_items = .center, .control = true }, null);
         defer c.end();
         c.help(i, if (on) "Thinking: On" else "Thinking: Off");
         c.addA11y(i, .button, "Thinking", "", on, true);
@@ -330,7 +386,7 @@ fn modelPicker(b: *Browser, c: *ui.Context, p: *const Palette) void {
     {
         const on = b.prefs.ai_thinking;
         const eff_label = if (on) b.prefs.ai_effort.label() else "Off";
-        const i = c.open(.{ .direction = .row, .gap = 3, .padding = .{ .left = 5, .right = 5, .top = 2, .bottom = 2 }, .radius = 5, .background = if (on) p.wash else null, .align_items = .center, .control = true }, null);
+        const i = c.open(.{ .direction = .row, .gap = 3, .padding = .{ .left = 6, .right = 6, .top = 4, .bottom = 4 }, .radius = 5, .background = if (on) p.wash else null, .align_items = .center, .control = true }, null);
         defer c.end();
         const it = c.interact(i, .{});
         c.help(i, "Thinking Level");
@@ -348,7 +404,7 @@ fn modelPicker(b: *Browser, c: *ui.Context, p: *const Palette) void {
     }
     {
         const on = b.prefs.ai_web_search;
-        const i = c.open(.{ .direction = .row, .padding = .{ .left = 5, .right = 5, .top = 2, .bottom = 2 }, .radius = 5, .background = if (on) p.wash else null, .align_items = .center, .control = true }, null);
+        const i = c.open(.{ .direction = .row, .padding = .{ .left = 6, .right = 6, .top = 4, .bottom = 4 }, .radius = 5, .background = if (on) p.wash else null, .align_items = .center, .control = true }, null);
         defer c.end();
         c.help(i, if (on) "Web Search: On" else "Web Search: Off");
         c.addA11y(i, .button, "Web Search", "", on, true);

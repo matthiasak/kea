@@ -6,17 +6,10 @@ const std = @import("std");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;
 const fdwatch = nanoui.fdwatch;
+const platform = @import("../sys/platform.zig");
 
 const Actions = ?*anyopaque;
 const Attr = ?*anyopaque;
-extern "c" fn posix_spawn(pid: *c_int, path: [*:0]const u8, actions: *const Actions, attr: *const Attr, argv: [*:null]const ?[*:0]const u8, envp: [*:null]const ?[*:0]const u8) c_int;
-extern "c" fn posix_spawn_file_actions_init(a: *Actions) c_int;
-extern "c" fn posix_spawn_file_actions_destroy(a: *Actions) c_int;
-extern "c" fn posix_spawn_file_actions_adddup2(a: *Actions, fd: c_int, to: c_int) c_int;
-extern "c" fn posix_spawn_file_actions_addopen(a: *Actions, fd: c_int, path: [*:0]const u8, flags: c_int, mode: c_uint) c_int;
-extern "c" fn posix_spawnattr_init(a: *Attr) c_int;
-extern "c" fn posix_spawnattr_destroy(a: *Attr) c_int;
-extern "c" fn posix_spawnattr_setflags(a: *Attr, flags: c_short) c_int;
 extern "c" fn pipe(fds: *[2]c_int) c_int;
 extern "c" fn close(fd: c_int) c_int;
 extern "c" fn read(fd: c_int, buf: [*]u8, n: usize) isize;
@@ -25,7 +18,6 @@ extern "c" fn fcntl(fd: c_int, cmd: c_int, ...) c_int;
 extern "c" fn kill(pid: c_int, sig: c_int) c_int;
 extern "c" fn waitpid(pid: c_int, status: ?*c_int, options: c_int) c_int;
 extern "c" fn __error() *c_int;
-extern "c" var environ: [*:null]const ?[*:0]const u8;
 
 /// Only the descriptors handed over survive into the host.
 const POSIX_SPAWN_CLOEXEC_DEFAULT: c_short = 0x4000;
@@ -118,6 +110,18 @@ pub const HostPipe = struct {
 
     /// Runs `program` with `origin` as its one argument.
     pub fn start(gpa: std.mem.Allocator, program: []const u8, origin: []const u8, owner: *anyopaque, on_message: *const fn (*anyopaque, objc.Object) void, on_exit: *const fn (*anyopaque) void) !*HostPipe {
+        if (comptime platform.is_ios) return error.CannotStart;
+        const Posix = struct {
+            extern "c" fn posix_spawn(p: *c_int, pt: [*:0]const u8, act: *const Actions, at: *const Attr, av: [*:null]const ?[*:0]const u8, ev: [*:null]const ?[*:0]const u8) c_int;
+            extern "c" fn posix_spawn_file_actions_init(a: *Actions) c_int;
+            extern "c" fn posix_spawn_file_actions_destroy(a: *Actions) c_int;
+            extern "c" fn posix_spawn_file_actions_adddup2(a: *Actions, fd: c_int, to: c_int) c_int;
+            extern "c" fn posix_spawn_file_actions_addopen(a: *Actions, fd: c_int, pt: [*:0]const u8, flags: c_int, mode: c_uint) c_int;
+            extern "c" fn posix_spawnattr_init(a: *Attr) c_int;
+            extern "c" fn posix_spawnattr_destroy(a: *Attr) c_int;
+            extern "c" fn posix_spawnattr_setflags(a: *Attr, flags: c_short) c_int;
+            extern "c" var environ: [*:null]const ?[*:0]const u8;
+        };
         const path = try gpa.dupeSentinel(u8, program, 0);
         defer gpa.free(path);
         const arg = try gpa.dupeSentinel(u8, origin, 0);
@@ -132,17 +136,17 @@ pub const HostPipe = struct {
         }
         var actions: Actions = null;
         var attr: Attr = null;
-        _ = posix_spawn_file_actions_init(&actions);
-        defer _ = posix_spawn_file_actions_destroy(&actions);
-        _ = posix_spawnattr_init(&attr);
-        defer _ = posix_spawnattr_destroy(&attr);
-        _ = posix_spawnattr_setflags(&attr, POSIX_SPAWN_CLOEXEC_DEFAULT);
-        _ = posix_spawn_file_actions_adddup2(&actions, in[0], 0);
-        _ = posix_spawn_file_actions_adddup2(&actions, out[1], 1);
-        _ = posix_spawn_file_actions_addopen(&actions, 2, "/dev/null", O_WRONLY, 0);
+        _ = Posix.posix_spawn_file_actions_init(&actions);
+        defer _ = Posix.posix_spawn_file_actions_destroy(&actions);
+        _ = Posix.posix_spawnattr_init(&attr);
+        defer _ = Posix.posix_spawnattr_destroy(&attr);
+        _ = Posix.posix_spawnattr_setflags(&attr, POSIX_SPAWN_CLOEXEC_DEFAULT);
+        _ = Posix.posix_spawn_file_actions_adddup2(&actions, in[0], 0);
+        _ = Posix.posix_spawn_file_actions_adddup2(&actions, out[1], 1);
+        _ = Posix.posix_spawn_file_actions_addopen(&actions, 2, "/dev/null", O_WRONLY, 0);
         const argv = [_:null]?[*:0]const u8{ path, arg };
         var pid: c_int = 0;
-        const failed = posix_spawn(&pid, path, &actions, &attr, &argv, environ) != 0;
+        const failed = Posix.posix_spawn(&pid, path, &actions, &attr, &argv, Posix.environ) != 0;
         _ = close(in[0]);
         _ = close(out[1]);
         if (failed) {
@@ -302,6 +306,7 @@ test "native messaging frames round-trip" {
 extern "c" fn usleep(us: c_uint) c_int;
 
 test "a write to a host that has gone fails as unsaved, not a signal" {
+    if (comptime platform.is_ios) return;
     const Quiet = struct {
         fn heard(_: *anyopaque, _: objc.Object) void {}
         fn ended(_: *anyopaque) void {}

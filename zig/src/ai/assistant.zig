@@ -491,8 +491,8 @@ pub const Assistant = struct {
 
     pub fn pinPage(self: *Assistant) void {
         const t = self.active() orelse return;
-        if (!self.shareable(t) or ubi.isPrivatePage(t)) return;
-        for (self.chat.pins) |p| if (std.mem.eql(u8, p.url, t.url())) return;
+        for (self.chat.pins) |p| if (std.mem.eql(u8, p.url, t.url())) return self.unpin(p.id);
+        if (!self.shareable(t)) return;
         self.addPin(t.label(), t.url());
         self.keep();
     }

@@ -243,7 +243,7 @@ fn s05Chat(gpa: std.mem.Allocator) !Metric {
     for (0..20) |i| {
         const fi: f32 = @floatFromInt(i);
         const w: f32 = if (i < 10) 380.0 + 16.0 * (fi + 1.0) else 540.0 - 16.0 * (fi - 9.0);
-        t.ctx.input.mouse = .{ .x = t.size.w - w, .y = mid_y };
+        t.ctx.input.mouse = .{ .x = t.size.w - w + 2.0, .y = mid_y };
         samples[40 + i] = h.stepFrameMut(i < 10);
     }
     t.ctx.pointerUp();

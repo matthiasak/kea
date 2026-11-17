@@ -10,6 +10,7 @@ const Browser = @import("../model/browser.zig").Browser;
 const config = @import("config.zig");
 const cg = @import("../sys/cg.zig");
 const urlsession = @import("../sys/urlsession.zig");
+const platform = @import("../sys/platform.zig");
 
 /// The most a copied picture may weigh, and unpack to.
 const largest_image = 50_000_000;
@@ -19,6 +20,27 @@ const Pick = struct { serial: u64, url: []u8, frame: objc.Object };
 
 /// `showImageMenu(for:at:)`: popped where the pointer already is.
 pub fn show(t: *Tab, src: []const u8, frame: objc.Object) void {
+    if (comptime platform.is_ios) {
+        const wv = t.web orelse return;
+        if (objc.msg(?objc.Object, wv, "window", .{}) == null) return;
+        const a = std.heap.c_allocator;
+        var pick: Pick = .{ .serial = t.serial, .url = a.dupe(u8, src) catch return, .frame = objc.retain(frame) };
+        defer {
+            a.free(pick.url);
+            objc.release(pick.frame);
+        }
+        const M = nanoui.MenuItem;
+        const menu = nanoui.Menu.create(a, &[_]M{
+            .{ .label = "Open Image in New Tab", .click = .of(&pick, openImage) },
+            .{ .label = "Copy Image", .click = .of(&pick, copyImage) },
+            .{ .label = "Download Image", .click = .of(&pick, downloadImage) },
+            .{ .label = "Copy Image Address", .click = .of(&pick, copyAddress) },
+        }) catch return;
+        defer menu.destroy();
+        const bnd = objc.msg(objc.CGRect, wv, "bounds", .{});
+        menu.popup(wv, @floatCast(bnd.size.width / 2), @floatCast(bnd.size.height / 2));
+        return;
+    }
     const wv = t.web orelse return;
     const window = objc.msg(?objc.Object, wv, "window", .{}) orelse return;
     const a = std.heap.c_allocator;
@@ -52,9 +74,7 @@ fn openImage(p: *Pick, _: *nanoui.menu.Item) void {
 }
 
 fn copyAddress(p: *Pick, _: *nanoui.menu.Item) void {
-    const board = objc.msg(objc.Object, objc.class("NSPasteboard"), "generalPasteboard", .{});
-    _ = objc.msg(objc.NSInteger, board, "clearContents", .{});
-    _ = objc.msg(objc.BOOL, board, "setString:forType:", .{ objc.nsString(p.url), objc.nsString("public.utf8-plain-text") });
+    platform.writePasteboardString(p.url);
 }
 
 /// The same WKDownload the window already finishes (P5.5 `keep`).
@@ -180,6 +200,15 @@ fn blobRead(job: *Job, value: ?objc.Object, _: ?objc.Object) void {
 fn copied(t: *Tab, data: ?objc.Object) void {
     const b = t.browser orelse return;
     const d = data orelse return b.announce("Couldn't copy that image");
+    if (comptime platform.is_ios) {
+        const image = if (reasonable(d)) objc.msg(?objc.Object, objc.alloc("UIImage"), "initWithData:", .{d}) else null;
+        const picture = image orelse return b.announce("Couldn't copy that image");
+        defer objc.release(picture);
+        const board = objc.msg(objc.Object, objc.class("UIPasteboard"), "generalPasteboard", .{});
+        objc.msg(void, board, "setImage:", .{picture});
+        b.announce("Image copied");
+        return;
+    }
     const image = if (reasonable(d)) objc.msg(?objc.Object, objc.alloc("NSImage"), "initWithData:", .{d}) else null;
     const picture = image orelse return b.announce("Couldn't copy that image");
     defer objc.release(picture);

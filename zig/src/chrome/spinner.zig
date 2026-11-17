@@ -7,6 +7,7 @@ const std = @import("std");
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
 const objc = nanoui.objc;
+const platform = @import("../sys/platform.zig");
 const cg = @import("../sys/cg.zig");
 const ring = @import("ring.zig");
 
@@ -20,7 +21,6 @@ const Strip = struct { pngs: [frames][]u8, scale: f32 };
 var strips: [2]?Strip = .{ null, null };
 var tried: [2]bool = .{ false, false };
 
-extern var NSApp: ?objc.Object;
 extern "c" fn CGImageCreateWithImageInRect(image: cg.Image, rect: objc.CGRect) ?cg.Image;
 extern "c" fn CFGetTypeID(cf: *anyopaque) usize;
 extern "c" fn CGImageGetTypeID() usize;
@@ -35,15 +35,20 @@ pub fn spinner(c: *ui.Context) void {
 }
 
 fn strip(dark: bool) ?*const Strip {
+    if (comptime platform.is_ios) return null;
+    const M = struct {
+        extern var NSApp: ?objc.Object;
+    };
     const k = @intFromBool(dark);
     if (strips[k]) |*s| return s;
-    if (tried[k] or NSApp == null) return null;
+    if (tried[k] or M.NSApp == null) return null;
     tried[k] = true;
     strips[k] = take(dark) orelse return null;
     return &strips[k].?;
 }
 
 fn take(dark: bool) ?Strip {
+    if (comptime platform.is_ios) return null;
     const pool = objc.Pool.push();
     defer pool.pop();
     const window = objc.msg(?objc.Object, objc.alloc("NSWindow"), "initWithContentRect:styleMask:backing:defer:", .{
@@ -107,6 +112,7 @@ fn png(image: cg.Image) ?[]u8 {
 }
 
 test "the system spinner's 24 frames come from AppKit" {
+    if (comptime platform.is_ios) return error.SkipZigTest;
     _ = objc.msg(objc.Object, objc.class("NSApplication"), "sharedApplication", .{});
     const s = strip(false) orelse return error.NotTaken;
     try std.testing.expect(s.scale >= 1);

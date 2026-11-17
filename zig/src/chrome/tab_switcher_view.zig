@@ -10,6 +10,8 @@ const Palette = @import("../design/palette.zig").Palette;
 const motion = @import("../design/motion.zig");
 const mark = @import("mark.zig");
 const sw = @import("tab_switcher.zig");
+const controls = @import("controls.zig");
+const is_ios = @import("builtin").os.tag == .ios;
 
 fn px(n: f32) ui.Length {
     return .{ .px = n };
@@ -18,10 +20,20 @@ fn px(n: f32) ui.Length {
 /// The cards' size for `count` tabs in a window `window_w` wide.
 pub const Layout = struct { columns: usize, width: f32, preview: f32, height: f32 };
 
+fn maxCols(window_w: f32) usize {
+    if (!is_ios) return 5;
+    if (window_w > 0 and window_w < 600) return 2;
+    if (window_w > 0 and window_w < 900) return 3;
+    return 5;
+}
+
 pub fn layout(window_w: f32, count: usize) Layout {
-    const columns = @min(5, count);
+    const cols = maxCols(window_w);
+    const columns = @min(cols, count);
     const n: f32 = @floatFromInt(@max(columns, 1));
-    const width = @min(176, (window_w - 64 - (n - 1) * 8) / n);
+    const margin: f32 = if (is_ios and window_w > 0 and window_w < 600) 40 else 64;
+    const raw_w = (window_w - margin - (n - 1) * 8) / n;
+    const width = @min(176, if (is_ios) @max(110, raw_w) else raw_w);
     const preview = (width - 16) * 0.62;
     return .{ .columns = columns, .width = width, .preview = preview, .height = preview + 39 };
 }
@@ -69,7 +81,7 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette) void {
     // `.onTapGesture` / `Button`: on the mouse coming up, not going down.
     if (out.clicked) dismissed = true;
 
-    const panel = c.open(.{ .padding = .all(12), .background = p.ground, .radius = 12, .border = p.hairline, .control = true }, "panel");
+    const panel = c.open(.{ .direction = .column, .gap = 10, .padding = .all(12), .max_width = @max(260, c.size.w - 16), .max_height = @max(220, c.size.h - 32), .background = p.ground, .radius = 12, .border = p.hairline, .control = true }, "panel");
     // The pointer picks the card under it once it has moved: the panel
     // comes up wherever the pointer happens to be.
     const m = c.input.mouse;
@@ -85,32 +97,66 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette) void {
     }
     const pointing = stirred and s.moved;
 
-    _ = c.open(.{ .gap = 8 }, "grid");
+    const cols = maxCols(c.size.w);
+    var closed_tab: ?u64 = null;
+    _ = c.open(.{ .direction = .column, .gap = 8, .scroll = true, .max_height = @max(160, c.size.h - (if (is_ios) @as(f32, 120) else @as(f32, 64))) }, "grid");
     if (s.selected) |sel| if (std.mem.indexOfScalar(u64, s.candidates.items, sel)) |index| {
         const id = c.peekId("highlight");
-        const x = motion.liveTo(c, id, 0, @as(f32, @floatFromInt(index % 5)) * (l.width + 8));
-        const y = motion.liveTo(c, id, 1, @as(f32, @floatFromInt(index / 5)) * (l.height + 8));
+        const x = motion.liveTo(c, id, 0, @as(f32, @floatFromInt(index % cols)) * (l.width + 8));
+        const y = motion.liveTo(c, id, 1, @as(f32, @floatFromInt(index / cols)) * (l.height + 8));
         _ = c.leaf(.{ .absolute = true, .offset = .{ .x = x, .y = y }, .width = px(l.width), .height = px(l.height), .radius = 8, .background = p.faint, .motion_blur = true }, .none, "highlight");
     };
     var row: usize = 0;
-    while (row * 5 < s.candidates.items.len) : (row += 1) {
+    while (row * cols < s.candidates.items.len) : (row += 1) {
         ui.key(c, c.print("row-{d}", .{row}));
         ui.row(c, .{ .gap = 8 });
-        const end = @min(row * 5 + 5, s.candidates.items.len);
-        for (s.candidates.items[row * 5 .. end], row * 5..) |id, card_idx| if (b.tabById(id)) |t| {
+        const end = @min(row * cols + cols, s.candidates.items.len);
+        for (s.candidates.items[row * cols .. end], row * cols..) |id, card_idx| if (b.tabById(id)) |t| {
+            ui.row(c, .{});
             const it = card(b, c, p, t, l, card_idx, opened_at);
+            if (is_ios) {
+                const x_btn = c.open(.{ .absolute = true, .offset = .{ .x = l.width - 30, .y = 2 }, .width = px(28), .height = px(28), .radius = 14, .background = p.ground.alpha(0.85), .align_items = .center, .justify = .center, .control = true }, null);
+                const x_it = c.interact(x_btn, .{});
+                c.addA11y(x_btn, .button, "Close tab", "", false, true);
+                ui.icon(c, "xmark", .{ .size = 10, .weight = .semibold, .color = p.muted });
+                c.end();
+                if (x_it.clicked) closed_tab = t.id;
+            }
+            ui.end(c);
             if (it.rect) |r| if (s.card_count < s.cards.len) {
                 s.cards[s.card_count] = .{ .id = t.id, .rect = r };
                 s.card_count += 1;
             };
-            if (it.clicked) picked = t.id;
+            if (it.clicked and closed_tab != t.id) picked = t.id;
             if (it.hovered and pointing) s.selected = t.id;
         };
         ui.end(c);
     }
     c.end();
+    var new_tab = false;
+    var new_private = false;
+    if (is_ios) {
+        ui.row(c, .{ .width = .fill, .gap = 8, .align_items = .center });
+        if (controls.pill(c, p, "+ New Tab", .{ .filled = true }).clicked) new_tab = true;
+        if (controls.pill(c, p, "Private", .{}).clicked) new_private = true;
+        ui.spacer(c);
+        if (controls.pill(c, p, "Done", .{}).clicked) dismissed = true;
+        ui.end(c);
+    }
     c.end();
     ui.end(c);
+    if (closed_tab) |cid| {
+        s.selected = cid;
+        return sw.closeSelected(b);
+    }
+    if (new_tab) {
+        sw.cancel(b);
+        return b.newTab();
+    }
+    if (new_private) {
+        sw.cancel(b);
+        return b.newShyTab();
+    }
     if (picked) |id| return sw.commitTabSwitch(b, id);
     if (dismissed) sw.cancel(b);
 }

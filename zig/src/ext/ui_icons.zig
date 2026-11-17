@@ -4,6 +4,7 @@
 const std = @import("std");
 const objc = @import("nanoui").objc;
 const value = @import("value.zig");
+const platform = @import("../sys/platform.zig");
 
 const heap = std.heap.c_allocator;
 
@@ -53,6 +54,10 @@ pub fn png(key: []const u8, image: objc.Object, side: f64, serial: u64, generati
 fn draw(image: objc.Object, side: f64) ?[]u8 {
     const pool = objc.Pool.push();
     defer pool.pop();
+    if (comptime platform.is_ios) {
+        const out = platform.pngDataOfImage(image) orelse return null;
+        return heap.dupe(u8, value.bytes(out)) catch null;
+    }
     const n: objc.NSInteger = @intFromFloat(side * 2);
     const rep = objc.msg(?objc.Object, objc.alloc("NSBitmapImageRep"), "initWithBitmapDataPlanes:pixelsWide:pixelsHigh:bitsPerSample:samplesPerPixel:hasAlpha:isPlanar:colorSpaceName:bytesPerRow:bitsPerPixel:", .{
         @as(?*anyopaque, null), n, n, @as(objc.NSInteger, 8), @as(objc.NSInteger, 4), objc.YES, objc.NO, objc.nsString("NSDeviceRGBColorSpace"), @as(objc.NSInteger, 0), @as(objc.NSInteger, 0),

@@ -167,8 +167,7 @@ fn rowOf(b: *Browser, c: *ui.Context, list: []const Item) tab_width.Row {
 }
 
 fn fullScreen(b: *Browser) bool {
-    const w = b.window orelse return false;
-    return w.isFullScreen();
+    return if (comptime @import("../sys/platform.zig").is_ios) true else if (b.window) |w| w.isFullScreen() else false;
 }
 
 /// The strip, at the window's top, full width, 52 high.
@@ -228,7 +227,7 @@ pub fn tabBar(b: *Browser, c: *ui.Context, p: *const Palette) void {
     neighbours(b, c, p, strip_w - lights_w - dot - leading, swipe);
     c.end();
 
-    plus(b, c, p, nearby);
+    plus(b, c, p, nearby or comptime @import("../sys/platform.zig").is_ios);
     ui.spacer(c);
     // The download door, the extensions, back, forward, reload, and the
     // bookmarks, at the far end.
@@ -244,6 +243,7 @@ pub fn tabBar(b: *Browser, c: *ui.Context, p: *const Palette) void {
         ui.end(c);
     }
     bookmarkDoor(b, c, p);
+    @import("compact_bar.zig").iosStripDoors(b, c, p);
     c.end();
     ui.end(c);
     c.end();
@@ -538,7 +538,8 @@ fn page(b: *Browser, c: *ui.Context, p: *const Palette, index: usize, y: f32) vo
 /// pointer is in the strip.
 fn plus(b: *Browser, c: *ui.Context, p: *const Palette, nearby: bool) void {
     const t = motion.settleTo(c, plus_id, 0, if (nearby) 1 else 0);
-    const i = c.open(.{ .padding = .xy(7, 6), .radius = 9, .align_items = .center, .justify = .center, .opacity = std.math.clamp(t, 0, 1), .scale = 0.7 + 0.3 * t, .scale_anchor = if (t >= 0.999) .{ .x = 0.5, .y = 0.5 } else .{ .x = 0, .y = 0.5 }, .control = nearby }, "kea.strip.plus");
+    const is_ios = @import("builtin").os.tag == .ios;
+    const i = c.open(.{ .width = if (is_ios) px(44) else .auto, .height = if (is_ios) px(44) else .auto, .padding = if (is_ios) .{} else .xy(7, 6), .radius = 9, .align_items = .center, .justify = .center, .opacity = std.math.clamp(t, 0, 1), .scale = 0.7 + 0.3 * t, .scale_anchor = if (t >= 0.999) .{ .x = 0.5, .y = 0.5 } else .{ .x = 0, .y = 0.5 }, .control = nearby }, "kea.strip.plus");
     defer c.end();
     const id = c.node(i).id;
     var hovered = false;
@@ -566,8 +567,8 @@ pub fn helm(b: *Browser, c: *ui.Context, p: *const Palette) void {
     const tab = b.activeTab() orelse {
         ui.row(c, .{ .gap = 4, .opacity = 0.3 });
         for ([_][]const u8{ "chevron.left", "chevron.right", "arrow.clockwise" }) |icon| {
-            _ = c.open(.{ .width = px(26), .height = px(26), .align_items = .center, .justify = .center }, null);
-            ui.icon(c, icon, .{ .size = 11, .weight = .medium, .color = p.muted });
+            _ = c.open(.{ .width = px(metrics.door_size), .height = px(metrics.door_size), .align_items = .center, .justify = .center }, null);
+            ui.icon(c, icon, .{ .size = if (@import("builtin").os.tag == .ios) 15 else 11, .weight = .medium, .color = p.muted });
             c.end();
         }
         ui.end(c);

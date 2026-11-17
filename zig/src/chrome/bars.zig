@@ -9,6 +9,7 @@
 const std = @import("std");
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
+const platform = @import("../sys/platform.zig");
 const Browser = @import("../model/browser.zig").Browser;
 const Palette = @import("../design/palette.zig").Palette;
 const card = @import("../design/card.zig");
@@ -46,7 +47,7 @@ pub fn announceFile(b: *Browser, msg: []const u8, file: ?[]const u8) void {
     b.announcement = text;
     b.announced_file = copy;
     b.announced_until = ui.clock.now() + @as(f64, if (file == null) 1.7 else 4);
-    if (b.window) |w| nanoui.a11y.announce(w.nswindow, msg);
+    if (comptime !platform.is_ios) if (b.window) |w| nanoui.a11y.announce(w.nswindow, msg);
     b.redraw();
 }
 

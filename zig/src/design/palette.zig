@@ -1,9 +1,11 @@
 //! Kea's colours (`Palette.NS`, Design.swift:45-64): a light and a dark
 //! value for each. The greys are `NSColor(white:)`, converted to sRGB by
 //! AppKit itself so they match Kea to the bit; the tints are sRGB as given.
+const std = @import("std");
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
 const objc = nanoui.objc;
+const platform = @import("../sys/platform.zig");
 
 pub const Palette = struct {
     ground: ui.Color,
@@ -86,6 +88,14 @@ fn rgb(r: f32, g: f32, b: f32) ui.Color {
 /// The system colour `name` in sRGB, as AppKit resolves it for a light or
 /// a dark appearance.
 fn system(comptime name: [:0]const u8, dark: bool) ui.Color {
+    if (comptime platform.is_ios) {
+        if (std.mem.eql(u8, name, "systemBlueColor")) return if (dark) rgb(0.039, 0.518, 1.0) else rgb(0.0, 0.478, 1.0);
+        if (std.mem.eql(u8, name, "systemOrangeColor")) return if (dark) rgb(1.0, 0.624, 0.039) else rgb(1.0, 0.584, 0.0);
+        if (std.mem.eql(u8, name, "systemPurpleColor")) return if (dark) rgb(0.749, 0.353, 0.949) else rgb(0.686, 0.322, 0.871);
+        if (std.mem.eql(u8, name, "systemTealColor")) return if (dark) rgb(0.251, 0.784, 0.878) else rgb(0.188, 0.690, 0.780);
+        if (std.mem.eql(u8, name, "systemPinkColor")) return if (dark) rgb(1.0, 0.216, 0.373) else rgb(1.0, 0.176, 0.333);
+        return if (dark) rgb(0.596, 0.596, 0.616) else rgb(0.557, 0.557, 0.576);
+    }
     const appearance = objc.class("NSAppearance");
     const was = objc.msg(?objc.Object, appearance, "currentAppearance", .{});
     const look = objc.msg(?objc.Object, appearance, "appearanceNamed:", .{objc.nsString(if (dark) "NSAppearanceNameDarkAqua" else "NSAppearanceNameAqua")});
@@ -102,6 +112,7 @@ fn system(comptime name: [:0]const u8, dark: bool) ui.Color {
 
 /// `NSColor(white: v, alpha: 1)` in sRGB, as AppKit converts it.
 pub fn white(v: f64) ui.Color {
+    if (comptime platform.is_ios) return rgb(@floatCast(v), @floatCast(v), @floatCast(v));
     const gray = objc.msg(objc.Object, objc.class("NSColor"), "colorWithWhite:alpha:", .{ v, @as(f64, 1) });
     const srgb = objc.msg(objc.Object, objc.class("NSColorSpace"), "sRGBColorSpace", .{});
     const c = objc.msg(?objc.Object, gray, "colorUsingColorSpace:", .{srgb}) orelse

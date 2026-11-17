@@ -41,3 +41,44 @@ pub fn organize(f: *Fixture) void {
     f.tester.frame();
     app.bookmarks_proposal.send(b, "");
 }
+
+/// P17: flat categorized bookmarks in 1D neighbor order with bar and sidebar.
+pub fn categories(f: *Fixture) void {
+    const b = f.browser;
+    const items = [_]struct { []const u8, []const u8, []const u8 }{
+        .{ "https://arxiv.org/", "arXiv", "AI & ML" },
+        .{ "https://huggingface.co/", "Hugging Face", "AI & ML" },
+        .{ "https://semianalysis.com/", "SemiAnalysis", "EE & Chips" },
+        .{ "https://digikey.com/", "DigiKey", "EE & Chips" },
+        .{ "https://examine.com/", "Examine", "Health" },
+        .{ "https://pubmed.ncbi.nlm.nih.gov/", "PubMed Peptides", "Peptides" },
+        .{ "https://zillow.com/", "Zillow", "Housing" },
+    };
+    for (items) |it| {
+        const id = b.bookmarks.add(it[0], it[1]).?;
+        app.bookmarks_category.setCategory(b.bookmarks, id, it[2]);
+    }
+    b.prefs.set("bookmarks_bar", true);
+    b.prefs.set("bookmarks_sidebar", true);
+}
+
+fn organizeCategoriesStream(_: ?*anyopaque, _: *app.ai_core.Ai, _: app.ai_client.Ask, sink: app.ai_client.Sink) ?app.ai_client.Handle {
+    sink.piece(sink.ctx, "{\"groups\":[{\"category\":\"AI & ML\",\"items\":[1,2]},{\"category\":\"EE & Chips\",\"items\":[3,4]},{\"category\":\"Health & Supplements\",\"items\":[5]}],\"remove\":[]}");
+    sink.done(sink.ctx, null);
+    return null;
+}
+
+/// P17: Organize with AI proposal showing flat category preview headers.
+pub fn organizeCategories(f: *Fixture) void {
+    const b = f.browser;
+    _ = b.bookmarks.add("https://arxiv.org/", "arXiv");
+    _ = b.bookmarks.add("https://huggingface.co/", "Hugging Face");
+    _ = b.bookmarks.add("https://semianalysis.com/", "SemiAnalysis");
+    _ = b.bookmarks.add("https://digikey.com/", "DigiKey");
+    _ = b.bookmarks.add("https://examine.com/", "Examine");
+    @import("ui/organize.zig").ready(b);
+    b.kea.ai.client = .{ .ctx = null, .stream = organizeCategoriesStream };
+    app.sheet.show(b, .bookmarking);
+    f.tester.frame();
+    app.bookmarks_proposal.send(b, "");
+}

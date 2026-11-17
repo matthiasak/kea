@@ -4,6 +4,11 @@
 //! and exports it for apps (`@import("nanoui").ios.app(b, exe, .{...})`).
 const std = @import("std");
 
+pub const Resource = struct {
+    name: []const u8,
+    source: std.Build.LazyPath,
+};
+
 pub const Options = struct {
     /// The name under the icon ("Gallery").
     name: []const u8,
@@ -12,6 +17,14 @@ pub const Options = struct {
     version: []const u8 = "1.0",
     /// Files the Files app shows (the app's Documents).
     file_sharing: bool = false,
+    /// Optional PNG app icon copied as `AppIcon.png` and registered under `CFBundleIcons`.
+    icon: ?std.Build.LazyPath = null,
+    /// Extra bundle resources copied into `<Name>.app/<res.name>`.
+    resources: []const Resource = &.{},
+    /// URL schemes (`http`, `https`, custom) registered under `CFBundleURLTypes`.
+    url_schemes: []const []const u8 = &.{},
+    /// `NSUserActivityTypes` (e.g. `NSUserActivityTypeBrowsingWeb` for Handoff).
+    activity_types: []const []const u8 = &.{},
 };
 
 /// The folder `<name>.app` holding `exe` and an Info.plist made for its
@@ -22,6 +35,8 @@ pub fn app(b: *std.Build, exe: *std.Build.Step.Compile, opts: Options) std.Build
     const wf = b.addWriteFiles();
     _ = wf.add(b.fmt("{s}/Info.plist", .{dir}), infoPlist(b, exe.name, target, opts));
     _ = wf.addCopyFile(executable(b, exe), b.fmt("{s}/{s}", .{ dir, exe.name }));
+    if (opts.icon) |ic| _ = wf.addCopyFile(ic, b.fmt("{s}/AppIcon.png", .{dir}));
+    for (opts.resources) |res| _ = wf.addCopyFile(res.source, b.fmt("{s}/{s}", .{ dir, res.name }));
     return wf.getDirectory().path(b, dir);
 }
 
@@ -91,6 +106,32 @@ pub fn runInSimulator(b: *std.Build, bundle: std.Build.LazyPath, opts: Options, 
 pub fn infoPlist(b: *std.Build, exe_name: []const u8, target: std.Target, opts: Options) []const u8 {
     const simulator = target.abi == .simulator;
     const min = target.os.version_range.semver.min;
+    var extra: std.ArrayList(u8) = .empty;
+    if (opts.icon != null) {
+        extra.appendSlice(b.allocator,
+            \\  <key>CFBundleIcons</key>
+            \\  <dict><key>CFBundlePrimaryIcon</key><dict><key>CFBundleIconFiles</key><array><string>AppIcon</string></array></dict></dict>
+            \\  <key>CFBundleIcons~ipad</key>
+            \\  <dict><key>CFBundlePrimaryIcon</key><dict><key>CFBundleIconFiles</key><array><string>AppIcon</string></array></dict></dict>
+            \\
+        ) catch @panic("OOM");
+    }
+    if (opts.url_schemes.len > 0) {
+        extra.appendSlice(b.allocator, "  <key>CFBundleURLTypes</key>\n  <array><dict><key>CFBundleURLName</key><string>") catch @panic("OOM");
+        extra.appendSlice(b.allocator, opts.id) catch @panic("OOM");
+        extra.appendSlice(b.allocator, "</string><key>CFBundleURLSchemes</key><array>") catch @panic("OOM");
+        for (opts.url_schemes) |sc| {
+            extra.appendSlice(b.allocator, b.fmt("<string>{s}</string>", .{sc})) catch @panic("OOM");
+        }
+        extra.appendSlice(b.allocator, "</array></dict></array>\n") catch @panic("OOM");
+    }
+    if (opts.activity_types.len > 0) {
+        extra.appendSlice(b.allocator, "  <key>NSUserActivityTypes</key>\n  <array>") catch @panic("OOM");
+        for (opts.activity_types) |at| {
+            extra.appendSlice(b.allocator, b.fmt("<string>{s}</string>", .{at})) catch @panic("OOM");
+        }
+        extra.appendSlice(b.allocator, "</array>\n") catch @panic("OOM");
+    }
     return b.fmt(
         \\<?xml version="1.0" encoding="UTF-8"?>
         \\<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -120,7 +161,7 @@ pub fn infoPlist(b: *std.Build, exe_name: []const u8, target: std.Target, opts: 
         \\  <array><string>UIInterfaceOrientationPortrait</string><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array>
         \\  <key>UISupportedInterfaceOrientations~ipad</key>
         \\  <array><string>UIInterfaceOrientationPortrait</string><string>UIInterfaceOrientationPortraitUpsideDown</string><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array>
-        \\</dict>
+        \\{s}</dict>
         \\</plist>
         \\
     , .{
@@ -135,5 +176,6 @@ pub fn infoPlist(b: *std.Build, exe_name: []const u8, target: std.Target, opts: 
         min.minor,
         if (opts.file_sharing) "true" else "false",
         if (opts.file_sharing) "true" else "false",
+        extra.items,
     });
 }

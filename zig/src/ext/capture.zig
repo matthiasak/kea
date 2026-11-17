@@ -18,6 +18,7 @@ const Store = @import("../data/store.zig").Store;
 const config = @import("../web/config.zig");
 const dialogs = @import("../web/dialogs.zig");
 const json = @import("../data/json.zig");
+const platform = @import("../sys/platform.zig");
 
 /// The name the pages post to (window.webkit.messageHandlers).
 pub const channel = "keaCapture";
@@ -85,11 +86,7 @@ pub fn allowedIDs(alloc: std.mem.Allocator, store: *const Store) ![][]u8 {
         if (!allowed(store, id)) continue;
         try out.append(alloc, try alloc.dupe(u8, id));
     }
-    std.mem.sort([]u8, out.items, {}, struct {
-        fn lt(_: void, a: []u8, b: []u8) bool {
-            return std.mem.lessThan(u8, a, b);
-        }
-    }.lt);
+    std.mem.sort([]u8, out.items, {}, struct { fn lt(_: void, a: []u8, b: []u8) bool { return std.mem.lessThan(u8, a, b); } }.lt);
     return out.toOwnedSlice(alloc);
 }
 
@@ -435,7 +432,9 @@ fn display_decision(_: *Capture, web: objc.Object) objc.NSInteger {
     return in_flight.get(@intFromPtr(web)) orelse 0;
 }
 
-pub const display_selector = "_webView:requestDisplayCapturePermissionForOrigin:initiatedByFrame:withSystemAudio:decisionHandler:";
+pub const display_methods = if (platform.is_ios) [_]objc.Method{} else [_]objc.Method{
+    .{ .name = "_webView:requestDisplayCapturePermissionForOrigin:initiatedByFrame:withSystemAudio:decisionHandler:", .imp = &displayCapture, .types = "v@:@@@B@?" },
+};
 
 /// The private UI-delegate method, for offscreen documents, the page
 /// delegate and the popup: yes only while Kea's own call is under way.
@@ -473,8 +472,8 @@ fn poll(job: *Job) void {
     defer pool.pop();
     const window = objc.msg(?objc.Object, job.web.?, "window", .{});
     // NSWindowOcclusionStateVisible = 1 << 1; only asked of a tab's window.
-    const seen = if (window) |w| objc.msg(objc.BOOL, w, "isVisible", .{}) and
-        (job.lend or objc.msg(objc.NSUInteger, w, "occlusionState", .{}) & 2 != 0) else false;
+    const seen = if (window) |w| (if (comptime platform.is_ios) !objc.msg(objc.BOOL, w, "isHidden", .{}) else objc.msg(objc.BOOL, w, "isVisible", .{}) and
+        (job.lend or objc.msg(objc.NSUInteger, w, "occlusionState", .{}) & 2 != 0)) else false;
     if (!seen) return later(job);
     var block = VisibilityBlock.init(job, visibility);
     objc.msg(void, job.web.?, "evaluateJavaScript:completionHandler:", .{ objc.nsString("document.visibilityState"), @as(*anyopaque, @ptrCast(&block)) });

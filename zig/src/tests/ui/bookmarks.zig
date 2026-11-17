@@ -163,3 +163,80 @@ test "card name arrives selected" {
     f.tester.settle(1);
     try std.testing.expectEqualStrings("x", b.bookmarks.bookmark(id).?.title);
 }
+
+test "sidebar category headers are unclickable while bookmark rows navigate" {
+    var f: Fixture = undefined;
+    try f.init(gpa, .{ .sidebar = true });
+    defer f.deinit();
+    const b = f.browser;
+    const tab = b.activeTab().?;
+    tab.own(&tab.address, "https://initial.example/");
+    const id1 = b.bookmarks.add("https://arxiv.org/", "arXiv").?;
+    const id2 = b.bookmarks.add("https://huggingface.co/", "Hugging Face").?;
+    const id3 = b.bookmarks.add("https://digikey.com/", "DigiKey").?;
+    app.bookmarks_category.setCategory(b.bookmarks, id1, "AI & ML");
+    app.bookmarks_category.setCategory(b.bookmarks, id2, "AI & ML");
+    app.bookmarks_category.setCategory(b.bookmarks, id3, "EE & Chips");
+    b.prefs.set("bookmarks_sidebar", true);
+    f.tester.settle(1);
+    try std.testing.expect(f.tester.hasText("AI & ML"));
+    try std.testing.expect(f.tester.hasText("EE & Chips"));
+    const hr = f.tester.findText("AI & ML") orelse return error.NoHeader;
+    f.tester.click(hr.x + hr.w / 2, hr.y + hr.h / 2);
+    f.tester.settle(0.5);
+    try std.testing.expectEqualStrings("https://initial.example/", b.activeTab().?.url());
+    try std.testing.expect(b.overlay == null);
+    try std.testing.expect(f.tester.hasText("arXiv"));
+    try std.testing.expect(f.tester.hasText("Hugging Face"));
+    try f.tester.clickText("DigiKey");
+    f.tester.settle(0.5);
+    try std.testing.expectEqualStrings("https://digikey.com/", b.activeTab().?.url());
+}
+
+test "shift-cmd-B auto-categorizes into neighbor category while preserving live BookmarkCard typing" {
+    const client = app.ai_client;
+    const Pending = struct {
+        sink: ?client.Sink = null,
+        fn stream(ctx: ?*anyopaque, _: *app.ai_core.Ai, _: client.Ask, sink: client.Sink) ?client.Handle {
+            const self: *@This() = @ptrCast(@alignCast(ctx.?));
+            self.sink = sink;
+            return null;
+        }
+    };
+    var pending = Pending{};
+    var f: Fixture = undefined;
+    try f.init(gpa, .{ .sidebar = false });
+    defer f.deinit();
+    const b = f.browser;
+    const id1 = b.bookmarks.add("https://examine.com/", "Examine").?;
+    const id2 = b.bookmarks.add("https://zillow.com/", "Zillow").?;
+    app.bookmarks_category.setCategory(b.bookmarks, id1, "Health & Supplements");
+    app.bookmarks_category.setCategory(b.bookmarks, id2, "Housing Search");
+    const m = b.kea.ai;
+    m.client = .{ .ctx = &pending, .stream = Pending.stream };
+    m.prefs.set("ai", true);
+    m.prefs.set("ai_provider", "ollama");
+    m.prefs.setAIModel("m", "ollama");
+    const tab = b.activeTab().?;
+    tab.own(&tab.address, "https://peptides.example/bpc");
+    tab.setTitle("BPC Page");
+    f.tester.settle(0.2);
+    try std.testing.expect(f.press("B", 11, .{ .cmd = true, .shift = true }));
+    f.tester.settle(0.2);
+    try std.testing.expect(b.overlay != null and b.overlay.? == .bookmark_card);
+    f.tester.textOps(&.{.{ .command = .select_all }});
+    f.tester.typeText("BPC-157 Guide");
+    f.tester.settle(0.2);
+    const sink = pending.sink orelse return error.MissingPendingSink;
+    sink.piece(sink.ctx, "{\"category\":\"Peptides & Longevity\",\"after_category\":\"Health & Supplements\",\"before_category\":null,\"before_item\":null}");
+    sink.done(sink.ctx, null);
+    f.tester.settle(0.3);
+    const bm = b.bookmarks.bookmarkFor("https://peptides.example/bpc") orelse return error.NotKept;
+    try std.testing.expectEqualStrings("BPC-157 Guide", bm.title);
+    try std.testing.expectEqualStrings("Peptides & Longevity", bm.category.?);
+    try std.testing.expectEqual(@as(usize, 3), b.bookmarks.roots.len);
+    try std.testing.expectEqualStrings("Examine", b.bookmarks.roots[0].title);
+    try std.testing.expectEqualStrings("BPC-157 Guide", b.bookmarks.roots[1].title);
+    try std.testing.expectEqualStrings("Zillow", b.bookmarks.roots[2].title);
+    try std.testing.expect(f.tester.hasText("Peptides & Longevity"));
+}

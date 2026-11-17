@@ -52,6 +52,8 @@ fn tabs(b: *Browser, c: *ui.Context, p: *const Palette) void {
     frame.rule(c, p);
     _ = frame.prefLine(b, c, p, "bookmarks_bar", "Show the bookmarks bar", "Your bookmarks in a row above the page, folders opening as menus. It folds away with the tabs");
     frame.rule(c, p);
+    _ = frame.prefLine(b, c, p, "bookmarks_auto_sort", "Categorize and sort new bookmarks automatically", "Places each new bookmark into a matching or neighboring topic category; uses your AI when configured");
+    frame.rule(c, p);
     _ = frame.prefLine(b, c, p, "shows_tab_address", "Show the address on the tab you're on", "Shows the site's domain on the active tab, and the page title when you point at it");
     frame.rule(c, p);
     _ = frame.prefLine(b, c, p, "shows_cmd_numbers", "Show tab numbers while ⌘ is held", "Shows ⌘1–9 badges on tabs when you hold ⌘");

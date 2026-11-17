@@ -13,6 +13,7 @@ const Tab = tab_mod.Tab;
 const swipe = @import("swipe.zig");
 const state = @import("tab_state.zig");
 const engine = @import("../model/engine.zig");
+const platform = @import("../sys/platform.zig");
 
 /// What one view keeps, on `c_allocator`, for as long as it is built.
 pub const Page = struct {
@@ -43,7 +44,7 @@ fn class() objc.Class {
     return objc.defineClass(.{
         .name = "KeaPageView",
         .superclass = "WKWebView",
-        .methods = &.{
+        .methods = if (comptime platform.is_ios) &.{} else &.{
             .{ .name = "willOpenMenu:withEvent:", .imp = &willOpenMenu, .types = "v@:@@" },
             .{ .name = "keaOpenLinkBehind:", .imp = &openLinkBehind, .types = "v@:@" },
             .{ .name = "keaSearchSelection:", .imp = &searchSelection, .types = "v@:@" },
@@ -328,6 +329,7 @@ pub const first_frame: objc.NSUInteger = 1 << 1;
 
 /// `holdForFirstFrame`: unseen until WebKit says something is drawn.
 pub fn holdForFirstFrame(t: *Tab) void {
+    if (comptime platform.is_ios) return;
     const wv = t.web orelse return;
     const page = t.page orelse return;
     if (!objc.msg(objc.BOOL, wv, "respondsToSelector:", .{objc.sel("_setObservedRenderingProgressEvents:")})) return;
@@ -342,7 +344,7 @@ pub fn showFirstFrame(view: objc.Object) void {
     if (!page.unpainted) return;
     page.unpainted = false;
     if (page.tab()) |t| if (t.browser) |b| if (b.stage_host) |sh| if (sh.holds(view)) return b.redraw();
-    objc.msg(void, view, "setAlphaValue:", .{@as(f64, 1)});
+    objc.msg(void, view, if (comptime platform.is_ios) "setAlpha:" else "setAlphaValue:", .{@as(f64, 1)});
 }
 
 pub fn unpainted(view: objc.Object) bool {

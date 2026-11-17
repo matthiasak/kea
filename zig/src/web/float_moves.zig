@@ -11,13 +11,10 @@ const ui = nanoui.ui;
 const appkit = @import("../sys/appkit.zig");
 const panel_mod = @import("float_panel.zig");
 const Panel = panel_mod.Panel;
+const platform = @import("../sys/platform.zig");
 
 const CGRect = objc.CGRect;
 const CGPoint = objc.CGPoint;
-
-extern fn CGWarpMouseCursorPosition(point: CGPoint) i32;
-extern fn CGAssociateMouseAndMouseCursorPosition(connected: u32) i32;
-
 pub const Side = enum { left, right };
 pub const Vec = struct { dx: f64 = 0, dy: f64 = 0 };
 
@@ -113,26 +110,34 @@ pub fn intersection(a: CGRect, b: CGRect) CGRect {
 
 /// The main screen's usable part, or nothing.
 pub fn mainVisible() CGRect {
+    if (comptime platform.is_ios) {
+        const main = objc.msg(?objc.Object, objc.class("UIScreen"), "mainScreen", .{}) orelse return .{};
+        return objc.msg(CGRect, main, "bounds", .{});
+    }
     const main = objc.msg(?objc.Object, objc.class("NSScreen"), "mainScreen", .{}) orelse return .{};
     return objc.msg(CGRect, main, "visibleFrame", .{});
 }
 
 /// The usable part of the screen the window is on.
 fn areaOf(p: *const Panel) CGRect {
+    if (comptime platform.is_ios) return mainVisible();
     const s = objc.msg(?objc.Object, p.ns(), "screen", .{}) orelse return mainVisible();
     return objc.msg(CGRect, s, "visibleFrame", .{});
 }
 
 fn frameOf(p: *const Panel) CGRect {
+    if (comptime platform.is_ios) return .{};
     return objc.msg(CGRect, p.ns(), "frame", .{});
 }
 
 fn setOrigin(p: *const Panel, at: CGPoint) void {
+    if (comptime platform.is_ios) return;
     objc.msg(void, p.ns(), "setFrameOrigin:", .{at});
 }
 
 /// The side the window is up against, if it can go into it.
 fn against(p: *const Panel) ?Side {
+    if (comptime platform.is_ios) return null;
     const f = frameOf(p);
     const a = areaOf(p);
     var screens: [16]CGRect = undefined;
@@ -160,6 +165,7 @@ fn inward(m: *const State, way: Vec) bool {
 /// A press anywhere but on a button: on a docked sliver it comes back;
 /// otherwise held, it drags — from the corner, it stretches.
 pub fn pointer(p: *Panel, c: *ui.Context, it: ui.Interaction) void {
+    if (comptime platform.is_ios) return;
     const m = &p.m;
     if (!it.pressed) {
         m.grabbing = false;
@@ -189,6 +195,7 @@ pub fn pointer(p: *Panel, c: *ui.Context, it: ui.Interaction) void {
 
 /// Keeps the shape: a video window that can be squashed shows bars.
 fn resize(p: *Panel, width: f64, was: CGRect, anchor: ?CGPoint) void {
+    if (comptime platform.is_ios) return;
     if (was.size.width <= 0) return;
     const screen_w = mainVisible().size.width;
     const limit = if (screen_w > 0) screen_w else 1600;
@@ -204,6 +211,7 @@ fn resize(p: *Panel, width: f64, was: CGRect, anchor: ?CGPoint) void {
 // MARK: two fingers and a pinch (the panel's local monitor)
 
 pub fn event(p: *Panel, ev: objc.Object) ?objc.Object {
+    if (comptime platform.is_ios) return ev;
     if (objc.msg(?objc.Object, ev, "window", .{}) != p.ns()) return ev;
     switch (objc.msg(objc.NSUInteger, ev, "type", .{})) {
         22 => scrollWheel(p, ev),
@@ -227,12 +235,18 @@ fn scrollWheel(p: *Panel, ev: objc.Object) void {
     setOrigin(p, .{ .x = spot.x + dx, .y = spot.y - dy });
     // Never the real pointer of a run that is hidden.
     if (p.hidden()) return;
-    const screens = objc.msg(objc.Object, objc.class("NSScreen"), "screens", .{});
-    if (objc.msg(objc.NSUInteger, screens, "count", .{}) == 0) return;
-    const ground = objc.msg(CGRect, objc.msg(objc.Object, screens, "objectAtIndex:", .{@as(objc.NSUInteger, 0)}), "frame", .{});
-    const mouse = appkit.mouseLocation();
-    _ = CGWarpMouseCursorPosition(.{ .x = mouse.x + dx, .y = ground.size.height - (mouse.y - dy) });
-    _ = CGAssociateMouseAndMouseCursorPosition(1);
+    if (comptime !platform.is_ios) {
+        const M = struct {
+            extern fn CGWarpMouseCursorPosition(point: CGPoint) i32;
+            extern fn CGAssociateMouseAndMouseCursorPosition(connected: u32) i32;
+        };
+        const screens = objc.msg(objc.Object, objc.class("NSScreen"), "screens", .{});
+        if (objc.msg(objc.NSUInteger, screens, "count", .{}) == 0) return;
+        const ground = objc.msg(CGRect, objc.msg(objc.Object, screens, "objectAtIndex:", .{@as(objc.NSUInteger, 0)}), "frame", .{});
+        const mouse = appkit.mouseLocation();
+        _ = M.CGWarpMouseCursorPosition(.{ .x = mouse.x + dx, .y = ground.size.height - (mouse.y - dy) });
+        _ = M.CGAssociateMouseAndMouseCursorPosition(1);
+    }
 }
 
 /// NSEventPhase: began 1, ended 8, cancelled 16.

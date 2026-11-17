@@ -2,6 +2,7 @@
 //! (fixture printed by Mermaid.swift's own `diagram`), plus the size caps.
 const std = @import("std");
 const m = @import("mermaid.zig");
+const platform = @import("../../sys/platform.zig");
 
 const fixture = @embedFile("../../tests/fixtures/ai/mermaid_layout.json");
 const J = std.json.Value;
@@ -88,7 +89,7 @@ fn expectItem(v: J, item: m.Item) !void {
 
 test "mermaid layout matches fixture" {
     const objc = @import("nanoui").objc;
-    _ = objc.msg(objc.Object, objc.class("NSApplication"), "sharedApplication", .{});
+    if (comptime !platform.is_ios) _ = objc.msg(objc.Object, objc.class("NSApplication"), "sharedApplication", .{});
     const parsed = try std.json.parseFromSlice(J, testing.allocator, fixture, .{});
     defer parsed.deinit();
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);

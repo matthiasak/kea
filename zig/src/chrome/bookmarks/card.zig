@@ -27,7 +27,7 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette) void {
     const s = &b.marks_ui;
     const id = s.card orelse return close(b);
     const node = b.bookmarks.bookmark(id) orelse return close(b);
-    ui.column(c, .{ .width = px(280), .padding = .all(14), .gap = 12 });
+    ui.column(c, .{ .width = px(304), .padding = .all(14), .gap = 12 });
     defer ui.end(c);
     ui.text(c, "Bookmarked", .{ .size = 13, .weight = .semibold, .color = p.ink });
 
@@ -48,8 +48,21 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette) void {
     ui.end(c);
     if (r.changed) rename(b, id, s.card_title.text());
     if (r.submitted) close(b);
+    const live = b.bookmarks.bookmark(id) orelse {
+        ui.end(c);
+        return close(b);
+    };
+    const path = (b.bookmarks.pathTo(c.alloc(), id) catch null) orelse &.{};
+    if (path.len == 0) {
+        if (Bookmarks.cat.norm(live.category)) |raw_cat| {
+            const cat = c.alloc().dupe(u8, raw_cat) catch raw_cat;
+            line(c, p, "Category");
+            categoryRow(b, c, p, id, cat);
+            ui.end(c);
+        }
+    }
     line(c, p, "Folder");
-    folder(b, c, p, id);
+    folder(b, c, p, path);
     ui.end(c);
     ui.end(c);
 
@@ -63,10 +76,10 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette) void {
     if (controls.pill(c, p, "Done", .{ .filled = true }).clicked) close(b);
 }
 
-/// A name on the left, 42 wide, the control after it; close with `ui.end`.
+/// A name on the left, 54 wide, the control after it; close with `ui.end`.
 fn line(c: *ui.Context, p: *const Palette, name: []const u8) void {
     ui.row(c, .{ .width = .fill, .gap = 10, .align_items = .center });
-    ui.column(c, .{ .width = px(42) });
+    ui.column(c, .{ .width = px(54) });
     ui.text(c, name, .{ .size = 11.5, .color = p.muted });
     ui.end(c);
 }
@@ -88,8 +101,7 @@ fn close(b: *Browser) void {
 }
 
 /// Where it is filed, opening every other folder to file it in.
-fn folder(b: *Browser, c: *ui.Context, p: *const Palette, id: Uuid) void {
-    const path = (b.bookmarks.pathTo(c.alloc(), id) catch null) orelse &.{};
+fn folder(b: *Browser, c: *ui.Context, p: *const Palette, path: []const *const bm.Bookmark) void {
     const here = if (path.len > 0) path[path.len - 1].title else "Top Level";
     const i = c.open(.{ .direction = .row, .grow = 1, .gap = 6, .padding = .xy(8, 5), .radius = 8, .background = p.wash, .align_items = .center, .control = true }, null);
     const it = c.interact(i, .{});
@@ -117,5 +129,61 @@ pub fn folderItems(a: std.mem.Allocator, b: *Browser, id: Uuid) ![]const MenuIte
     for (folders) |f| try out.append(a, try row_menu.item(a, b, try row_menu.indented(a, f), .move, ids, f.node.id, .dropdown));
     try out.append(a, .separator);
     try out.append(a, try row_menu.item(a, b, "New Folder\u{2026}", .card_folder, ids, null, .dropdown));
+    return out.items;
+}
+
+fn categoryRow(b: *Browser, c: *ui.Context, p: *const Palette, id: Uuid, cat: []const u8) void {
+    _ = c.open(.{ .direction = .row, .grow = 1, .gap = 6, .padding = .xy(8, 5), .radius = 8, .background = p.wash, .align_items = .center }, null);
+    defer c.end();
+    const pick = c.open(.{ .direction = .row, .grow = 1, .min_width = 0, .gap = 6, .align_items = .center, .control = true }, null);
+    const it = c.interact(pick, .{});
+    c.addA11y(pick, .menu_button, "Category", cat, false, true);
+    ui.icon(c, "tag", .{ .size = 10.5, .color = p.muted });
+    ui.text(c, cat, .{ .size = 12.5, .color = p.ink, .truncate = .ellipsis });
+    _ = c.leaf(.{ .grow = 1, .min_width = 2 }, .none, null);
+    c.end();
+    if (it.clicked) if (it.rect) |rect| tab_menu.later(b, .{ .x = rect.x, .y = rect.y + rect.h }, 0, categoryMenu);
+
+    const clr = c.open(.{ .width = px(16), .height = px(16), .radius = 8, .align_items = .center, .justify = .center, .control = true }, null);
+    const cit = c.interact(clr, .{});
+    c.help(clr, "Clear Category");
+    c.addA11y(clr, .button, "Clear Category", "", false, true);
+    ui.icon(c, "xmark", .{ .size = 8.5, .weight = .semibold, .color = if (cit.hovered) p.ink else p.muted });
+    c.end();
+    if (cit.clicked) {
+        Bookmarks.cat.setCategory(b.bookmarks, id, null);
+        b.redraw();
+    }
+}
+
+const CategoryPick = struct {
+    b: *Browser,
+    id: Uuid,
+    cat: ?[]const u8,
+
+    fn fire(self: *@This(), _: *nanoui.menu.Item) void {
+        Bookmarks.cat.setCategory(self.b.bookmarks, self.id, self.cat);
+        self.b.redraw();
+    }
+};
+
+fn categoryItem(a: std.mem.Allocator, b: *Browser, id: Uuid, label: []const u8, cat: ?[]const u8, checked: bool) !MenuItem {
+    const pick = try a.create(CategoryPick);
+    pick.* = .{ .b = b, .id = id, .cat = cat };
+    return .{ .label = label, .checked = checked, .click = .of(pick, CategoryPick.fire) };
+}
+
+fn categoryMenu(a: std.mem.Allocator, b: *Browser, _: u64) anyerror![]const MenuItem {
+    const id = b.marks_ui.card orelse return &.{};
+    const node = b.bookmarks.bookmark(id) orelse return &.{};
+    const current = Bookmarks.cat.norm(node.category);
+    const groups = try Bookmarks.cat.orderedGroups(a, b.bookmarks.roots);
+    var out: std.ArrayList(MenuItem) = .empty;
+    for (groups) |g| {
+        const cat = try a.dupe(u8, g.category);
+        try out.append(a, try categoryItem(a, b, id, cat, cat, Bookmarks.cat.optEq(current, cat)));
+    }
+    if (groups.len > 0) try out.append(a, .separator);
+    try out.append(a, try categoryItem(a, b, id, "Clear Category", null, false));
     return out.items;
 }

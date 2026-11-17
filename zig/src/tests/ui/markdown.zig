@@ -334,3 +334,24 @@ test "a streaming answer paces its words out and shows its unfinished tail as it
     f.tester.frame();
     try t.expect(f.tester.hasText("Some bold done."));
 }
+
+test "list and quote items with inline math re-wrap within narrowed container" {
+    var f: Fixture = undefined;
+    try f.init(t.allocator, .{ .width = 900, .height = 520 });
+    defer f.deinit();
+    var answer: Answer = .{ .b = f.browser, .text =
+        \\1. **Frozen Basis:** Even though $W_{\text{eff}}(x)$ changes from token to token, the underlying building blocks—the basis matrices $W_i$—are completely frozen after training.
+        \\
+        \\> A quote with $\alpha + \beta = \gamma$ that also wraps cleanly when narrowed.
+    };
+    defer answer.st.deinit(t.allocator);
+    answer.show(&f);
+    f.tester.settle(1);
+    f.tester.size.w = 520;
+    f.tester.ctx.size.w = 520;
+    f.tester.settle(1);
+    for (f.tester.ctx.nodes.items) |n| switch (n.content) {
+        .text, .canvas => try t.expect(n.rect.x + n.rect.w <= 520.0),
+        else => {},
+    };
+}

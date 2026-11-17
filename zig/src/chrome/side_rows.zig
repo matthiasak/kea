@@ -23,6 +23,7 @@ const split_drop = @import("split_drop.zig");
 const tab_leaving = @import("tab_leaving.zig");
 const presence = @import("presence.zig");
 const side_bar = @import("side_bar.zig");
+const is_ios = @import("builtin").os.tag == .ios;
 const px = struct {
     fn v(n: f32) ui.Length {
         return .{ .px = n };
@@ -30,7 +31,7 @@ const px = struct {
 }.v;
 
 /// `SideBar.row`, `SideBar.gap`.
-pub const row_height: f32 = 28;
+pub const row_height: f32 = if (is_ios) 42 else 28;
 pub const gap: f32 = 2;
 /// `KeepLine.height`.
 pub const keep_line: f32 = 18;
@@ -281,7 +282,7 @@ pub fn sideRow(b: *Browser, c: *ui.Context, p: *const Palette, t: *Tab, live: bo
     if (interactive and !editing) {
         // A pinned row is put down, not closed, and says so.
         _ = c.open(.{ .absolute = true, .width = .fill, .height = .fill, .direction = .row, .justify = .end, .align_items = .center, .padding = .{ .right = 7 } }, null);
-        close = controls.closeDiscIcon(c, p, hovering, controls.close_zone, if (t.pin != null) "minus" else "xmark");
+        close = controls.closeDiscIcon(c, p, if (is_ios) (live and !status) else hovering, controls.close_zone, if (t.pin != null) "minus" else "xmark");
         c.end();
     }
     return .{ .index = i, .it = it, .close = close };
@@ -300,7 +301,7 @@ pub fn keepLine(b: *Browser, c: *ui.Context, p: *const Palette, clears: bool, in
     const hovering = interactive and line.hovered;
     if (interactive) c.cursor_hand = false;
     _ = c.leaf(.{ .grow = 1, .height = px(1), .background = p.hairline }, .none, null);
-    const alpha = motion.quickTo(c, line.id, 1, if (clears and hovering) 1 else 0);
+    const alpha = motion.quickTo(c, line.id, 1, if (clears and (hovering or is_ios)) 1 else 0);
     if (alpha < 0.01) return;
     const btn = c.open(.{ .direction = .row, .gap = 3, .align_items = .center, .opacity = alpha, .control = true }, null);
     const it = c.interact(btn, .{});

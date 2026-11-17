@@ -4,6 +4,7 @@
 //! submenu opens.
 const std = @import("std");
 const nanoui = @import("nanoui");
+const platform = @import("../sys/platform.zig");
 const MenuItem = nanoui.MenuItem;
 const Item = nanoui.menu.Item;
 const Browser = @import("../model/browser.zig").Browser;
@@ -107,6 +108,7 @@ const Lazy = struct {
     id: Uuid,
 
     fn fill(self: *Lazy, item: *Item) void {
+        if (comptime platform.is_ios) return;
         item.setSubmenu(pages(self.a, self.b, self.id) catch return) catch {};
     }
 };

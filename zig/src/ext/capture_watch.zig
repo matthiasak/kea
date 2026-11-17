@@ -9,6 +9,7 @@ const objc = nanoui.objc;
 const Kea = @import("../app/kea.zig").Kea;
 const site_card = @import("../chrome/site_card.zig");
 const capture = @import("capture.zig");
+const platform = @import("../sys/platform.zig");
 
 extern "c" fn objc_initWeak(location: *?objc.Object, obj: ?objc.Object) ?objc.Object;
 extern "c" fn objc_loadWeakRetained(location: *?objc.Object) ?objc.Object;
@@ -98,7 +99,7 @@ pub var generation: u64 = 0;
 /// `RecordingIndicator.update`: the pill settles (web/recording_pill.zig).
 pub var on_change: ?*const fn () void = null;
 
-const keys = [_][:0]const u8{ "cameraCaptureState", "microphoneCaptureState", "_displayCaptureState" };
+const keys = if (platform.is_ios) [_][:0]const u8{ "cameraCaptureState", "microphoneCaptureState" } else [_][:0]const u8{ "cameraCaptureState", "microphoneCaptureState", "_displayCaptureState" };
 
 fn responds(o: objc.Object, comptime sel: [:0]const u8) bool {
     return objc.msg(objc.BOOL, o, "respondsToSelector:", .{objc.sel(sel)});
@@ -106,6 +107,7 @@ fn responds(o: objc.Object, comptime sel: [:0]const u8) bool {
 
 /// `screen(_:)`: the page shares the screen.
 pub fn screen(web: objc.Object) bool {
+    if (comptime platform.is_ios) return false;
     if (!responds(web, "_displayCaptureState")) return false;
     return objc.msg(objc.NSInteger, web, "_displayCaptureState", .{}) != 0;
 }
@@ -145,6 +147,7 @@ pub fn watchCapture(web: objc.Object, frame: objc.Object) void {
 /// `watchScreen(_:)`: every tab — a site sharing its screen puts up the pill
 /// too.
 pub fn watchScreen(web: objc.Object) void {
+    if (comptime platform.is_ios) return;
     if (!responds(web, "_displayCaptureState")) return;
     register(web, null);
 }
@@ -178,7 +181,9 @@ fn register(web: objc.Object, id: ?[]const u8) void {
     defer pool.pop();
     const observer = capture.instance();
     for (keys) |k| {
-        if (std.mem.eql(u8, k, "_displayCaptureState") and !responds(web, "_displayCaptureState")) continue;
+        if (comptime !platform.is_ios) {
+            if (std.mem.eql(u8, k, "_displayCaptureState") and !responds(web, "_displayCaptureState")) continue;
+        }
         objc.msg(void, web, "addObserver:forKeyPath:options:context:", .{ observer, objc.nsString(k), @as(objc.NSUInteger, 0), @as(?*anyopaque, null) });
     }
     changed();
@@ -197,7 +202,9 @@ pub fn unwatch(web: objc.Object) void {
     if (kv.value.web.get() == web) {
         const observer = capture.instance();
         for (keys) |k| {
-            if (std.mem.eql(u8, k, "_displayCaptureState") and !responds(web, "_displayCaptureState")) continue;
+            if (comptime !platform.is_ios) {
+                if (std.mem.eql(u8, k, "_displayCaptureState") and !responds(web, "_displayCaptureState")) continue;
+            }
             objc.msg(void, web, "removeObserver:forKeyPath:", .{ observer, objc.nsString(k) });
         }
     }
@@ -330,8 +337,10 @@ pub fn stop(id: []const u8) void {
         const web = e.web.get() orelse continue;
         var buf: [300]u8 = undefined;
         if (!std.mem.eql(u8, e.id(web, &buf), id)) continue;
-        if (responds(web, "_setDisplayCaptureState:completionHandler:"))
-            objc.msg(void, web, "_setDisplayCaptureState:completionHandler:", .{ @as(objc.NSInteger, 0), @as(?*anyopaque, null) });
+        if (comptime !platform.is_ios) {
+            if (responds(web, "_setDisplayCaptureState:completionHandler:"))
+                objc.msg(void, web, "_setDisplayCaptureState:completionHandler:", .{ @as(objc.NSInteger, 0), @as(?*anyopaque, null) });
+        }
         // A site's Stop ends only its screen: the call it is on goes on.
         if (e.extension_id == null) continue;
         objc.msg(void, web, "setCameraCaptureState:completionHandler:", .{ @as(objc.NSInteger, 0), @as(?*anyopaque, null) });
@@ -397,6 +406,7 @@ pub fn giveBack(web: objc.Object) void {
 /// test run records with no hardware and no macOS question. Never outside
 /// a test run. WebKit's own pretend prompt stays.
 pub fn mockDevices(k: *Kea, prefs: objc.Object) void {
+    if (comptime platform.is_ios) return;
     if (k.opts.root == null) return;
     set("_setMockCaptureDevicesEnabled:", true, prefs);
     set("_setGetUserMediaRequiresFocus:", false, prefs);
@@ -420,11 +430,10 @@ fn pageClass() objc.Class {
     return objc.defineClass(.{
         .name = "KeaExtensionPageDelegate",
         .protocols = &.{"WKUIDelegate"},
-        .methods = &.{
+        .methods = &([_]objc.Method{
             .{ .name = "respondsToSelector:", .imp = &pageResponds, .types = "B@::" },
             .{ .name = "forwardingTargetForSelector:", .imp = &pageForward, .types = "@@::" },
-            .{ .name = capture.display_selector, .imp = &capture.displayCapture, .types = "v@:@@@B@?" },
-        },
+        } ++ capture.display_methods),
     });
 }
 

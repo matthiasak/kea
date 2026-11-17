@@ -8,12 +8,14 @@ const std = @import("std");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;
 const ui = nanoui.ui;
+const platform = @import("../sys/platform.zig");
 const MenuItem = nanoui.MenuItem;
 const Browser = @import("../model/browser.zig").Browser;
 const Kea = @import("../app/kea.zig").Kea;
 const Palette = @import("../design/palette.zig").Palette;
 const metrics = @import("../design/metrics.zig");
 const motion = @import("../design/motion.zig");
+const card = @import("../design/card.zig");
 const Room = @import("room.zig").Room;
 const controls = @import("controls.zig");
 const presence = @import("presence.zig");
@@ -50,7 +52,8 @@ pub const SidePanel = enum {
 
 /// An edge being pulled: where the press was and the width then, so the
 /// width follows the pointer's travel from there (`EdgeStripView`).
-pub const EdgeDrag = struct { id: u64, x: f32, width: f32 };
+pub const EdgeField = enum { none, side_width, chat_width, marks_width, web_width };
+pub const EdgeDrag = struct { id: u64, x: f32, width: f32, min: f32 = 0, max: f32 = 0, grows_right: bool = false, target: EdgeField = .none };
 
 /// A header held: where it was pressed, and whether it has gone the 12
 /// points that make it a drag (`PanelHeaderGesture`).
@@ -77,6 +80,7 @@ pub fn dropPanel(b: *Browser, panel: SidePanel, x: f32, width: f32) void {
 }
 
 pub fn toggleExpanded(b: *Browser, panel: SidePanel) void {
+    if (panel == .web) return;
     b.let_out = panel;
     b.expanded_panel = if (b.expanded_panel == panel) null else panel;
     b.redraw();
@@ -159,41 +163,72 @@ pub fn redrawAll(kea: *Kea) void {
 /// bookmarks, then the page.
 const col_id_base: u64 = std.hash.Wyhash.hash(0, "kea.panel.column");
 
-fn columnWidth(b: *Browser, c: *ui.Context, panel: SidePanel, left: bool, width: f32, win_resized: bool) f32 {
-    const pid = col_id_base ^ @as(u64, @intFromEnum(panel)) ^ (if (left) @as(u64, 0x100) else @as(u64, 0x200));
-    if (b.edge_drag != null or win_resized) {
-        ui.jump(c, pid, 1, width);
-        return width;
-    }
-    return motion.glideTo(c, pid, 1, width);
+const pres_salt: u32 = 0x7072_6573;
+
+fn canDrawLeave(b: *const Browser, panel: SidePanel) bool {
+    if (b.let_out == panel) return false;
+    return switch (panel) {
+        .bookmarks => !b.prefs.marks_popped,
+        .chat => b.assisting != null and !b.prefs.chat_popped,
+        .web => b.web_panel_tab != null,
+    };
 }
 
-fn columnSlot(b: *Browser, c: *ui.Context, p: *const Palette, panel: SidePanel, left: bool, shown: bool, target_w: f32, win_resized: bool) void {
+fn columnSlot(b: *Browser, c: *ui.Context, p: *const Palette, panel: SidePanel, left: bool, shown: bool, target_w: f32, win_resized: bool, cards: bool) void {
     const pid = col_id_base ^ @as(u64, @intFromEnum(panel)) ^ (if (left) @as(u64, 0x100) else @as(u64, 0x200));
-    if (b.let_out != panel) {
-        ui.jump(c, pid, 1, if (shown) target_w else 0);
-        _ = ui.tween(c, pid, 2, if (shown) 1 else 0, 0, .linear);
+    if (shown) {
+        if (win_resized or b.edge_drag != null) ui.jump(c, pid, pres_salt, 1);
+        const t = presence.presenceFrom(c, pid, if (win_resized or b.edge_drag != null) 1 else 0, true, motion.settle, motion.lift) orelse 1;
+        const a = std.math.clamp(t, 0, 1);
+        const slide = if (t < 0.999) (if (left) @as(f32, -1) else @as(f32, 1)) * (1 - a) * 14 else 0;
+        _ = c.open(.{
+            .width = px(target_w),
+            .height = .fill,
+            .offset = .{ .x = slide },
+            .opacity = a,
+            .group = t < 0.999,
+        }, null);
+        defer c.end();
+        panelViewWithCards(b, c, p, panel, left, target_w, false, false, cards);
+        return;
     }
-    const alpha = motion.quickTo(c, pid, 2, if (shown) 1 else 0);
-    const w = columnWidth(b, c, panel, left, if (shown) target_w else 0, win_resized);
-    if (!shown and (alpha <= 0.001 or w <= 0.5)) return;
-    if (!shown) ui.key(c, if (left) "kea.panel.leave.l" else "kea.panel.leave.r");
-    _ = c.open(.{ .width = px(w), .height = .fill, .opacity = alpha, .clip = true }, null);
+    if (win_resized or !canDrawLeave(b, panel) or target_w <= 0.5) {
+        ui.jump(c, pid, pres_salt, 0);
+        return;
+    }
+    const t = presence.presenceFrom(c, pid, 0, false, motion.settle, motion.lift) orelse return;
+    if (t <= 0.005) {
+        ui.jump(c, pid, pres_salt, 0);
+        return;
+    }
+    const a = std.math.clamp(t, 0, 1);
+    const slide = (if (left) @as(f32, -1) else @as(f32, 1)) * (1 - a) * 14;
+    _ = c.open(.{ .width = px(0), .height = .fill }, if (left) "kea.panel.leave.l" else "kea.panel.leave.r");
     defer c.end();
-    panelView(b, c, p, panel, left, if (shown) w else target_w, false, false);
+    _ = c.open(.{
+        .absolute = true,
+        .offset = .{ .x = (if (left) @as(f32, 0) else -target_w) + slide },
+        .width = px(target_w),
+        .height = .fill,
+        .opacity = a,
+        .group = true,
+    }, null);
+    defer c.end();
+    panelViewWithCards(b, c, p, panel, left, target_w, false, false, cards);
 }
 
 pub fn beside(b: *Browser, c: *ui.Context, p: *const Palette, r: Room, left: bool) void {
     const st = &b.column;
     const win_resized = st.panel_win_w != 0 and st.panel_win_w != r.window_width;
     if (!left) st.panel_win_w = r.window_width;
+    const cards = r.cards();
     const chat = r.chatShown() and panelOnLeft(b, .chat) == left;
     const marks = r.marksShown() and panelOnLeft(b, .bookmarks) == left;
     const web = r.webShown() and panelOnLeft(b, .web) == left;
-    if (left) columnSlot(b, c, p, .chat, true, chat, r.chatWidth(), win_resized);
-    columnSlot(b, c, p, .bookmarks, left, marks, r.marksWidth(), win_resized);
-    columnSlot(b, c, p, .web, left, web, r.webWidth(), win_resized);
-    if (!left) columnSlot(b, c, p, .chat, false, chat, r.chatWidth(), win_resized);
+    if (left) columnSlot(b, c, p, .chat, true, chat, r.chatWidth(), win_resized, cards);
+    columnSlot(b, c, p, .bookmarks, left, marks, r.marksWidth(), win_resized, cards);
+    columnSlot(b, c, p, .web, left, web, r.webWidth(), win_resized, cards);
+    if (!left) columnSlot(b, c, p, .chat, false, chat, r.chatWidth(), win_resized, cards);
 }
 
 const let_out_id: u64 = std.hash.Wyhash.hash(0, "kea.panel.let-out");
@@ -201,35 +236,64 @@ const let_out_id: u64 = std.hash.Wyhash.hash(0, "kea.panel.let-out");
 /// The panel let out over the page (`letOut`), inside the stage's box;
 /// it comes and goes on Motion.glide.
 pub fn letOut(b: *Browser, c: *ui.Context, p: *const Palette, r: Room) void {
-    const shown: ?SidePanel = if (b.expanded_panel) |e| switch (e) {
+    const narrow = @import("compact_bar.zig").isNarrowOverlay(r.window_width);
+    const chosen: ?SidePanel = b.expanded_panel orelse if (narrow)
+        (if (r.chatColumn() and !r.chat_popped) SidePanel.chat else if (r.marksColumn() and !r.marks_popped) SidePanel.bookmarks else if (r.webColumn()) SidePanel.web else null)
+    else
+        null;
+    const shown: ?SidePanel = if (chosen) |e| switch (e) {
         .chat => if (r.chatColumn() and !r.chat_popped) e else null,
         .bookmarks => if (r.marksColumn() and !r.marks_popped) e else null,
         .web => if (r.webColumn()) e else null,
     } else null;
     if (shown) |s| b.let_out = s;
-    const v = presence.presence(c, let_out_id, shown != null, motion.glide, null) orelse {
+    if (shown == null) if (b.let_out) |lo| {
+        const alive = switch (lo) {
+            .bookmarks => !r.marks_popped,
+            .chat => b.assisting != null and !r.chat_popped,
+            .web => b.web_panel_tab != null,
+        };
+        if (!alive) {
+            b.let_out = null;
+            ui.jump(c, let_out_id, pres_salt, 0);
+            return;
+        }
+    };
+    const v = presence.presence(c, let_out_id, shown != null, motion.glide, motion.settle) orelse {
         b.let_out = null;
         return;
     };
     const panel = b.let_out orelse return;
-    ui.column(c, .{ .absolute = true, .width = .fill, .height = .fill, .opacity = std.math.clamp(v, 0, 1) });
+    const a = std.math.clamp(v, 0, 1);
+    ui.column(c, .{
+        .absolute = true,
+        .width = .fill,
+        .height = .fill,
+        .offset = .{ .y = (1 - a) * 8 },
+        .opacity = a,
+        .group = v < 0.999,
+    });
     defer ui.end(c);
-    panelView(b, c, p, panel, panelOnLeft(b, panel), null, true, false);
+    panelViewWithCards(b, c, p, panel, panelOnLeft(b, panel), null, true, false, r.cards());
 }
 
 /// One panel's view: `BookmarksSidebar` or `AssistantPanel`.
 pub fn panelView(b: *Browser, c: *ui.Context, p: *const Palette, panel: SidePanel, on_left: bool, width: ?f32, expanded: bool, is_popped: bool) void {
+    panelViewWithCards(b, c, p, panel, on_left, width, expanded, is_popped, false);
+}
+
+pub fn panelViewWithCards(b: *Browser, c: *ui.Context, p: *const Palette, panel: SidePanel, on_left: bool, width: ?f32, expanded: bool, is_popped: bool, cards: bool) void {
     switch (panel) {
-        .bookmarks => bookmarksView(b, c, p, on_left, width, expanded, is_popped),
-        .chat => @import("../ai/chat_view.zig").view(b, c, p, on_left, width, expanded, is_popped),
-        .web => webPanelView(b, c, p, on_left, width, expanded),
+        .bookmarks => bookmarksView(b, c, p, on_left, width, expanded, is_popped, cards),
+        .chat => @import("../ai/chat_view.zig").viewWithCards(b, c, p, on_left, width, expanded, is_popped, cards),
+        .web => webPanelView(b, c, p, on_left, width, expanded, cards),
     }
 }
 
 /// `BookmarksSidebar` (Bookmarks.swift:1508-1579): the header is the
 /// panel's, the list the bookmarks' own (`bookmarks/sidebar.zig`).
-fn bookmarksView(b: *Browser, c: *ui.Context, p: *const Palette, on_left: bool, width: ?f32, expanded: bool, is_popped: bool) void {
-    begin(c, p, .bookmarks, width, expanded);
+fn bookmarksView(b: *Browser, c: *ui.Context, p: *const Palette, on_left: bool, width: ?f32, expanded: bool, is_popped: bool, cards: bool) void {
+    beginWithCards(c, p, .bookmarks, on_left, width, expanded, cards);
     const head = c.open(.{ .direction = .row, .width = .fill, .gap = 6, .align_items = .center, .padding = .{ .left = 12, .right = 6, .top = 6, .bottom = 6 } }, "kea.marks.head");
     headerGesture(b, c, head, .bookmarks, !is_popped);
     bookmarks_sidebar.headerLead(b, c, p);
@@ -244,32 +308,33 @@ fn bookmarksView(b: *Browser, c: *ui.Context, p: *const Palette, on_left: bool, 
     }
     c.end();
     bookmarks_sidebar.content(b, c, p);
-    end(b, c, p, .bookmarks, on_left, width);
+    endWithCards(b, c, p, .bookmarks, on_left, width, cards);
 }
 
-fn webPanelView(b: *Browser, c: *ui.Context, p: *const Palette, on_left: bool, width: ?f32, expanded: bool) void {
-    begin(c, p, .web, width, expanded);
-    const head = c.open(.{ .direction = .row, .width = .fill, .gap = 6, .align_items = .center, .padding = .{ .left = 12, .right = 6, .top = 6, .bottom = 6 } }, "kea.web_panel.head");
+fn webPanelView(b: *Browser, c: *ui.Context, p: *const Palette, on_left: bool, width: ?f32, expanded: bool, cards: bool) void {
+    beginWithCards(c, p, .web, on_left, width, expanded, cards);
+    const head = c.open(.{ .direction = .row, .width = .fill, .gap = 6, .align_items = .center, .padding = .{ .left = 12, .right = 6, .top = 6, .bottom = 6 }, .background = p.ground }, "kea.web_panel.head");
     headerGesture(b, c, head, .web, true);
     const label = if (b.web_panel_tab) |wt| @import("site_card.zig").site(wt.url()) else "Side Panel";
     ui.text(c, label, .{ .size = 12.5, .weight = .medium, .color = p.ink, .truncate = .ellipsis });
     ui.spacer(c);
     if (controls.door(c, p, "arrow.up.left.and.arrow.down.right", .{ .help = "Open in a Tab" }).clicked) {
         c.end();
-        end(b, c, p, .web, on_left, width);
+        endWithCards(b, c, p, .web, on_left, width, cards);
         keepWebPanelAsTab(b);
         return;
     }
     if (controls.door(c, p, "xmark", .{ .help = "Close Side Panel" }).clicked) {
         c.end();
-        end(b, c, p, .web, on_left, width);
+        endWithCards(b, c, p, .web, on_left, width, cards);
         closeWebPanel(b);
         return;
     }
     c.end();
+    _ = c.leaf(.{ .width = .fill, .height = px(1), .background = p.hairline }, .none, null);
     const hole = c.leaf(.{ .width = .fill, .grow = 1 }, .none, "kea.web_panel.hole");
     b.web_panel_hole_node = hole;
-    end(b, c, p, .web, on_left, width);
+    endWithCards(b, c, p, .web, on_left, width, cards);
 }
 
 // MARK: a panel's frame
@@ -278,24 +343,39 @@ fn webPanelView(b: *Browser, c: *ui.Context, p: *const Palette, on_left: bool, w
 /// out (its content at most 760 wide, centred) or in a window of its own.
 /// Close with `end`.
 pub fn begin(c: *ui.Context, p: *const Palette, panel: SidePanel, width: ?f32, expanded: bool) void {
+    beginWithCards(c, p, panel, false, width, expanded, false);
+}
+
+pub fn beginWithCards(c: *ui.Context, p: *const Palette, panel: SidePanel, on_left: bool, width: ?f32, expanded: bool, cards: bool) void {
+    if (width) |w| _ = c.open(.{ .width = px(w), .height = .fill }, null);
     const outer = c.open(.{
-        .width = if (width) |w| px(w) else .fill,
+        .width = if (width) |w| (if (cards) px(@max(0, w - metrics.card_gap)) else .fill) else .fill,
         .height = .fill,
+        .offset = .{ .x = if (width != null and cards and !on_left) metrics.card_gap else 0 },
         .align_items = .center,
-        .background = p.ground,
-    }, if (panel == .chat) "kea.panel.chat" else "kea.panel.marks");
+        .background = if (panel == .web) null else p.ground,
+        .clip = cards,
+    }, switch (panel) { .chat => "kea.panel.chat", .bookmarks => "kea.panel.marks", .web => "kea.panel.web" });
+    if (cards) card.cardEdge(c, outer);
     // Clicks on the panel are its own, not the page's under a let-out one.
-    _ = c.interact(outer, .{});
+    if (panel != .web) _ = c.interact(outer, .{});
     ui.column(c, .{ .width = .fill, .height = .fill, .max_width = if (expanded and panel == .bookmarks) 760 else std.math.inf(f32) });
 }
 
 /// Ends `begin`'s box: in a column, the hairline and the edge on the page's side.
 pub fn end(b: *Browser, c: *ui.Context, p: *const Palette, panel: SidePanel, on_left: bool, width: ?f32) void {
+    endWithCards(b, c, p, panel, on_left, width, false);
+}
+
+pub fn endWithCards(b: *Browser, c: *ui.Context, p: *const Palette, panel: SidePanel, on_left: bool, width: ?f32, cards: bool) void {
     ui.end(c);
     if (width) |w| {
-        _ = c.leaf(.{ .absolute = true, .offset = .{ .x = if (on_left) w - 1 else 0 }, .width = px(1), .height = .fill, .background = p.hairline }, .none, null);
+        if (!cards) _ = c.leaf(.{ .absolute = true, .offset = .{ .x = if (on_left) w - 1 else 0 }, .width = px(1), .height = .fill, .background = p.hairline }, .none, null);
+        c.end();
+        const hw: f32 = if (cards) 16 else 9;
+        const hx: f32 = if (on_left) w - hw else 0;
         switch (panel) {
-            inline else => |pn| edgeHandle(b, c, p, comptime pn.field(), pn.min(), if (pn == .chat) @max(pn.min(), c.size.w - metrics.page_min) else pn.max(), pn.standard(), on_left, if (on_left) w - 9 else 0),
+            inline else => |pn| edgeHandleSpan(b, c, p, comptime pn.field(), pn.min(), if (pn == .chat) @max(pn.min(), c.size.w - metrics.page_min) else pn.max(), pn.standard(), on_left, hx, hw),
         }
     }
     c.end();
@@ -396,9 +476,15 @@ const Later = struct {
         var arena = std.heap.ArenaAllocator.init(b.gpa);
         defer arena.deinit();
         const template = menuItems(arena.allocator(), b, l.panel, l.is_popped) catch return;
-        const m = nanoui.Menu.create(b.gpa, @import("../app/kea.zig").app_name, template) catch return;
-        defer m.destroy();
-        m.popup(s.nsview, l.at.x, l.at.y);
+        if (comptime platform.is_ios) {
+            const m = nanoui.Menu.create(b.gpa, template) catch return;
+            defer m.destroy();
+            if (platform.nativeView(s)) |v| m.popup(v, l.at.x, l.at.y);
+        } else {
+            const m = nanoui.Menu.create(b.gpa, @import("../app/kea.zig").app_name, template) catch return;
+            defer m.destroy();
+            m.popup(s.nsview, l.at.x, l.at.y);
+        }
     }
 };
 
@@ -415,8 +501,31 @@ fn menuLater(b: *Browser, panel: SidePanel, is_popped: bool, at: ui.Point) void 
 /// start, setting prefs `field` within `min…max` as it is pulled, back to
 /// `standard` on a double click; VoiceOver steps it by 10.
 pub fn edgeHandle(b: *Browser, c: *ui.Context, p: *const Palette, comptime field: []const u8, min: f32, max: f32, standard: f32, grows_right: bool, x: f32) void {
+    edgeHandleSpan(b, c, p, field, min, max, standard, grows_right, x, 9);
+}
+pub fn followEdgeDrag(b: *Browser, c: *ui.Context) void {
+    if (!c.input.down) return;
+    const d = b.edge_drag orelse return;
+    const max_w = if (d.target == .chat_width) @max(SidePanel.chat.min(), c.size.w - metrics.page_min) else d.max;
+    const dx = c.input.mouse.x - d.x;
+    const next = std.math.clamp(@round(d.width + if (d.grows_right) dx else -dx), d.min, max_w);
+    switch (d.target) {
+        .none => {},
+        inline else => |tg| {
+            const cur = &@field(b.prefs.*, @tagName(tg));
+            if (@abs(cur.* - next) >= 0.5) {
+                cur.* = next;
+                c.changed = true;
+            }
+        },
+    }
+}
+
+
+fn edgeHandleSpan(b: *Browser, c: *ui.Context, p: *const Palette, comptime field: []const u8, min: f32, max: f32, standard: f32, grows_right: bool, x: f32, span: f32) void {
     const width = @field(b.prefs.*, field);
-    const i = c.open(.{ .absolute = true, .offset = .{ .x = x }, .width = px(9), .height = .fill, .align_items = .center, .justify = .center }, field ++ ".edge");
+    const gap_pad: ui.Edges = if (span > 9) (if (grows_right) .{ .left = span - metrics.card_gap } else .{ .right = span - metrics.card_gap }) else .{};
+    const i = c.open(.{ .absolute = true, .offset = .{ .x = x }, .width = px(span), .height = .fill, .padding = gap_pad, .align_items = .center, .justify = .center }, field ++ ".edge");
     const it = c.interact(i, .{});
     c.adjustable(i, .{ .role = .splitter, .label = "Column width", .value = c.print("{d}", .{@round(width)}) });
     if (it.a11y_step != 0) {
@@ -424,7 +533,7 @@ pub fn edgeHandle(b: *Browser, c: *ui.Context, p: *const Palette, comptime field
         c.changed = true;
     }
     if (it.hovered or it.pressed) c.cursor = .resize_left_right;
-    if (it.hovered and c.input.pressed) b.edge_drag = .{ .id = it.id, .x = c.input.mouse.x, .width = width };
+    if (it.hovered and c.input.pressed) b.edge_drag = .{ .id = it.id, .x = c.input.mouse.x, .width = width, .min = min, .max = max, .grows_right = grows_right, .target = comptime (std.meta.stringToEnum(EdgeField, field) orelse .none) };
     if (it.double_clicked) {
         b.edge_drag = null;
         b.prefs.set(field, standard);

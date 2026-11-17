@@ -9,6 +9,7 @@
 //! carries its progress out and its cancellation in.
 const std = @import("std");
 const objc = @import("nanoui").objc;
+const platform = @import("../sys/platform.zig");
 const files = @import("files.zig");
 const src = @import("sources.zig");
 const disk = @import("../data/disk.zig");
@@ -17,9 +18,6 @@ const dispatch = @import("../sys/dispatch.zig");
 const bookmarks_file = @import("../data/bookmarks_file.zig");
 const Bookmark = @import("../data/bookmarks.zig").Bookmark;
 
-extern "c" fn usleep(us: c_uint) c_int;
-extern "c" fn kill(pid: c_int, sig: c_int) c_int;
-const SIGKILL = 9;
 
 pub const Progress = struct {
     message: []const u8,
@@ -278,6 +276,18 @@ fn unzip(a: std.mem.Allocator, zip: []const u8, control: *Control, counter: usiz
     var keep = false;
     defer if (!keep) files.remove(folder);
     try control.check();
+    if (comptime platform.is_ios) {
+        const message = try std.fmt.allocPrint(a, "{s}: Extracting ZIP", .{std.fs.path.basename(zip)});
+        control.report(.{ .message = message, .completed = counter });
+        @import("../sys/zip_extract.zig").extractFile(a, zip, folder) catch return null;
+        try control.check();
+        keep = true;
+        control.report(.{ .message = try std.fmt.allocPrint(a, "{s}: ZIP extracted", .{std.fs.path.basename(zip)}), .completed = counter });
+        return folder;
+    }
+    const M = struct {
+        extern "c" fn usleep(us: c_uint) c_int;
+    };
 
     const pool = objc.Pool.push();
     defer pool.pop();
@@ -298,7 +308,7 @@ fn unzip(a: std.mem.Allocator, zip: []const u8, control: *Control, counter: usiz
             return e;
         };
         control.report(.{ .message = message, .completed = counter });
-        _ = usleep(25_000);
+        _ = M.usleep(25_000);
     }
     objc.msg(void, task, "waitUntilExit", .{});
     try control.check();
@@ -309,11 +319,17 @@ fn unzip(a: std.mem.Allocator, zip: []const u8, control: *Control, counter: usiz
 }
 
 fn terminate(task: objc.Object) void {
+    if (comptime platform.is_ios) return;
+    const M = struct {
+        extern "c" fn usleep(us: c_uint) c_int;
+        extern "c" fn kill(pid: c_int, sig: c_int) c_int;
+        const SIGKILL = 9;
+    };
     if (objc.msg(objc.BOOL, task, "isRunning", .{})) {
         objc.msg(void, task, "terminate", .{});
         var waited: u32 = 0;
-        while (objc.msg(objc.BOOL, task, "isRunning", .{}) and waited < 25) : (waited += 1) _ = usleep(10_000);
-        if (objc.msg(objc.BOOL, task, "isRunning", .{})) _ = kill(objc.msg(c_int, task, "processIdentifier", .{}), SIGKILL);
+        while (objc.msg(objc.BOOL, task, "isRunning", .{}) and waited < 25) : (waited += 1) _ = M.usleep(10_000);
+        if (objc.msg(objc.BOOL, task, "isRunning", .{})) _ = M.kill(objc.msg(c_int, task, "processIdentifier", .{}), M.SIGKILL);
     }
     objc.msg(void, task, "waitUntilExit", .{});
 }

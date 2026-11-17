@@ -43,7 +43,8 @@ pub const State = struct {
     fling_at: types.Point = .{},
     fling_time: f64 = 0,
     fling_offset: ?f32 = null,
-
+    hold_gen: u32 = 0,
+    held: bool = false,
     pub fn flinging(st: State) bool {
         return st.fling != 0;
     }
@@ -117,7 +118,8 @@ fn began(obj: objc.Object, _: objc.SEL, touches: objc.Object, event: ?objc.Objec
     const t = objc.msg(objc.Object, all, "objectAtIndex:", .{@as(objc.NSUInteger, 0)});
     const p = location(s, t);
     const was_flinging = st.flinging();
-    st.* = .{ .finger = t, .start = p, .last = p, .last_time = cf.CACurrentMediaTime(), .stopper = was_flinging };
+    const gen = st.hold_gen +% 1;
+    st.* = .{ .finger = t, .start = p, .last = p, .last_time = cf.CACurrentMediaTime(), .stopper = was_flinging, .hold_gen = gen };
     // A touch on a fling stops it, as on iOS, and presses nothing.
     if (st.stopper) return;
     s.ctx.input.mouse = p;
@@ -125,7 +127,7 @@ fn began(obj: objc.Object, _: objc.SEL, touches: objc.Object, event: ?objc.Objec
     s.ctx.input.click_count = @intCast(@max(1, objc.msg(objc.NSUInteger, t, "tapCount", .{})));
     s.ctx.pointerDown();
     s.frame();
-    // Two fingers at once: a pinch from the start.
+    scheduleHold(s, gen);
     if (objc.msg(objc.NSUInteger, all, "count", .{}) > 1)
         pinchStart(s, t, objc.msg(objc.Object, all, "objectAtIndex:", .{@as(objc.NSUInteger, 1)}));
 }
@@ -209,6 +211,7 @@ fn moved(obj: objc.Object, _: objc.SEL, touches: objc.Object, event: ?objc.Objec
     if (!st.scrolling) {
         const ty = p.y - st.start.y;
         const tx = p.x - st.start.x;
+        if (@abs(tx) > slop or @abs(ty) > slop) st.hold_gen +%= 1;
         if (@abs(ty) > slop and @abs(ty) > @abs(tx) and scrollerAt(s, st.start) != null) {
             st.scrolling = true;
             // The press becomes a scroll: released away from what it pressed.
@@ -250,6 +253,11 @@ fn ended(obj: objc.Object, _: objc.SEL, touches: objc.Object, event: ?objc.Objec
     }
     const t = followed(s, touches) orelse return;
     st.finger = null;
+    st.hold_gen +%= 1;
+    if (st.held) {
+        st.held = false;
+        return lift(s);
+    }
     if (st.scrolling) {
         st.scrolling = false;
         // Let go moving: a fling. Held still first: none.
@@ -304,4 +312,33 @@ pub fn fling(s: *Surface) void {
     scrollBy(s, st.fling_at, st.fling * @as(f32, @floatCast(dt)));
     st.fling *= @floatCast(std.math.pow(f64, deceleration, dt * 1000));
     if (@abs(st.fling) < min_speed) st.stop();
+}
+
+const HoldCtx = struct { surface: *Surface, gen: u32 };
+
+fn scheduleHold(s: *Surface, gen: u32) void {
+    const hc = s.gpa.create(HoldCtx) catch return;
+    hc.* = .{ .surface = s, .gen = gen };
+    objc.dispatchAfter(450 * std.time.ns_per_ms, hc, holdFired);
+}
+
+fn holdFired(raw: ?*anyopaque) callconv(.c) void {
+    const hc: *HoldCtx = @ptrCast(@alignCast(raw orelse return));
+    const s = hc.surface;
+    const gen = hc.gen;
+    s.gpa.destroy(hc);
+    if (s.dead) return;
+    const st = &s.touch;
+    if (st.finger == null or st.second != null or st.scrolling or st.stopper or st.hold_gen != gen) return;
+    st.held = true;
+    const gen_fb = objc.new("UISelectionFeedbackGenerator");
+    defer objc.release(gen_fb);
+    objc.msg(void, gen_fb, "selectionChanged", .{});
+    s.ctx.input.mouse = st.last;
+    s.ctx.updateHot();
+    s.ctx.pointerUp();
+    s.ctx.input.button = .right;
+    s.ctx.pointerDown();
+    s.ctx.pointerUp();
+    s.frame();
 }

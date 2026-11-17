@@ -27,6 +27,14 @@ pub const Options = struct {
     name: []const u8 = "nanoui",
     /// Kept for the desktop's sake: iOS apps never quit themselves.
     quit_on_last_window_closed: bool = true,
+    ctx: ?*anyopaque = null,
+    on_open_urls: ?*const fn (ctx: ?*anyopaque, urls: []const []const u8) void = null,
+    on_reopen: ?*const fn (ctx: ?*anyopaque) void = null,
+    dock_menu: ?[]const menu_mod.MenuItem = null,
+    on_terminate: ?*const fn (ctx: ?*anyopaque) void = null,
+    on_should_terminate: ?*const fn (ctx: ?*anyopaque) bool = null,
+    on_continue_activity: ?*const fn (ctx: ?*anyopaque, url: []const u8) void = null,
+    on_active: ?*const fn (ctx: ?*anyopaque, active: bool) void = null,
 };
 
 /// The one app: UIKit makes its delegates itself, by class name.
@@ -136,7 +144,7 @@ pub const App = struct {
         if (self.stopping) return;
         self.running = true;
         if (self.flags.play) |steps| @import("../play.zig").start(self, steps);
-        _ = defineClasses();
+        _ = @import("app_delegates.zig").defineClasses();
         const name = objc.nsString("NanoUIAppDelegate");
         _ = UIApplicationMain(_NSGetArgc().*, _NSGetArgv().*, null, name);
         self.running = false;
@@ -426,7 +434,7 @@ pub const App = struct {
     }
 
     /// UIKit made the window the app shows in: nanoui's windows go in it.
-    fn attach(self: *App, uiwindow: objc.Object) void {
+    pub fn attach(self: *App, uiwindow: objc.Object) void {
         self.uiwindow = objc.retain(uiwindow);
         self.placeholder = objc.new("UIViewController");
         // Made now, or kept from a scene that went. The first takes the
@@ -444,9 +452,12 @@ pub const App = struct {
 
     /// Foreground and background: frames stop in the background, where
     /// the GPU is not the app's, and the one waiting runs on return.
-    fn setActive(self: *App, on: bool) void {
+    pub fn setActive(self: *App, on: bool) void {
         if (self.active == on) return;
         self.active = on;
+        if (self.options.on_active) |f| f(self.options.ctx, on);
+        // iOS suspends or jetsams backgrounded apps without `willTerminate`: flush state now.
+        if (!on) if (self.options.on_terminate) |f| f(self.options.ctx);
         // A frame waiting may close a window: go through a copy, skipping
         // the windows gone since.
         const list = self.gpa.dupe(*Window, self.windows.items) catch return;
@@ -459,7 +470,7 @@ pub const App = struct {
 
     /// The system let the scene go (it may connect a new one later): the
     /// windows leave its UIWindow, free to go in the next one's.
-    fn detach(self: *App) void {
+    pub fn detach(self: *App) void {
         const win = self.uiwindow orelse return;
         // A dialog up goes with it, unanswered: its wait ends.
         @import("dialog.zig").scene_gone +%= 1;
@@ -477,90 +488,3 @@ pub const App = struct {
     }
 };
 
-fn defineClasses() objc.Class {
-    _ = objc.defineClass(.{
-        .name = "NanoUISceneDelegate",
-        .superclass = "UIResponder",
-        .protocols = &.{"UIWindowSceneDelegate"},
-        .methods = &.{
-            .{ .name = "scene:willConnectToSession:options:", .imp = &sceneConnect, .types = "v@:@@@" },
-            .{ .name = "sceneDidBecomeActive:", .imp = &becameActive, .types = "v@:@" },
-            .{ .name = "sceneWillEnterForeground:", .imp = &becameActive, .types = "v@:@" },
-            .{ .name = "sceneDidEnterBackground:", .imp = &enteredBackground, .types = "v@:@" },
-            .{ .name = "sceneDidDisconnect:", .imp = &sceneDisconnect, .types = "v@:@" },
-            .{ .name = "window", .imp = &windowGetter, .types = "@@:" },
-            .{ .name = "setWindow:", .imp = &windowSetter, .types = "v@:@" },
-        },
-    });
-    return objc.defineClass(.{
-        .name = "NanoUIAppDelegate",
-        .superclass = "UIResponder",
-        .protocols = &.{"UIApplicationDelegate"},
-        .methods = &.{
-            .{ .name = "application:didFinishLaunchingWithOptions:", .imp = &didFinishLaunching, .types = "B@:@@" },
-            .{ .name = "application:configurationForConnectingSceneSession:options:", .imp = &sceneConfiguration, .types = "@@:@@@" },
-            .{ .name = "applicationDidBecomeActive:", .imp = &becameActive, .types = "v@:@" },
-            .{ .name = "applicationWillEnterForeground:", .imp = &becameActive, .types = "v@:@" },
-            .{ .name = "applicationDidEnterBackground:", .imp = &enteredBackground, .types = "v@:@" },
-            .{ .name = "window", .imp = &windowGetter, .types = "@@:" },
-            .{ .name = "setWindow:", .imp = &windowSetter, .types = "v@:@" },
-        },
-    });
-}
-
-/// Whether Info.plist declares scenes: then the scene delegate shows the app.
-fn usesScenes() bool {
-    const bundle = objc.msg(objc.Object, objc.class("NSBundle"), "mainBundle", .{});
-    return objc.msg(?objc.Object, bundle, "objectForInfoDictionaryKey:", .{objc.nsString("UIApplicationSceneManifest")}) != null;
-}
-
-fn didFinishLaunching(_: objc.Object, _: objc.SEL, _: objc.Object, _: ?objc.Object) callconv(.c) objc.BOOL {
-    const app = current orelse return objc.YES;
-    if (usesScenes()) return objc.YES;
-    const screen = objc.msg(objc.Object, objc.class("UIScreen"), "mainScreen", .{});
-    const bounds = objc.msg(objc.CGRect, screen, "bounds", .{});
-    const win = objc.msg(objc.Object, objc.alloc("UIWindow"), "initWithFrame:", .{bounds});
-    defer objc.release(win);
-    app.attach(win);
-    return objc.YES;
-}
-
-fn sceneConfiguration(_: objc.Object, _: objc.SEL, _: objc.Object, session: objc.Object, _: objc.Object) callconv(.c) objc.Object {
-    const role = objc.msg(objc.Object, session, "role", .{});
-    const config = objc.msg(objc.Object, objc.class("UISceneConfiguration"), "configurationWithName:sessionRole:", .{ @as(?objc.Object, null), role });
-    objc.msg(void, config, "setDelegateClass:", .{objc.class("NanoUISceneDelegate")});
-    return config;
-}
-
-fn sceneConnect(_: objc.Object, _: objc.SEL, scene: objc.Object, _: objc.Object, _: objc.Object) callconv(.c) void {
-    const app = current orelse return;
-    // One scene shows the app; another (iPad's windows) is not supported yet.
-    if (app.uiwindow != null) return;
-    // Connected in the background (a launch for a background task): no
-    // frames until it comes forward (UISceneActivationStateBackground).
-    if (objc.msg(objc.NSInteger, scene, "activationState", .{}) == 2) app.active = false;
-    const win = objc.msg(objc.Object, objc.alloc("UIWindow"), "initWithWindowScene:", .{scene});
-    defer objc.release(win);
-    app.attach(win);
-}
-
-fn sceneDisconnect(_: objc.Object, _: objc.SEL, scene: objc.Object) callconv(.c) void {
-    const app = current orelse return;
-    const win = app.uiwindow orelse return;
-    if (objc.msg(?objc.Object, win, "windowScene", .{}) == scene) app.detach();
-}
-
-fn becameActive(_: objc.Object, _: objc.SEL, _: objc.Object) callconv(.c) void {
-    if (current) |app| app.setActive(true);
-}
-
-fn enteredBackground(_: objc.Object, _: objc.SEL, _: objc.Object) callconv(.c) void {
-    if (current) |app| app.setActive(false);
-}
-
-fn windowGetter(_: objc.Object, _: objc.SEL) callconv(.c) ?objc.Object {
-    const app = current orelse return null;
-    return app.uiwindow;
-}
-
-fn windowSetter(_: objc.Object, _: objc.SEL, _: ?objc.Object) callconv(.c) void {}

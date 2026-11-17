@@ -140,8 +140,8 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette, r: Room, size: ui.Si
             const wv = if (b.tabById(bx.tab)) |t| (if (t.floating) null else t.web) else null;
             before_wvs[bi] = wv;
             before_rects[bi] = if (wv) |w| blk: {
-                if (nanoui.objc.msg(?nanoui.objc.Object, w, "superview", .{}) == sh.stage_view) {
-                    const fr = nanoui.objc.msg(nanoui.objc.CGRect, w, "frame", .{});
+                if (sh.boxOf(w)) |box| {
+                    const fr = nanoui.objc.msg(nanoui.objc.CGRect, box, "frame", .{});
                     if (fr.size.width > 1 and fr.size.height > 1) {
                         break :blk .{ .x = @floatCast(fr.origin.x), .y = @floatCast(fr.origin.y), .w = @floatCast(fr.size.width), .h = @floatCast(fr.size.height) };
                     }

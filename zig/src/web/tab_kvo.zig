@@ -7,6 +7,7 @@ const objc = nanoui.objc;
 const Tab = @import("tab.zig").Tab;
 const currentUrl = @import("tab.zig").currentUrl;
 const Parts = @import("../data/url.zig").Parts;
+const platform = @import("../sys/platform.zig");
 
 const keys = [_][:0]const u8{ "title", "URL", "loading", "canGoBack", "canGoForward" };
 const capture_keys = [_][:0]const u8{ "cameraCaptureState", "microphoneCaptureState" };
@@ -35,7 +36,9 @@ pub fn watch(t: *Tab, wv: objc.Object) objc.Object {
     if (t.observes_capture) {
         for (capture_keys) |k| objc.msg(void, wv, "addObserver:forKeyPath:options:context:", .{ o, objc.nsString(k), @as(objc.NSUInteger, 1), @as(?*anyopaque, null) });
     }
-    if (hearsAudio(wv)) objc.msg(void, wv, "addObserver:forKeyPath:options:context:", .{ o, objc.nsString(audio), @as(objc.NSUInteger, 1), @as(?*anyopaque, null) });
+    if (comptime !platform.is_ios) {
+        if (hearsAudio(wv)) objc.msg(void, wv, "addObserver:forKeyPath:options:context:", .{ o, objc.nsString(audio), @as(objc.NSUInteger, 1), @as(?*anyopaque, null) });
+    }
     return o;
 }
 
@@ -48,7 +51,9 @@ pub fn stop(o: objc.Object, web: ?objc.Object, watched_capture: bool) void {
         if (watched_capture) {
             for (capture_keys) |k| objc.msg(void, wv, "removeObserver:forKeyPath:", .{ o, objc.nsString(k) });
         }
-        if (hearsAudio(wv)) objc.msg(void, wv, "removeObserver:forKeyPath:", .{ o, objc.nsString(audio) });
+        if (comptime !platform.is_ios) {
+            if (hearsAudio(wv)) objc.msg(void, wv, "removeObserver:forKeyPath:", .{ o, objc.nsString(audio) });
+        }
     }
     objc.release(o);
 }
@@ -83,7 +88,7 @@ fn observe(self: objc.Object, _: objc.SEL, path: ?objc.Object, object: ?objc.Obj
         const next = flag(wv, "canGoForward");
         if (t.can_go_forward == next) return;
         t.can_go_forward = next;
-    } else if (std.mem.eql(u8, key, audio)) {
+    } else if (if (comptime !platform.is_ios) std.mem.eql(u8, key, audio) else false) {
         const new = if (change) |c| objc.msg(?objc.Object, c, "objectForKey:", .{objc.nsString("new")}) else null;
         const next = if (new) |n| objc.msg(objc.BOOL, n, "respondsToSelector:", .{objc.sel("boolValue")}) and objc.msg(objc.BOOL, n, "boolValue", .{}) else false;
         if (t.noisy == next) return;

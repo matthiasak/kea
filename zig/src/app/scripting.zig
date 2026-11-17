@@ -10,24 +10,26 @@
 //! `scriptTabs`/`scriptCurrentTab` keys are added to `NSWindow`.
 const std = @import("std");
 const objc = @import("nanoui").objc;
+const platform = @import("../sys/platform.zig");
 const Kea = @import("kea.zig").Kea;
 const browsers = @import("browsers.zig");
 const Browser = @import("../model/browser.zig").Browser;
 const Tab = @import("../web/tab.zig").Tab;
-
-extern "c" fn class_addMethod(cls: objc.Class, name: objc.SEL, imp: *const anyopaque, types: [*:0]const u8) objc.BOOL;
 
 /// The app a script asks (one `Kea` at a time per process).
 var current: ?*Kea = null;
 
 /// Scripts see `kea`'s windows from here on (`Kea.create`).
 pub fn install(kea: *Kea) void {
+    if (comptime platform.is_ios) return;
+    const M = struct {
+        extern "c" fn class_addMethod(cls: objc.Class, name: objc.SEL, imp: *const anyopaque, types: [*:0]const u8) objc.BOOL;
+    };
     current = kea;
     _ = tabClass();
     const window = objc.class("NSWindow");
-    // Added once; a second time is refused, which is fine.
-    _ = class_addMethod(window, objc.sel("scriptTabs"), @ptrCast(&scriptTabs), "@@:");
-    _ = class_addMethod(window, objc.sel("scriptCurrentTab"), @ptrCast(&scriptCurrentTab), "@@:");
+    _ = M.class_addMethod(window, objc.sel("scriptTabs"), @ptrCast(&scriptTabs), "@@:");
+    _ = M.class_addMethod(window, objc.sel("scriptCurrentTab"), @ptrCast(&scriptCurrentTab), "@@:");
 }
 
 /// `kea` is going (`Kea.destroy`).
@@ -115,6 +117,7 @@ fn tabName(self: objc.Object, _: objc.SEL) callconv(.c) objc.Object {
 /// `tab N of window id …`: without the window's id, a tab a script kept
 /// hold of couldn't be found again.
 fn tabSpecifier(self: objc.Object, _: objc.SEL) callconv(.c) ?objc.Object {
+    if (comptime platform.is_ios) return null;
     const t = tabOf(self) orelse return null;
     const b = t.browser orelse return null;
     const w = b.window orelse return null;

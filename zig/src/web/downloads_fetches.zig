@@ -12,8 +12,7 @@ const dl = @import("downloads.zig");
 const Entry = dl.Entry;
 const StopAction = dl.StopAction;
 
-extern "c" const NSProgressKindFile: objc.Object;
-extern "c" const NSProgressFileOperationKindDownloading: objc.Object;
+const platform = @import("../sys/platform.zig");
 extern "c" fn _Block_release(block: *const anyopaque) void;
 
 /// A pause or cancel on its way: WebKit's cancel completion decides it.
@@ -263,29 +262,36 @@ pub const Fetches = struct {
         unpublish(it);
         dl.dupe(f.gpa, &it.shown_file, file);
         // Tests leave the Finder and the Dock alone.
-        if (f.kea.opts.root == null) {
-            const pool = objc.Pool.push();
-            defer pool.pop();
-            const total = objc.msg(i64, it.progress, "totalUnitCount", .{});
-            const p = objc.msg(objc.Object, objc.alloc("NSProgress"), "initWithParent:userInfo:", .{ @as(?objc.Object, null), @as(?objc.Object, null) });
-            objc.msg(void, p, "setTotalUnitCount:", .{@as(i64, @max(1, total))});
-            objc.msg(void, p, "setKind:", .{NSProgressKindFile});
-            objc.msg(void, p, "setFileOperationKind:", .{NSProgressFileOperationKindDownloading});
-            objc.msg(void, p, "setFileURL:", .{objc.msg(objc.Object, objc.class("NSURL"), "fileURLWithPath:", .{objc.nsString(file)})});
-            objc.msg(void, p, "setCancellable:", .{objc.YES});
-            // The Finder's Cancel can come without WebKit's failure callback,
-            // so it takes the same way out.
-            var block = objc.Block(anyopaque, &.{}).init(@ptrCast(it.watch), finderCancel);
-            objc.msg(void, p, "setCancellationHandler:", .{&block});
-            objc.msg(void, p, "setCompletedUnitCount:", .{completed});
-            objc.msg(void, p, "publish", .{});
-            it.shown = p;
+        if (comptime !platform.is_ios) {
+            if (f.kea.opts.root == null) {
+                const M = struct {
+                    extern "c" const NSProgressKindFile: objc.Object;
+                    extern "c" const NSProgressFileOperationKindDownloading: objc.Object;
+                };
+                const pool = objc.Pool.push();
+                defer pool.pop();
+                const total = objc.msg(i64, it.progress, "totalUnitCount", .{});
+                const p = objc.msg(objc.Object, objc.alloc("NSProgress"), "initWithParent:userInfo:", .{ @as(?objc.Object, null), @as(?objc.Object, null) });
+                objc.msg(void, p, "setTotalUnitCount:", .{@as(i64, @max(1, total))});
+                objc.msg(void, p, "setKind:", .{M.NSProgressKindFile});
+                objc.msg(void, p, "setFileOperationKind:", .{M.NSProgressFileOperationKindDownloading});
+                objc.msg(void, p, "setFileURL:", .{objc.msg(objc.Object, objc.class("NSURL"), "fileURLWithPath:", .{objc.nsString(file)})});
+                objc.msg(void, p, "setCancellable:", .{objc.YES});
+                // The Finder's Cancel can come without WebKit's failure callback,
+                // so it takes the same way out.
+                var block = objc.Block(anyopaque, &.{}).init(@ptrCast(it.watch), finderCancel);
+                objc.msg(void, p, "setCancellationHandler:", .{&block});
+                objc.msg(void, p, "setCompletedUnitCount:", .{completed});
+                objc.msg(void, p, "publish", .{});
+                it.shown = p;
+            }
         }
         it.entry.record(it.progress, true);
         f.changed();
     }
 
     fn unpublish(it: *Running) void {
+        if (comptime platform.is_ios) return;
         const p = it.shown orelse return;
         objc.msg(void, p, "setCancellationHandler:", .{@as(?*const anyopaque, null)});
         objc.msg(void, p, "unpublish", .{});
@@ -416,7 +422,7 @@ pub const Fetches = struct {
         const it = f.item(download) orelse return null;
         f.remove(it.entry);
         const owner = f.take(download) orelse return null;
-        if (file) |path| if (f.kea.opts.root == null) {
+        if (comptime !platform.is_ios) if (file) |path| if (f.kea.opts.root == null) {
             const pool = objc.Pool.push();
             defer pool.pop();
             const center = objc.msg(objc.Object, objc.class("NSDistributedNotificationCenter"), "defaultCenter", .{});

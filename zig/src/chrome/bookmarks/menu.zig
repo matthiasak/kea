@@ -7,6 +7,7 @@ const std = @import("std");
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
 const objc = nanoui.objc;
+const platform = @import("../../sys/platform.zig");
 const MenuItem = nanoui.MenuItem;
 const Browser = @import("../../model/browser.zig").Browser;
 const Bookmark = @import("../../data/bookmarks.zig").Bookmark;
@@ -65,6 +66,7 @@ const Lazy = struct {
     id: Uuid,
 
     fn fill(self: *Lazy, item: *nanoui.menu.Item) void {
+        if (comptime platform.is_ios) return;
         const folder = self.b.bookmarks.bookmark(self.id) orelse return;
         const made = items(self.a, self.b, folder.kids()) catch return;
         item.setSubmenu(orEmpty(self.a, made) catch return) catch {};
@@ -82,6 +84,7 @@ const Open = struct {
 
 /// `visit` reads the event that picked the item: ⌘ held opens a new tab.
 fn commandHeld() bool {
+    if (comptime platform.is_ios) return false;
     const app = objc.msg(objc.Object, objc.class("NSApplication"), "sharedApplication", .{});
     const ev = objc.msg(?objc.Object, app, "currentEvent", .{}) orelse return false;
     return objc.msg(objc.NSUInteger, ev, "modifierFlags", .{}) & (1 << 20) != 0;

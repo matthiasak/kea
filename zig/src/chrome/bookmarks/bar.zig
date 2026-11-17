@@ -4,8 +4,11 @@
 //! fold away and when a video takes the screen (`Room.barShown`).
 const ui = @import("nanoui").ui;
 const Browser = @import("../../model/browser.zig").Browser;
-const Bookmark = @import("../../data/bookmarks.zig").Bookmark;
+const bm = @import("../../data/bookmarks.zig");
+const Bookmark = bm.Bookmark;
+const Bookmarks = bm.Bookmarks;
 const Palette = @import("../../design/palette.zig").Palette;
+const motion = @import("../../design/motion.zig");
 const outline = @import("outline.zig");
 const actions = @import("actions.zig");
 const menu = @import("menu.zig");
@@ -23,32 +26,65 @@ pub const height: f32 = 30;
 /// the page's card, with the tabs down the side — the frame's colour and
 /// no line of its own, the card's edge being the line.
 pub fn view(b: *Browser, c: *ui.Context, p: *const Palette, x: f32, y: f32, width: f32, on_frame: bool) void {
-    const bar = c.open(.{
-        .direction = .row,
+    _ = c.open(.{
         .absolute = true,
         .offset = .{ .x = x, .y = y },
         .width = px(width),
         .height = px(height),
+        .background = if (on_frame) p.frame else p.ground,
+        .clip = true,
+    }, "kea.bookmarks.bar.frame");
+    defer c.end();
+    const bar = c.open(.{
+        .direction = .row,
+        .width = .fill,
+        .height = .fill,
         .padding = .xy(10, 0),
         .gap = 2,
         .align_items = .center,
-        .background = if (on_frame) p.frame else p.ground,
         .scroll_x = true,
         .scroll_bar = false,
-    }, null);
-    defer c.end();
+    }, "kea.bookmarks.bar");
     const bar_it = c.interact(bar, .{});
-    if (!on_frame) _ = c.leaf(.{ .absolute = true, .offset = .{ .x = -10, .y = height - 1 }, .width = px(width), .height = px(1), .background = p.hairline }, .none, null);
     var child_right_clicked = false;
-    for (b.bookmarks.roots) |*node| {
-        if (item(b, c, p, node)) child_right_clicked = true;
+    const roots = b.bookmarks.roots;
+    var idx: usize = 0;
+    while (idx < roots.len) {
+        if (!roots[idx].isFolder()) if (Bookmarks.cat.norm(roots[idx].category)) |cat| {
+            var end = idx + 1;
+            while (end < roots.len and !roots[end].isFolder() and Bookmarks.cat.optEq(Bookmarks.cat.norm(roots[end].category), cat)) : (end += 1) {}
+            _ = c.open(.{
+                .direction = .row,
+                .height = px(24),
+                .padding = .{ .left = 7, .right = 3, .top = 1, .bottom = 1 },
+                .gap = 1,
+                .radius = 7,
+                .align_items = .center,
+                .background = if (on_frame) p.side_wash.alpha(0.75) else p.wash.alpha(0.85),
+                .border = p.hairline.alpha(0.9),
+                .border_width = 1,
+            }, c.print("bm.bar.cat.{d}", .{idx}));
+            ui.text(c, cat, .{ .size = 10.5, .weight = .semibold, .color = p.muted });
+            _ = c.leaf(.{ .width = px(1), .height = px(11), .background = p.hairline }, .none, null);
+            for (roots[idx..end]) |*node| {
+                if (item(b, c, p, node, on_frame)) child_right_clicked = true;
+            }
+            c.end();
+            if (end < roots.len) _ = c.leaf(.{ .width = px(4) }, .none, null);
+            idx = end;
+            continue;
+        };
+        if (item(b, c, p, &roots[idx], on_frame)) child_right_clicked = true;
+        idx += 1;
     }
+    c.end();
+    if (!on_frame) _ = c.leaf(.{ .absolute = true, .offset = .{ .x = 0, .y = height - 1 }, .width = .fill, .height = px(1), .background = p.hairline }, .none, null);
     if (bar_it.right_clicked and !child_right_clicked) outline_menu.barEmptyPopup(b, c.input.mouse);
 }
 
 /// One on the bar. A bookmark without a name is its icon alone, in a
 /// square as tall as the others, its address on hover.
-fn item(b: *Browser, c: *ui.Context, p: *const Palette, node: *const Bookmark) bool {
+fn item(b: *Browser, c: *ui.Context, p: *const Palette, node: *const Bookmark, on_frame: bool) bool {
     const bare = node.unnamed();
     const i = c.open(.{
         .direction = .row,
@@ -64,7 +100,8 @@ fn item(b: *Browser, c: *ui.Context, p: *const Palette, node: *const Bookmark) b
     const it = c.interact(i, .{});
     c.help(i, node.url orelse node.title);
     c.addA11y(i, if (node.isFolder()) .menu_button else .button, if (bare) node.url.? else node.title, "", false, true);
-    if (it.hovered) c.node(i).style.background = p.hover;
+    const h = motion.quickTo(c, it.id, 0, if (it.hovered) 1 else 0);
+    if (h > 0.001) c.node(i).style.background = (if (on_frame) p.side_hover else p.hover).alpha(h);
     if (node.isFolder())
         ui.icon(c, "folder", .{ .size = 10.5, .color = p.muted })
     else

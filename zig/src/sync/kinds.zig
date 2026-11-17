@@ -44,13 +44,13 @@ pub const record_kinds = [_]Kind{ .bookmarks, .places, .settings, .chats };
 
 /// Settings that are switches (`Sync.bools`'s keys), sorted.
 pub const bools = [_][]const u8{
-    "ai",            "autoscroll",       "bookmarks.bar",  "bookmarks.sidebar", "commandbar",
-    "downloads.ask", "downloads.button", "float.away",     "float.flicks",      "float.leave",
-    "handoff",       "kea.facts",        "links.little",   "links.peek",        "links.show",
-    "media.click",   "passwords.fill",   "passwords.save", "pins.list",         "search.sites",
-    "shield",        "sidebar",          "sidebar.hides",  "spaces",            "splitView",
-    "swipe.history", "tabs.groups",      "tabs.lazy",      "tabs.reading",      "tabs.sleep",
-    "toolbar.left",
+    "ai",           "autoscroll",    "bookmarks.auto_sort", "bookmarks.bar",  "bookmarks.sidebar",
+    "commandbar",   "downloads.ask", "downloads.button",    "float.away",     "float.flicks",
+    "float.leave",  "handoff",       "kea.facts",           "links.little",   "links.peek",
+    "links.show",   "media.click",   "passwords.fill",      "passwords.save", "pins.list",
+    "search.sites", "shield",        "sidebar",             "sidebar.hides",  "spaces",
+    "splitView",    "swipe.history", "tabs.groups",         "tabs.lazy",      "tabs.reading",
+    "tabs.sleep",   "toolbar.left",
 };
 
 /// Every setting that goes to your other Macs (`Sync.portable`), besides

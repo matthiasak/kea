@@ -20,6 +20,7 @@ const Extensions = controller.Extensions;
 const buttons = @import("controller_buttons.zig");
 const answer = @import("shims/answer.zig");
 const popup_page = @import("popup_page.zig");
+const platform = @import("../sys/platform.zig");
 const CGRect = objc.CGRect;
 const CGSize = objc.CGSize;
 
@@ -117,7 +118,7 @@ pub fn show(e: *Extensions, url: []const u8, context: objc.Object, anchor_key: [
     const d = popup_page.delegate();
     objc.msg(void, web, "setUIDelegate:", .{d});
     objc.msg(void, web, "setNavigationDelegate:", .{d});
-    objc.msg(void, web, "setAlphaValue:", .{@as(f64, 0)});
+    setWebAlpha(web, 0);
     objc.msg(void, web, "loadRequest:", .{objc.msg(objc.Object, objc.class("NSURLRequest"), "requestWithURL:", .{nsurl})});
 
     const owned_id = heap.dupe(u8, id) catch return objc.release(web);
@@ -157,11 +158,13 @@ pub fn show(e: *Extensions, url: []const u8, context: objc.Object, anchor_key: [
         return;
     };
     current = self;
-    const ns = self.window.nswindow;
-    // A popover's frame: no buttons of its own, not dragged about.
-    for (0..3) |i| if (objc.msg(?objc.Object, ns, "standardWindowButton:", .{@as(objc.NSUInteger, i)})) |btn| objc.msg(void, btn, "setHidden:", .{objc.YES});
-    objc.msg(void, ns, "setMovable:", .{objc.NO});
-    objc.msg(void, ns, "setHidesOnDeactivate:", .{objc.NO});
+    if (comptime !platform.is_ios) {
+        const ns = self.window.nswindow;
+        // A popover's frame: no buttons of its own, not dragged about.
+        for (0..3) |i| if (objc.msg(?objc.Object, ns, "standardWindowButton:", .{@as(objc.NSUInteger, i)})) |btn| objc.msg(void, btn, "setHidden:", .{objc.YES});
+        objc.msg(void, ns, "setMovable:", .{objc.NO});
+        objc.msg(void, ns, "setHidesOnDeactivate:", .{objc.NO});
+    }
     if (self.window.surface) |s| {
         self.host = StageHost.create(heap, s) catch null;
         // In the window while unseen: WebKit suspends a page that is in none.
@@ -177,7 +180,9 @@ pub fn show(e: *Extensions, url: []const u8, context: objc.Object, anchor_key: [
     hangFrom(self, e, anchor_key);
     if (self.window.surface) |s| s.frame();
     // Never a test run's in front: a run started hidden stays off every screen.
-    if (!hidden and kea.opts.root == null) objc.msg(void, ns, "makeKeyAndOrderFront:", .{@as(?objc.Object, null)});
+    if (!hidden and kea.opts.root == null) {
+        if (comptime platform.is_ios) self.window.show() else objc.msg(void, self.window.nswindow, "makeKeyAndOrderFront:", .{@as(?objc.Object, null)});
+    }
     // Measured when the document is built or has loaded; a page slow to
     // do either is measured anyway after a moment, and shown regardless
     // a little later.
@@ -208,6 +213,7 @@ fn revealLater(ctx: ?*anyopaque) callconv(.c) void {
 /// button; with neither (the column or the strip folded away), where the
 /// buttons would be — the column's foot, or the strip's far end.
 fn hangFrom(self: *Popup, e: *Extensions, anchor_key: []const u8) void {
+    if (comptime platform.is_ios) return;
     if (self.kea.opts.hidden) return;
     const b = e.browser();
     self.trailing = if (b) |x| x.prefs.sidebar else false;
@@ -235,6 +241,7 @@ fn onScreen(window: objc.Object, r: CGRect) CGRect {
 /// Under its spot, centred on it, or out to its right from the column;
 /// kept on the screen.
 fn place(self: *Popup) void {
+    if (comptime platform.is_ios) return;
     if (self.kea.opts.hidden) return;
     const s = self.spot;
     const size = self.size;
@@ -255,19 +262,45 @@ fn place(self: *Popup) void {
     objc.msg(void, ns, "setFrame:display:", .{ frame, objc.YES });
 }
 
+fn closeOnMain(_: ?*anyopaque) callconv(.c) void {
+    close();
+}
+
 fn view(self: *Popup, c: *ui.Context) void {
     c.hand_cursor = false;
     if (!self.ready) return;
     const p = palette.get(c.theme.dark);
-    if (self.applied == null or !std.meta.eql(self.applied.?, p.ground)) {
-        self.applied = p.ground;
-        const g = p.ground;
-        const color = objc.msg(objc.Object, objc.class("NSColor"), "colorWithSRGBRed:green:blue:alpha:", .{ @as(f64, g.r), @as(f64, g.g), @as(f64, g.b), @as(f64, 1) });
-        objc.msg(void, self.window.nswindow, "setBackgroundColor:", .{color});
+    if (comptime platform.is_ios) {
+        if (self.applied == null or !std.meta.eql(self.applied.?, p.ground)) {
+            self.applied = p.ground;
+            const g = p.ground;
+            const color = objc.msg(objc.Object, objc.class("UIColor"), "colorWithRed:green:blue:alpha:", .{ @as(f64, g.r), @as(f64, g.g), @as(f64, g.b), @as(f64, 1) });
+            if (self.window.surface) |s| if (s.host_view) |hv| objc.msg(void, hv, "setBackgroundColor:", .{color});
+        }
+        ui.column(c, .{ .width = .fill, .height = .fill });
+        ui.row(c, .{ .width = .fill, .height = px(48), .padding = .xy(12, 0), .align_items = .center, .background = p.ground });
+        ui.text(c, "Extension", .{ .size = 14, .weight = .semibold, .color = p.ink });
+        ui.spacer(c);
+        if (@import("../chrome/controls.zig").door(c, p, "xmark", .{ .help = "Close Extension" }).clicked) {
+            objc.dispatchMain(null, closeOnMain);
+        }
+        ui.end(c);
+        _ = c.leaf(.{ .width = .fill, .height = px(1), .background = p.hairline }, .none, null);
+        const page = c.open(.{ .width = .fill, .grow = 1 }, "kea.popup.page");
+        c.addStageHoleNode(page);
+        c.end();
+        ui.end(c);
+    } else {
+        if (self.applied == null or !std.meta.eql(self.applied.?, p.ground)) {
+            self.applied = p.ground;
+            const g = p.ground;
+            const color = objc.msg(objc.Object, objc.class("NSColor"), "colorWithSRGBRed:green:blue:alpha:", .{ @as(f64, g.r), @as(f64, g.g), @as(f64, g.b), @as(f64, 1) });
+            objc.msg(void, self.window.nswindow, "setBackgroundColor:", .{color});
+        }
+        const page = c.open(.{ .width = .fill, .height = .fill }, "kea.popup.page");
+        c.addStageHoleNode(page);
+        c.end();
     }
-    const page = c.open(.{ .width = .fill, .height = .fill }, "kea.popup.page");
-    c.addStageHoleNode(page);
-    c.end();
 }
 
 /// The page, at the window's size, in view.
@@ -275,15 +308,20 @@ fn reveal(self: *Popup) void {
     if (self.shown) return;
     self.shown = true;
     if (self.host) |h| h.setPage(self.web, false);
-    _ = objc.msg(objc.BOOL, self.window.nswindow, "makeFirstResponder:", .{self.web});
-    // Faded in over 0.12 s, as Swift's `web.animator().alphaValue = 1`
-    // (the stage shows a new page at once: from nothing again).
-    objc.msg(void, self.web, "setAlphaValue:", .{@as(f64, 0)});
-    const ctx = objc.class("NSAnimationContext");
-    objc.msg(void, ctx, "beginGrouping", .{});
-    objc.msg(void, objc.msg(objc.Object, ctx, "currentContext", .{}), "setDuration:", .{@as(f64, 0.12)});
-    objc.msg(void, objc.msg(objc.Object, self.web, "animator", .{}), "setAlphaValue:", .{@as(f64, 1)});
-    objc.msg(void, ctx, "endGrouping", .{});
+    if (comptime platform.is_ios) {
+        _ = objc.msg(objc.BOOL, self.web, "becomeFirstResponder", .{});
+        setWebAlpha(self.web, 1);
+    } else {
+        _ = objc.msg(objc.BOOL, self.window.nswindow, "makeFirstResponder:", .{self.web});
+        // Faded in over 0.12 s, as Swift's `web.animator().alphaValue = 1`
+        // (the stage shows a new page at once: from nothing again).
+        setWebAlpha(self.web, 0);
+        const ctx = objc.class("NSAnimationContext");
+        objc.msg(void, ctx, "beginGrouping", .{});
+        objc.msg(void, objc.msg(objc.Object, ctx, "currentContext", .{}), "setDuration:", .{@as(f64, 0.12)});
+        objc.msg(void, objc.msg(objc.Object, self.web, "animator", .{}), "setAlphaValue:", .{@as(f64, 1)});
+        objc.msg(void, ctx, "endGrouping", .{});
+    }
     if (self.window.surface) |s| s.frame();
 }
 
@@ -455,7 +493,7 @@ pub fn of(web: objc.Object) ?*Popup {
 pub fn owns(window: ?objc.Object) bool {
     const p = current orelse return false;
     const w = window orelse return false;
-    return p.window.nswindow == w;
+    return platform.nativeWindow(p.window) == w;
 }
 
 /// Transient, as a popover: it goes when anything else takes the keys. A
@@ -470,19 +508,22 @@ fn keyChanged(ctx: *anyopaque, w: *nanoui.Window) void {
     if (!self.was_key or current != self) return;
     const pool = objc.Pool.push();
     defer pool.pop();
-    if (self.button) |btn| if (objc.msg(?objc.Object, objc.msg(objc.Object, objc.class("NSApplication"), "sharedApplication", .{}), "currentEvent", .{})) |ev| {
-        const kind = objc.msg(objc.NSUInteger, ev, "type", .{});
-        if ((kind == 1 or kind == 2) and objc.msg(?objc.Object, ev, "window", .{}) == btn.window) {
-            const at = objc.msg(objc.CGPoint, ev, "locationInWindow", .{});
-            const h = objc.msg(CGRect, objc.msg(objc.Object, btn.window, "contentView", .{}), "bounds", .{}).size.height;
-            const r = btn.rect;
-            const y = h - at.y;
-            if (at.x >= r.origin.x and at.x <= r.origin.x + r.size.width and y >= r.origin.y and y <= r.origin.y + r.size.height and self.id.len <= 64) {
-                closed_by_button = .{ .id = undefined, .len = self.id.len, .at = ui.clock.now() };
-                @memcpy(closed_by_button.?.id[0..self.id.len], self.id);
+    if (@import("../web/inspector.zig").isVisibleFor(self.web)) return;
+    if (comptime !platform.is_ios) {
+        if (self.button) |btn| if (objc.msg(?objc.Object, objc.msg(objc.Object, objc.class("NSApplication"), "sharedApplication", .{}), "currentEvent", .{})) |ev| {
+            const kind = objc.msg(objc.NSUInteger, ev, "type", .{});
+            if ((kind == 1 or kind == 2) and objc.msg(?objc.Object, ev, "window", .{}) == btn.window) {
+                const at = objc.msg(objc.CGPoint, ev, "locationInWindow", .{});
+                const h = objc.msg(CGRect, objc.msg(objc.Object, btn.window, "contentView", .{}), "bounds", .{}).size.height;
+                const r = btn.rect;
+                const y = h - at.y;
+                if (at.x >= r.origin.x and at.x <= r.origin.x + r.size.width and y >= r.origin.y and y <= r.origin.y + r.size.height and self.id.len <= 64) {
+                    closed_by_button = .{ .id = undefined, .len = self.id.len, .at = ui.clock.now() };
+                    @memcpy(closed_by_button.?.id[0..self.id.len], self.id);
+                }
             }
-        }
-    };
+        };
+    }
     close();
 }
 
@@ -508,4 +549,8 @@ fn closed(ctx: *anyopaque, _: *nanoui.Window) void {
     objc.release(self.web);
     heap.free(self.id);
     heap.destroy(self);
+}
+
+fn setWebAlpha(wv: objc.Object, alpha: f64) void {
+    objc.msg(void, wv, if (comptime platform.is_ios) "setAlpha:" else "setAlphaValue:", .{alpha});
 }

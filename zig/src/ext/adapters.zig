@@ -13,6 +13,7 @@ const browsers = @import("../app/browsers.zig");
 const tab_state = @import("../web/tab_state.zig");
 const dialogs = @import("../web/dialogs.zig");
 const value = @import("value.zig");
+const platform = @import("../sys/platform.zig");
 
 /// What an adapter object points at.
 const Ref = struct {
@@ -339,8 +340,7 @@ pub fn browserOfWindow(self: objc.Object) ?*Browser {
 
 fn nsWindow(self: objc.Object) ?objc.Object {
     const b = browserOfWindow(self) orelse return null;
-    const w = b.window orelse return null;
-    return w.nswindow;
+    return platform.nativeWindow(b.window);
 }
 
 fn wTabs(self: objc.Object, _: Sel, _: C) callconv(.c) objc.Object {
@@ -369,6 +369,7 @@ fn wPrivate(_: objc.Object, _: Sel, _: C) callconv(.c) bool {
 
 /// normal 0, minimized 1, maximized 2, fullscreen 3.
 fn wState(self: objc.Object, _: Sel, _: C) callconv(.c) objc.NSInteger {
+    if (comptime platform.is_ios) return 0;
     const w = nsWindow(self) orelse return 0;
     if (objc.msg(objc.BOOL, w, "isMiniaturized", .{})) return 1;
     const full_screen: objc.NSUInteger = 1 << 14;
@@ -377,11 +378,20 @@ fn wState(self: objc.Object, _: Sel, _: C) callconv(.c) objc.NSInteger {
 }
 
 fn wFrame(self: objc.Object, _: Sel, _: C) callconv(.c) objc.CGRect {
+    if (comptime platform.is_ios) {
+        if (nsWindow(self)) |w| return objc.msg(objc.CGRect, w, "bounds", .{});
+        const s = objc.msg(?objc.Object, objc.class("UIScreen"), "mainScreen", .{}) orelse return rect_null;
+        return objc.msg(objc.CGRect, s, "bounds", .{});
+    }
     const w = nsWindow(self) orelse return rect_null;
     return objc.msg(objc.CGRect, w, "frame", .{});
 }
 
 fn wScreenFrame(self: objc.Object, _: Sel, _: C) callconv(.c) objc.CGRect {
+    if (comptime platform.is_ios) {
+        const s = objc.msg(?objc.Object, objc.class("UIScreen"), "mainScreen", .{}) orelse return rect_null;
+        return objc.msg(objc.CGRect, s, "bounds", .{});
+    }
     const screen = if (nsWindow(self)) |w| objc.msg(?objc.Object, w, "screen", .{}) else null;
     const s = screen orelse objc.msg(?objc.Object, objc.class("NSScreen"), "mainScreen", .{}) orelse return rect_null;
     return objc.msg(objc.CGRect, s, "frame", .{});
@@ -395,6 +405,10 @@ fn wFocus(self: objc.Object, _: Sel, _: C, h: H) callconv(.c) void {
 /// windows.remove.
 fn wClose(self: objc.Object, _: Sel, _: C, h: H) callconv(.c) void {
     defer finish(h, null);
+    if (comptime platform.is_ios) {
+        if (browserOfWindow(self)) |b| if (b.window) |w| w.close();
+        return;
+    }
     if (nsWindow(self)) |w| objc.msg(void, w, "performClose:", .{@as(?objc.Object, null)});
 }
 
@@ -402,6 +416,7 @@ fn wClose(self: objc.Object, _: Sel, _: C, h: H) callconv(.c) void {
 /// never below the window's smallest size, kept on screen.
 fn wSetFrame(self: objc.Object, _: Sel, frame: objc.CGRect, _: C, h: H) callconv(.c) void {
     defer finish(h, null);
+    if (comptime platform.is_ios) return;
     const w = nsWindow(self) orelse return;
     const now = objc.msg(objc.CGRect, w, "frame", .{});
     const min = objc.msg(objc.CGSize, w, "minSize", .{});

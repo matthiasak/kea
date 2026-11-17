@@ -6,6 +6,7 @@ const std = @import("std");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;
 const ui = nanoui.ui;
+const platform = @import("../sys/platform.zig");
 const Browser = @import("../model/browser.zig").Browser;
 const Kea = @import("../app/kea.zig").Kea;
 const json = @import("../data/json.zig");
@@ -208,6 +209,15 @@ fn copied(c: *Copying, ok: bool) void {
 var clipboard_count: objc.NSInteger = 0;
 
 fn toClipboard(secret: []const u8) void {
+    if (comptime platform.is_ios) {
+        const p_ios = objc.Pool.push();
+        defer p_ios.pop();
+        platform.writePasteboardString(secret);
+        const pb = objc.msg(objc.Object, objc.class("UIPasteboard"), "generalPasteboard", .{});
+        clipboard_count = objc.msg(objc.NSInteger, pb, "changeCount", .{});
+        objc.dispatchAfter(90 * std.time.ns_per_s, null, clearClipboard);
+        return;
+    }
     const pool = objc.Pool.push();
     defer pool.pop();
     const board = objc.msg(objc.Object, objc.class("NSPasteboard"), "generalPasteboard", .{});
@@ -222,6 +232,12 @@ fn toClipboard(secret: []const u8) void {
 }
 
 fn clearClipboard(_: ?*anyopaque) callconv(.c) void {
+    if (comptime platform.is_ios) {
+        const pb = objc.msg(objc.Object, objc.class("UIPasteboard"), "generalPasteboard", .{});
+        if (objc.msg(objc.NSInteger, pb, "changeCount", .{}) == clipboard_count)
+            platform.writePasteboardString("");
+        return;
+    }
     const board = objc.msg(objc.Object, objc.class("NSPasteboard"), "generalPasteboard", .{});
     if (objc.msg(objc.NSInteger, board, "changeCount", .{}) == clipboard_count)
         _ = objc.msg(objc.NSInteger, board, "clearContents", .{});

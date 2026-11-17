@@ -5,6 +5,7 @@
 //! `ASAuthorizationWebBrowserPublicKeyCredentialManager`. Main thread.
 const std = @import("std");
 const objc = @import("nanoui").objc;
+const platform = @import("../sys/platform.zig");
 const json = @import("../data/json.zig");
 const call = @import("../web/dialogs.zig").call;
 const passkeys = @import("passkeys.zig");
@@ -128,20 +129,20 @@ fn completed(self: objc.Object, _: objc.SEL, controller: objc.Object, authorizat
     const id = optionalBytes(credential, "credentialID") orelse &.{};
     const client = optionalBytes(credential, "rawClientDataJSON") orelse &.{};
     if (conforms(credential, "ASAuthorizationPublicKeyCredentialAssertion")) {
-        const platform = isKind(credential, "ASAuthorizationPlatformPublicKeyCredentialAssertion");
-        var r = reply.assertionReply(a, id, client, optionalBytes(credential, "rawAuthenticatorData") orelse &.{}, optionalBytes(credential, "signature") orelse &.{}, optionalBytes(credential, "userID") orelse &.{}, if (platform) platformAttachment(credential) else "cross-platform") catch
+        const is_plat = isKind(credential, "ASAuthorizationPlatformPublicKeyCredentialAssertion");
+        var r = reply.assertionReply(a, id, client, optionalBytes(credential, "rawAuthenticatorData") orelse &.{}, optionalBytes(credential, "signature") orelse &.{}, optionalBytes(credential, "userID") orelse &.{}, if (is_plat) platformAttachment(credential) else "cross-platform") catch
             return p.finish(reply.failure("NotAllowedError", "The operation either timed out or was not allowed."));
-        if (platform) if (prfOutput(credential)) |prf| {
+        if (is_plat) if (prfOutput(credential)) |prf| {
             r.prf = reply.prfReply(a, null, optionalBytes(prf, "first"), optionalBytes(prf, "second"), p.prf_key);
         };
         return p.finish(r);
     }
     if (conforms(credential, "ASAuthorizationPublicKeyCredentialRegistration")) {
-        const platform = isKind(credential, "ASAuthorizationPlatformPublicKeyCredentialRegistration");
-        const transports: []const []const u8 = if (platform) &.{ "hybrid", "internal" } else &.{"usb"};
-        var r = reply.registrationReply(a, id, client, optionalBytes(credential, "rawAttestationObject") orelse &.{}, transports, if (platform) platformAttachment(credential) else "cross-platform") catch
+        const is_plat = isKind(credential, "ASAuthorizationPlatformPublicKeyCredentialRegistration");
+        const transports: []const []const u8 = if (is_plat) &.{ "hybrid", "internal" } else &.{"usb"};
+        var r = reply.registrationReply(a, id, client, optionalBytes(credential, "rawAttestationObject") orelse &.{}, transports, if (is_plat) platformAttachment(credential) else "cross-platform") catch
             return p.finish(reply.failure("NotAllowedError", "The operation either timed out or was not allowed."));
-        if (platform) if (prfOutput(credential)) |prf| {
+        if (is_plat) if (prfOutput(credential)) |prf| {
             r.prf = reply.prfReply(a, objc.msg(objc.BOOL, prf, "isSupported", .{}), optionalBytes(prf, "first"), optionalBytes(prf, "second"), p.prf_key);
         };
         return p.finish(r);
@@ -161,7 +162,14 @@ fn failed(self: objc.Object, _: objc.SEL, controller: objc.Object, err: objc.Obj
 }
 
 fn anchor(self: objc.Object, _: objc.SEL, _: objc.Object) callconv(.c) objc.Object {
-    if (objc.getZig(Passkeys, self)) |p| if (p.anchor) |w| return w;
+    if (objc.getZig(Passkeys, self)) |p| {
+        if (p.anchor) |w| return w;
+        for (p.kea.browsers.items) |b| if (platform.nativeWindow(b.window)) |w| return w;
+    }
+    if (comptime platform.is_ios) {
+        if (@import("nanoui").App.shared()) |a| if (a.uiwindow) |w| return w;
+        return objc.msg(objc.Object, objc.msg(objc.Object, objc.class("UIWindow"), "new", .{}), "autorelease", .{});
+    }
     const app = objc.msg(objc.Object, objc.class("NSApplication"), "sharedApplication", .{});
     if (objc.msg(?objc.Object, app, "keyWindow", .{})) |w| return w;
     if (objc.msg(?objc.Object, objc.msg(objc.Object, app, "windows", .{}), "firstObject", .{})) |w| return w;
@@ -175,6 +183,7 @@ const AccessBlock = objc.Block(Passkeys, &.{objc.NSInteger});
 /// `requestAuthorizationForPublicKeyCredentials`, answered on the main thread.
 // ponytail: the Passkeys must outlive macOS's answer (it lives as long as the app).
 pub fn requestAccess(p: *Passkeys) void {
+    if (comptime platform.is_ios) return p.accessAnswered();
     const pool = objc.Pool.push();
     defer pool.pop();
     const m = objc.msg(objc.Object, objc.msg(objc.Object, objc.class("ASAuthorizationWebBrowserPublicKeyCredentialManager"), "new", .{}), "autorelease", .{});
@@ -213,6 +222,7 @@ const FoundBlock = objc.Block(Looking, &.{?objc.Object});
 /// allowed ones (all when none named), 8 at most.
 // ponytail: the Passkeys must outlive the answer (it lives as long as the app).
 pub fn lookUp(p: *Passkeys, key: usize, token: ?[]const u8, rp: []const u8, allow: ?std.json.Value) void {
+    if (comptime platform.is_ios) return;
     const gpa = p.gpa;
     var arena = std.heap.ArenaAllocator.init(gpa);
     defer arena.deinit();

@@ -7,6 +7,7 @@ const std = @import("std");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;
 const ui = nanoui.ui;
+const platform = @import("../sys/platform.zig");
 const Browser = @import("../model/browser.zig").Browser;
 const Tab = @import("../web/tab.zig").Tab;
 const Palette = @import("../design/palette.zig").Palette;
@@ -127,7 +128,7 @@ pub fn carried(b: *Browser, c: *ui.Context, it: ui.Interaction, tab: *Tab, index
         .taken, .cancelled => null,
     };
     if (source) |s| {
-        if (b.dragOut(s, objc.msg(objc.CGPoint, objc.class("NSEvent"), "mouseLocation", .{}))) {
+        if ((comptime !platform.is_ios) and b.dragOut(s, objc.msg(objc.CGPoint, objc.class("NSEvent"), "mouseLocation", .{}))) {
             r.outside = true;
         } else if (s == tab) r.dropped = mouse;
     }

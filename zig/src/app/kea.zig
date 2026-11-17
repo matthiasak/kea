@@ -3,6 +3,7 @@
 const std = @import("std");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;
+const platform = @import("../sys/platform.zig");
 const browsers = @import("browsers.zig");
 const Store = @import("../data/store.zig").Store;
 const Prefs = @import("../data/prefs.zig").Prefs;
@@ -116,7 +117,7 @@ pub const Kea = struct {
         };
         self.prefs = Prefs.init(gpa, &self.store, .{
             .testing = opts.root != null,
-            .app = if (ui_app) |a| a.nsapp else null,
+            .app = platform.nativeApp(ui_app),
         });
         self.passkeys = .init(self);
         self.passkeys.on_changed = .{ .ctx = self, .func = @import("../passwords/form_relay.zig").passkeysOffered };
@@ -130,6 +131,8 @@ pub const Kea = struct {
         self.launch_history_ms = (nanoui.ui.clock.now() - t_hist) * 1000.0;
         self.shortcuts = .init(gpa, &self.store);
         self.bookmarks = Bookmarks.init(gpa, &self.store);
+        self.ai.on_bookmarks_ctx = self;
+        self.ai.on_bookmarks_changed = bookmarksChanged;
         self.site_search = SiteSearch.init(gpa, &self.store);
         self.pins = Pins.init(gpa, &self.store);
         self.spaces = spaces.read(&self.store);
@@ -161,7 +164,7 @@ pub const Kea = struct {
             @import("../web/recording_pill.zig").install();
         }
         // Hidden runs get no Dock icon and never take focus.
-        if (opts.hidden) if (ui_app) |a| {
+        if (comptime !platform.is_ios) if (opts.hidden) if (ui_app) |a| {
             _ = objc.msg(objc.BOOL, a.nsapp, "setActivationPolicy:", .{@as(objc.NSInteger, 2)});
         };
         // After the stores it reads and changes.
@@ -215,6 +218,7 @@ pub const Kea = struct {
         self.spaces.deinit();
         self.pins.deinit();
         self.site_search.deinit();
+        @import("../ai/organize_auto.zig").cancelFor(self.ai, &self.bookmarks);
         self.bookmarks.deinit();
         self.history.deinit();
         // After every browser's assistant went with its window.
@@ -320,3 +324,7 @@ pub const Kea = struct {
         return if (tc.items.len == 0) null else gpa.dupe(u8, tc.items) catch null;
     }
 };
+
+fn bookmarksChanged(ctx: *anyopaque) void {
+    @import("../chrome/side_panels.zig").redrawAll(@ptrCast(@alignCast(ctx)));
+}

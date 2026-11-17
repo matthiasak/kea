@@ -10,6 +10,7 @@ const Tab = tab_mod.Tab;
 const Parts = @import("../data/url.zig").Parts;
 const cg = @import("../sys/cg.zig");
 const dispatch = @import("../sys/dispatch.zig");
+const platform = @import("../sys/platform.zig");
 // MARK: sleeping and waking
 
 /// Sent somewhere new: nothing of where it was before to bring back.
@@ -255,8 +256,15 @@ pub fn magnifyBy(t: *Tab, factor: f64) void {
 pub fn resetZoom(t: *Tab) void {
     magnify(t, defaultZoom(t));
     const wv = t.web orelse return;
-    if (objc.msg(f64, wv, "magnification", .{}) == 1) return;
-    objc.msg(void, wv, "setMagnification:", .{@as(f64, 1)});
+    if (comptime platform.is_ios) {
+        if (objc.msg(?objc.Object, wv, "scrollView", .{})) |sv| {
+            if (objc.msg(f64, sv, "zoomScale", .{}) == 1) return;
+            objc.msg(void, sv, "setZoomScale:animated:", .{ @as(f64, 1.0), objc.NO });
+        } else return;
+    } else {
+        if (objc.msg(f64, wv, "magnification", .{}) == 1) return;
+        objc.msg(void, wv, "setMagnification:", .{@as(f64, 1)});
+    }
     if (t.browser) |b| b.zoomed(1);
 }
 
@@ -355,7 +363,7 @@ fn snapped(s: *Snap, image: ?objc.Object, _: ?objc.Object) void {
     if (image) |img| {
         const pool = objc.Pool.push();
         defer pool.pop();
-        if (objc.msg(?objc.Object, img, "CGImageForProposedRect:context:hints:", .{ @as(?*anyopaque, null), @as(?objc.Object, null), @as(?objc.Object, null) })) |raw| {
+        if (platform.cgImageOf(img)) |raw| {
             s.cgimage = CGImageRetain(@ptrCast(raw));
             return dispatch.dispatch_async_f(dispatch.dispatch_get_global_queue(0x11, 0), s, encodeBg);
         }

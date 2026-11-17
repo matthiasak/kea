@@ -16,6 +16,7 @@ const controls = @import("../chrome/controls.zig");
 const overlays = @import("../chrome/overlays.zig");
 const tab_menu = @import("../chrome/tab_menu.zig");
 const appkit = @import("../sys/appkit.zig");
+const platform = @import("../sys/platform.zig");
 const controller = @import("controller.zig");
 const Extensions = controller.Extensions;
 const buttons = @import("controller_buttons.zig");
@@ -51,7 +52,7 @@ pub fn slot(b: *Browser, c: *ui.Context, p: *const Palette, room: ?usize) void {
     const a = c.alloc();
     const list = buttons.buttons(e, a) catch return;
     defer buttons.freeButtons(a, list);
-    const win: ?objc.Object = if (b.window) |w| w.nswindow else null;
+    const win: ?objc.Object = platform.nativeWindow(b.window);
     // A button not drawn this frame has no place to hang a popup from.
     if (win != null) for (e.del.anchors.values()) |*an| if (an.window == win) {
         an.window = null;
@@ -216,17 +217,25 @@ fn actionItems(arena: std.mem.Allocator, b: *Browser, at: u64) anyerror![]const 
 pub fn confirmRemove(e: *Extensions, id: []const u8, name: []const u8) void {
     const Ask = struct {
         serial: u64,
-        id: []const u8,
+        id: []u8,
         fn answered(self: *@This(), a: appkit.Answer) void {
+            defer {
+                std.heap.c_allocator.free(self.id);
+                std.heap.c_allocator.destroy(self);
+            }
             if (!a.ok) return;
             if (controller.alive(self.serial)) |x| x.remove(self.id);
         }
     };
-    var ask: Ask = .{ .serial = e.serial, .id = id };
+    const ask = std.heap.c_allocator.create(Ask) catch return;
+    ask.* = .{ .serial = e.serial, .id = std.heap.c_allocator.dupe(u8, id) catch return std.heap.c_allocator.destroy(ask) };
     var buf: [400]u8 = undefined;
-    const title = std.fmt.bufPrint(&buf, "Remove “{s}”?", .{name}) catch return;
-    // No window: `runModal`, answered before this returns.
-    appkit.ask(null, .{ .title = title, .detail = "Its settings and data go with it.", .confirm = "Remove" }, &ask, Ask.answered);
+    const title = std.fmt.bufPrint(&buf, "Remove “{s}”?", .{name}) catch {
+        std.heap.c_allocator.free(ask.id);
+        std.heap.c_allocator.destroy(ask);
+        return;
+    };
+    appkit.ask(null, .{ .title = title, .detail = "Its settings and data go with it.", .confirm = "Remove", .destructive = true }, ask, Ask.answered);
 }
 
 // MARK: ExtensionMenu

@@ -21,27 +21,33 @@ const scripts = @import("tab_scripts.zig");
 const dialogs = @import("dialogs.zig");
 const ui_half = @import("delegates_ui.zig");
 const ext_nav = @import("../ext/nav.zig");
+const platform = @import("../sys/platform.zig");
 
 pub const Change = enum { address, title, state };
+
+const base_methods = [_]objc.Method{
+    .{ .name = "webView:decidePolicyForNavigationAction:preferences:decisionHandler:", .imp = &decideAction, .types = "v@:@@@@?" },
+    .{ .name = "webView:decidePolicyForNavigationResponse:decisionHandler:", .imp = &decideResponse, .types = "v@:@@@?" },
+    .{ .name = "webView:navigationAction:didBecomeDownload:", .imp = &becameDownload, .types = "v@:@@@" },
+    .{ .name = "webView:navigationResponse:didBecomeDownload:", .imp = &becameDownload, .types = "v@:@@@" },
+    .{ .name = "webView:didCommitNavigation:", .imp = &didCommit, .types = "v@:@@" },
+    .{ .name = "webView:didFinishNavigation:", .imp = &didFinish, .types = "v@:@@" },
+    .{ .name = "webView:didFailNavigation:withError:", .imp = &didFail, .types = "v@:@@@" },
+    .{ .name = "webView:didFailProvisionalNavigation:withError:", .imp = &didFail, .types = "v@:@@@" },
+    .{ .name = "userContentController:didReceiveScriptMessage:", .imp = &didReceiveMessage, .types = "v@:@@" },
+};
+
+const mac_methods = if (platform.is_ios) [_]objc.Method{} else [_]objc.Method{
+    .{ .name = "_webView:contextMenuDidCreateDownload:", .imp = &menuDownload, .types = "v@:@@" },
+    .{ .name = "_webView:saveDataToFile:suggestedFilename:mimeType:originatingURL:", .imp = &@import("downloads_keep.zig").saveDataToFile, .types = "v@:@@@@@" },
+    .{ .name = "_webView:renderingProgressDidChange:", .imp = &renderingProgress, .types = "v@:@Q" },
+};
 
 fn class() objc.Class {
     return objc.defineClass(.{
         .name = "KeaWebDelegate",
         .protocols = &.{ "WKNavigationDelegate", "WKUIDelegate", "WKScriptMessageHandler" },
-        .methods = &([_]objc.Method{
-            .{ .name = "webView:decidePolicyForNavigationAction:preferences:decisionHandler:", .imp = &decideAction, .types = "v@:@@@@?" },
-            .{ .name = "webView:decidePolicyForNavigationResponse:decisionHandler:", .imp = &decideResponse, .types = "v@:@@@?" },
-            .{ .name = "webView:navigationAction:didBecomeDownload:", .imp = &becameDownload, .types = "v@:@@@" },
-            .{ .name = "webView:navigationResponse:didBecomeDownload:", .imp = &becameDownload, .types = "v@:@@@" },
-            .{ .name = "_webView:contextMenuDidCreateDownload:", .imp = &menuDownload, .types = "v@:@@" },
-            .{ .name = "_webView:saveDataToFile:suggestedFilename:mimeType:originatingURL:", .imp = &@import("downloads_keep.zig").saveDataToFile, .types = "v@:@@@@@" },
-            .{ .name = "webView:didCommitNavigation:", .imp = &didCommit, .types = "v@:@@" },
-            .{ .name = "_webView:renderingProgressDidChange:", .imp = &renderingProgress, .types = "v@:@Q" },
-            .{ .name = "webView:didFinishNavigation:", .imp = &didFinish, .types = "v@:@@" },
-            .{ .name = "webView:didFailNavigation:withError:", .imp = &didFail, .types = "v@:@@@" },
-            .{ .name = "webView:didFailProvisionalNavigation:withError:", .imp = &didFail, .types = "v@:@@@" },
-            .{ .name = "userContentController:didReceiveScriptMessage:", .imp = &didReceiveMessage, .types = "v@:@@" },
-        } ++ ui_half.methods ++ ext_nav.methods),
+        .methods = &(base_methods ++ mac_methods ++ ui_half.methods ++ ext_nav.methods),
     });
 }
 
@@ -198,7 +204,9 @@ fn decide(self: objc.Object, wv: objc.Object, action: objc.Object) objc.NSIntege
     // going to a website: the tab is swapped where it stands.
     if (ext_nav.returning(t, wv, action, url, web, isMainTarget(action))) return cancel;
     // A middle-click's link was opened by MiddleRelay already.
-    if (kind == link_activated and objc.msg(objc.NSInteger, action, "buttonNumber", .{}) == 4) return cancel;
+    if (comptime !platform.is_ios) {
+        if (kind == link_activated and objc.msg(objc.NSInteger, action, "buttonNumber", .{}) == 4) return cancel;
+    }
     if (b) |br| {
         // Shift-click, when Settings says so: a peek at the link (P7).
         if (@hasDecl(Browser, "peek")) if (br.prefs.peeks_links and kind == link_activated and web and

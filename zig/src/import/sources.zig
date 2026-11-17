@@ -10,6 +10,7 @@
 //! `<root>/Import`, never a real browser's.
 const std = @import("std");
 const objc = @import("nanoui").objc;
+const platform = @import("../sys/platform.zig");
 const json = @import("../data/json.zig");
 const Parts = @import("../data/url.zig").Parts;
 const Bookmark = @import("../data/bookmarks.zig").Bookmark;
@@ -235,6 +236,7 @@ pub const Icons = std.StringArrayHashMapUnmanaged([]const u8);
 
 /// Every browser on this Mac with something to read: Chromium's, then Mozilla's.
 pub fn installed(a: std.mem.Allocator, base: Base) ![]Source {
+    if ((comptime platform.is_ios) and !base.testing) return &.{};
     var out: std.ArrayList(Source) = .empty;
     for (chromium.known) |b| if ((try b.profiles(a, base)).len > 0) try out.append(a, .{ .chromium = b });
     for (firefox.known) |b| if ((try b.files(a, base)).len > 0) try out.append(a, .{ .mozilla = b });
@@ -244,6 +246,7 @@ pub fn installed(a: std.mem.Allocator, base: Base) ![]Source {
 /// Whether Safari is on this Mac: its data is kept from other apps, so the
 /// sheet says how to export it instead.
 pub fn safari() bool {
+    if (comptime platform.is_ios) return false;
     return files.exists("/Applications/Safari.app");
 }
 

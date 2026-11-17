@@ -10,6 +10,7 @@ const std = @import("std");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;
 const ui = nanoui.ui;
+const platform = @import("../sys/platform.zig");
 const Browser = @import("../model/browser.zig").Browser;
 const Tab = @import("../web/tab.zig").Tab;
 const Palette = @import("../design/palette.zig").Palette;
@@ -151,6 +152,7 @@ fn panelBrowser(p: *const Panel) ?*Browser {
 }
 
 fn openPanel(b: *Browser, t: *Tab) void {
+    if (comptime platform.is_ios) return;
     closePanel(null);
     if (b.kea.opts.hidden or b.kea.opts.root != null) return;
     const parent = b.window orelse return;
@@ -200,6 +202,7 @@ fn openPanel(b: *Browser, t: *Tab) void {
 }
 
 fn closePanel(for_b: ?*Browser) void {
+    if (comptime platform.is_ios) return;
     const p = live_panel orelse return;
     if (for_b) |b| if (panelBrowser(p)) |owner| if (owner != b) return;
     live_panel = null;
@@ -224,6 +227,7 @@ fn panelClosed(ctx: *anyopaque, _: *nanoui.Window) void {
 }
 
 fn placePanel(p: *Panel, b: *Browser) void {
+    if (comptime platform.is_ios) return;
     const parent = b.window orelse return;
     const ps = parent.surface orelse return;
     const sz = b.site_card.panel_size orelse return;

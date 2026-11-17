@@ -13,6 +13,7 @@ const ui = nanoui.ui;
 const Tab = @import("tab.zig").Tab;
 const registrable = @import("../data/registrable.zig");
 const appkit = @import("../sys/appkit.zig");
+const platform = @import("../sys/platform.zig");
 
 /// Questions outlive the tab that asked (a sheet still up), so they are
 /// not on its allocator.
@@ -233,14 +234,18 @@ pub fn answer(a: *Ask, ok: bool, text: ?[]const u8) void {
         }
     }
     if (a.kind == .hand_off and ok) if (a.subject) |u| {
-        _ = objc.msg(objc.BOOL, objc.msg(objc.Object, objc.class("NSWorkspace"), "sharedWorkspace", .{}), "openURL:", .{u});
+        _ = platform.openExternalURL(u);
     };
     if (t) |tab| tab.changed(.state);
     if (!a.sheet_up) free(a);
 }
 
+fn fieldText(f: objc.Object) []const u8 {
+    return objc.fromNSString(objc.msg(?objc.Object, f, if (comptime platform.is_ios) "text" else "stringValue", .{}));
+}
+
 fn typed(a: *Ask) []const u8 {
-    if (a.fields[0]) |f| return objc.fromNSString(objc.msg(?objc.Object, f, "stringValue", .{}));
+    if (a.fields[0]) |f| return fieldText(f);
     return a.input.text();
 }
 
@@ -257,8 +262,8 @@ fn free(a: *Ask) void {
 }
 
 fn signInCredential(a: *Ask) ?objc.Object {
-    const name = objc.fromNSString(objc.msg(?objc.Object, a.fields[0] orelse return null, "stringValue", .{}));
-    const pass = objc.fromNSString(objc.msg(?objc.Object, a.fields[1] orelse return null, "stringValue", .{}));
+    const name = fieldText(a.fields[0] orelse return null);
+    const pass = fieldText(a.fields[1] orelse return null);
     // NSURLCredentialPersistenceForSession = 1.
     return objc.msg(objc.Object, objc.class("NSURLCredential"), "credentialWithUser:password:persistence:", .{ objc.nsString(name), objc.nsString(pass), @as(objc.NSUInteger, 1) });
 }
@@ -351,6 +356,7 @@ fn field(secure: bool, y: f64, placeholder: []const u8, value: []const u8) objc.
 }
 
 fn sheet(t: *Tab, a: *Ask) void {
+    if (comptime platform.is_ios) return sheetIos(t, a);
     const pool = objc.Pool.push();
     defer pool.pop();
     var buf: [512]u8 = undefined;
@@ -411,6 +417,98 @@ fn openPanel(a: *Ask) objc.Object {
     return panel;
 }
 
+
+const IosChoice = struct {
+    ask: *Ask,
+    ok: bool,
+    other: ?*@This() = null,
+
+    fn pick(self: *@This(), _: objc.Object) void {
+        const pool = objc.Pool.push();
+        defer pool.pop();
+        const a = self.ask;
+        const ok = self.ok;
+        if (self.other) |o| gpa.destroy(o);
+        gpa.destroy(self);
+        a.sheet_up = false;
+        if (a.answered) return free(a);
+        answer(a, ok, null);
+    }
+};
+
+fn addIosAction(ac: objc.Object, label: []const u8, style: objc.NSInteger, choice: *IosChoice) void {
+    var blk = objc.Block(IosChoice, &.{objc.Object}).init(choice, IosChoice.pick);
+    const act = objc.msg(objc.Object, objc.class("UIAlertAction"), "actionWithTitle:style:handler:", .{ objc.nsString(label), style, &blk });
+    objc.msg(void, ac, "addAction:", .{act});
+}
+
+fn addIosField(ac: objc.Object, placeholder: []const u8, value: []const u8, secure: bool) ?objc.Object {
+    objc.msg(void, ac, "addTextFieldWithConfigurationHandler:", .{@as(?*anyopaque, null)});
+    const fields = objc.msg(?objc.Object, ac, "textFields", .{}) orelse return null;
+    const tf = objc.msg(?objc.Object, fields, "lastObject", .{}) orelse return null;
+    if (placeholder.len > 0) objc.msg(void, tf, "setPlaceholder:", .{objc.nsString(placeholder)});
+    if (value.len > 0) objc.msg(void, tf, "setText:", .{objc.nsString(value)});
+    if (secure) objc.msg(void, tf, "setSecureTextEntry:", .{objc.YES});
+    return objc.retain(tf);
+}
+
+fn sheetIos(t: *Tab, a: *Ask) void {
+    if (t.kea.opts.headless or a.kind == .open_panel) return answer(a, false, null);
+    const vc = platform.topViewController() orelse return answer(a, false, null);
+    const pool = objc.Pool.push();
+    defer pool.pop();
+    var buf: [512]u8 = undefined;
+    const page_title = if (a.host.len == 0) "This page says" else a.host;
+    const title: []const u8 = switch (a.kind) {
+        .alert, .confirm, .prompt => page_title,
+        .hand_off => std.fmt.bufPrint(&buf, "Open \u{201C}{s}\u{201D}?", .{a.message}) catch "Open?",
+        .trust => std.fmt.bufPrint(&buf, "{s} can't prove who it is", .{a.host}) catch "This site can't prove who it is",
+        .sign_in => std.fmt.bufPrint(&buf, "{s} asks you to sign in", .{a.host}) catch "Sign in",
+        .open_panel, .capture, .location, .notify => unreachable,
+    };
+    const info: []const u8 = switch (a.kind) {
+        .alert, .confirm, .prompt, .sign_in => a.message,
+        .hand_off => std.fmt.bufPrint(buf[256..], "{s} wants to open {s}.", .{ if (a.host.len == 0) "This page" else a.host, a.message }) catch "",
+        .trust => "Its certificate isn't trusted by this device. Someone could be reading what you send. Continue only if you know why it looks like this.",
+        .open_panel, .capture, .location, .notify => unreachable,
+    };
+    const ac = objc.retain(objc.msg(objc.Object, objc.class("UIAlertController"), "alertControllerWithTitle:message:preferredStyle:", .{
+        objc.nsString(title),
+        if (info.len > 0) objc.nsString(info) else @as(?objc.Object, null),
+        @as(objc.NSInteger, 1),
+    }));
+    a.alert = ac;
+    if (a.kind == .prompt) {
+        a.fields[0] = addIosField(ac, "", a.input.text(), false);
+    } else if (a.kind == .sign_in) {
+        a.fields[0] = addIosField(ac, "Name", "", false);
+        a.fields[1] = addIosField(ac, "Password", "", true);
+    }
+    if (a.kind == .alert) {
+        const ok_c = gpa.create(IosChoice) catch return answer(a, false, null);
+        ok_c.* = .{ .ask = a, .ok = true };
+        addIosAction(ac, "OK", 0, ok_c);
+    } else {
+        const ok_c = gpa.create(IosChoice) catch return answer(a, false, null);
+        const cancel_c = gpa.create(IosChoice) catch {
+            gpa.destroy(ok_c);
+            return answer(a, false, null);
+        };
+        ok_c.* = .{ .ask = a, .ok = true, .other = cancel_c };
+        cancel_c.* = .{ .ask = a, .ok = false, .other = ok_c };
+        const cancel_label: []const u8 = if (a.kind == .trust) "Go Back" else "Cancel";
+        const ok_label: []const u8 = switch (a.kind) {
+            .hand_off => "Open",
+            .trust => "Continue Anyway",
+            .sign_in => "Sign In",
+            else => "OK",
+        };
+        addIosAction(ac, cancel_label, 1, cancel_c);
+        addIosAction(ac, ok_label, if (a.kind == .trust) 2 else 0, ok_c);
+    }
+    a.sheet_up = true;
+    objc.msg(void, vc, "presentViewController:animated:completion:", .{ ac, objc.YES, @as(?*anyopaque, null) });
+}
 /// The same registrable domain (`Vault.registrable`), for handing off.
 pub fn sameSite(a: []const u8, b: []const u8) bool {
     const ra = registrable.registrable(gpa, a) catch return false;

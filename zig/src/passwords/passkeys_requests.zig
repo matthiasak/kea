@@ -4,6 +4,7 @@
 //! everything returned is autoreleased.
 const std = @import("std");
 const objc = @import("nanoui").objc;
+const platform = @import("../sys/platform.zig");
 const reply = @import("passkeys_reply.zig");
 
 /// A request body, as the page's script sent it (`[String: Any]`).
@@ -63,7 +64,11 @@ pub fn atLeast(major: objc.NSInteger, minor: objc.NSInteger) bool {
 
 /// Whether this Mac can derive keys from a passkey (`prfAvailable`).
 pub fn prfAvailable() bool {
-    return atLeast(15, 0);
+    return if (comptime platform.is_ios) atLeast(18, 0) else atLeast(15, 0);
+}
+
+fn securityKeysAvailable() bool {
+    return if (comptime platform.is_ios) atLeast(17, 4) else atLeast(14, 4);
 }
 
 pub fn nsData(bytes: []const u8) objc.Object {
@@ -192,13 +197,13 @@ fn ids(a: std.mem.Allocator, list: []const Descriptor) ![]const []const u8 {
 pub fn assertion(a: std.mem.Allocator, body: Body, rp: []const u8, client: objc.Object) !objc.Object {
     const allowed = try descriptors(a, field(body, "allowCredentials"));
     const uv = verification(str(body, "userVerification"));
-    const platform = objc.msg(objc.Object, provider("ASAuthorizationPlatformPublicKeyCredentialProvider", rp), "createCredentialAssertionRequestWithClientData:", .{client});
-    objc.msg(void, platform, "setAllowedCredentials:", .{platformDescriptors(allowed)});
-    objc.msg(void, platform, "setUserVerificationPreference:", .{uv});
-    setPrf(platform, prfAssertion(a, field(body, "prf"), try ids(a, allowed)));
+    const plat_req = objc.msg(objc.Object, provider("ASAuthorizationPlatformPublicKeyCredentialProvider", rp), "createCredentialAssertionRequestWithClientData:", .{client});
+    objc.msg(void, plat_req, "setAllowedCredentials:", .{platformDescriptors(allowed)});
+    objc.msg(void, plat_req, "setUserVerificationPreference:", .{uv});
+    setPrf(plat_req, prfAssertion(a, field(body, "prf"), try ids(a, allowed)));
     const requests = array();
-    add(requests, platform);
-    if (atLeast(14, 4)) {
+    add(requests, plat_req);
+    if (securityKeysAvailable()) {
         const key = objc.msg(objc.Object, provider("ASAuthorizationSecurityKeyPublicKeyCredentialProvider", rp), "createCredentialAssertionRequestWithClientData:", .{client});
         objc.msg(void, key, "setAllowedCredentials:", .{keyDescriptors(allowed)});
         objc.msg(void, key, "setUserVerificationPreference:", .{uv});
@@ -243,22 +248,22 @@ pub fn registration(a: std.mem.Allocator, body: Body, rp: []const u8, client: ob
     const requests = array();
     const es256 = std.mem.indexOfScalar(objc.NSInteger, algorithms.items, -7) != null;
     if (!eql(attachment, "cross-platform") and es256) {
-        const platform = objc.msg(objc.Object, provider("ASAuthorizationPlatformPublicKeyCredentialProvider", rp), "createCredentialRegistrationRequestWithClientData:name:userID:", .{ client, objc.nsString(name), nsData(user_id) });
-        objc.msg(void, platform, "setDisplayName:", .{objc.nsString(display)});
-        objc.msg(void, platform, "setUserVerificationPreference:", .{uv});
-        objc.msg(void, platform, "setAttestationPreference:", .{kind});
-        if (atLeast(14, 4)) objc.msg(void, platform, "setExcludedCredentials:", .{platformDescriptors(excluded)});
+        const plat_req = objc.msg(objc.Object, provider("ASAuthorizationPlatformPublicKeyCredentialProvider", rp), "createCredentialRegistrationRequestWithClientData:name:userID:", .{ client, objc.nsString(name), nsData(user_id) });
+        objc.msg(void, plat_req, "setDisplayName:", .{objc.nsString(display)});
+        objc.msg(void, plat_req, "setUserVerificationPreference:", .{uv});
+        objc.msg(void, plat_req, "setAttestationPreference:", .{kind});
+        if (securityKeysAvailable()) objc.msg(void, plat_req, "setExcludedCredentials:", .{platformDescriptors(excluded)});
         if (prfAvailable()) if (object(body, "prf")) |prf| {
             const cls = objc.class("ASAuthorizationPublicKeyCredentialPRFRegistrationInput");
             const input = if (prfValues(a, field(prf, "eval"))) |values|
                 objc.msg(objc.Object, objc.msg(objc.Object, objc.msg(objc.Object, cls, "alloc", .{}), "initWithInputValues:", .{values}), "autorelease", .{})
             else
                 objc.msg(objc.Object, cls, "checkForSupport", .{});
-            setPrf(platform, input);
+            setPrf(plat_req, input);
         };
-        add(requests, platform);
+        add(requests, plat_req);
     }
-    if (!eql(attachment, "platform") and atLeast(14, 4)) {
+    if (!eql(attachment, "platform") and securityKeysAvailable()) {
         const key = objc.msg(objc.Object, provider("ASAuthorizationSecurityKeyPublicKeyCredentialProvider", rp), "createCredentialRegistrationRequestWithClientData:displayName:name:userID:", .{ client, objc.nsString(display), objc.nsString(name), nsData(user_id) });
         const params = array();
         for (algorithms.items) |alg| add(params, objc.msg(objc.Object, objc.msg(objc.Object, objc.alloc("ASAuthorizationPublicKeyCredentialParameters"), "initWithAlgorithm:", .{alg}), "autorelease", .{}));

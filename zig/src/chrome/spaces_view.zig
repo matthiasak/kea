@@ -6,6 +6,7 @@ const std = @import("std");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;
 const ui = nanoui.ui;
+const platform = @import("../sys/platform.zig");
 const Browser = @import("../model/browser.zig").Browser;
 const Kea = @import("../app/kea.zig").Kea;
 const data = @import("../data/spaces.zig");
@@ -265,7 +266,7 @@ fn asked(b: *Browser, kind: @FieldType(Asked, "kind"), space: Uuid) ?*Asked {
 }
 
 fn window(b: *Browser) ?objc.Object {
-    return if (b.window) |w| w.nswindow else null;
+    return platform.nativeWindow(b.window);
 }
 
 pub fn ask(b: *Browser, kind: @FieldType(Asked, "kind"), space: Uuid) void {

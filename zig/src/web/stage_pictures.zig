@@ -8,6 +8,7 @@ const std = @import("std");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;
 const ui = nanoui.ui;
+const platform = @import("../sys/platform.zig");
 
 pub const Curve = enum {
     glide,
@@ -136,9 +137,14 @@ pub const StagePictures = struct {
             break :blk e.view;
         } else blk: {
             const v = objc.msg(objc.Object, objc.msg(objc.Object, pictureViewClass(), "alloc", .{}), "initWithFrame:", .{cgRect(rect)});
-            objc.msg(void, v, "setImageScaling:", .{@as(objc.NSUInteger, 2)}); // NSImageScaleNone
-            objc.msg(void, v, "setImageAlignment:", .{@as(objc.NSUInteger, 2)}); // NSImageAlignTopLeft
-            objc.msg(void, v, "setWantsLayer:", .{objc.YES});
+            if (comptime platform.is_ios) {
+                objc.msg(void, v, "setContentMode:", .{@as(objc.NSInteger, 2)}); // UIViewContentModeScaleAspectFill
+                objc.msg(void, v, "setClipsToBounds:", .{objc.YES});
+            } else {
+                objc.msg(void, v, "setImageScaling:", .{@as(objc.NSUInteger, 2)}); // NSImageScaleNone
+                objc.msg(void, v, "setImageAlignment:", .{@as(objc.NSUInteger, 2)}); // NSImageAlignTopLeft
+                objc.msg(void, v, "setWantsLayer:", .{objc.YES});
+            }
             self.entries.append(gpa, .{ .key = key, .view = v, .serial = serial, .radius = cached_radius, .ground = ground }) catch {
                 objc.release(v);
                 return;
@@ -147,7 +153,7 @@ pub const StagePictures = struct {
         };
         objc.setZig(view, @as(*anyopaque, @ptrFromInt(serial)));
         objc.msg(void, view, "setFrame:", .{cgRect(rect)});
-        objc.msg(void, view, "setAlphaValue:", .{@as(f64, 1)});
+        setViewAlpha(view, 1);
         objc.msg(void, view, "setImage:", .{image});
         styleLayer(view, radius, ground, border);
         bringToFront(stage_view, view);
@@ -202,9 +208,9 @@ pub const StagePictures = struct {
         const pool = objc.Pool.push();
         defer pool.pop();
         const data = objc.msg(?objc.Object, objc.class("NSData"), "dataWithBytes:length:", .{ bytes.ptr, bytes.len }) orelse return;
-        const img = objc.msg(?objc.Object, objc.msg(objc.Object, objc.class("NSImage"), "alloc", .{}), "initWithData:", .{data}) orelse return;
+        const img = objc.msg(?objc.Object, objc.alloc(if (comptime platform.is_ios) "UIImage" else "NSImage"), "initWithData:", .{data}) orelse return;
         defer objc.release(img);
-        sizeImageToFill(img, rect);
+        if (comptime !platform.is_ios) sizeImageToFill(img, rect);
         self.show(gpa, stage_view, key, img, rect, radius, ground, null);
     }
 
@@ -217,8 +223,10 @@ pub const StagePictures = struct {
             @abs(cur.size.width - rect.w) > 0.25 or @abs(cur.size.height - rect.h) > 0.25)
         {
             objc.msg(void, e.view, "setFrame:", .{cgRect(rect)});
-            if (isCoverKey(key)) {
-                if (objc.msg(?objc.Object, e.view, "image", .{})) |img| sizeImageToFill(img, rect);
+            if (comptime !platform.is_ios) {
+                if (isCoverKey(key)) {
+                    if (objc.msg(?objc.Object, e.view, "image", .{})) |img| sizeImageToFill(img, rect);
+                }
             }
         }
         if (e.radius != radius or !std.meta.eql(e.ground, ground)) {
@@ -233,6 +241,10 @@ pub const StagePictures = struct {
     /// using `NSAnimationContext.runAnimationGroup:` and `[[view animator] setFrame:]`.
     pub fn move(self: *StagePictures, key: u64, to_rect: ui.Rect, duration: f64, curve: Curve) void {
         const e = self.getEntry(key) orelse return;
+        if (comptime platform.is_ios) {
+            moveIos(e.view, cgRect(to_rect), duration);
+            return;
+        }
         const pool = objc.Pool.push();
         defer pool.pop();
         var act = MoveCtx{ .view = e.view, .rect = cgRect(to_rect), .duration = duration, .curve = curve };
@@ -256,6 +268,12 @@ pub const StagePictures = struct {
         const e = self.getEntry(key) orelse return;
         if (reduced) {
             self.fade(key, 0, 0.15, .ease_out, true);
+            return;
+        }
+        if (comptime platform.is_ios) {
+            const cur = objc.msg(objc.CGRect, e.view, "frame", .{});
+            const target = if (to_rect) |r| cgRect(r) else insetFraction(cur, 0.01);
+            travelIos(e, target, to_rect == null);
             return;
         }
         const pool = objc.Pool.push();
@@ -321,11 +339,15 @@ fn fadeView(view: objc.Object, serial: usize, to_alpha: f32, duration: f64, curv
     const pool = objc.Pool.push();
     defer pool.pop();
     if (duration <= 0) {
-        objc.msg(void, view, "setAlphaValue:", .{@as(f64, to_alpha)});
+        setViewAlpha(view, to_alpha);
         if (remove_after) {
             objc.setZig(view, @as(?*anyopaque, null));
             objc.msg(void, view, "removeFromSuperview", .{});
         }
+        return;
+    }
+    if (comptime platform.is_ios) {
+        fadeIos(view, serial, to_alpha, duration, remove_after);
         return;
     }
     var act = FadeCtx{ .view = view, .alpha = to_alpha, .duration = duration, .curve = curve };
@@ -367,6 +389,7 @@ const AsyncSnap = struct {
 /// `PaneStage.standIn`: a retained `NSImage` of `size`, so test runs on
 /// hidden windows have a valid image.
 pub fn standIn(size: ui.Size) ?objc.Object {
+    if (comptime platform.is_ios) return objc.new("UIImage");
     const w = @max(1, size.w);
     const h = @max(1, size.h);
     return objc.msg(?objc.Object, objc.msg(objc.Object, objc.class("NSImage"), "alloc", .{}), "initWithSize:", .{
@@ -473,38 +496,93 @@ fn styleLayer(view: objc.Object, radius: f32, ground: ui.Color, border: ?ui.Colo
 }
 
 fn cgColor(c: ui.Color) ?objc.Object {
-    const ns = objc.msg(objc.Object, objc.class("NSColor"), "colorWithSRGBRed:green:blue:alpha:", .{
-        @as(f64, c.r), @as(f64, c.g), @as(f64, c.b), @as(f64, c.a),
-    });
+    if (comptime platform.is_ios) {
+        const uc = objc.msg(objc.Object, objc.class("UIColor"), "colorWithRed:green:blue:alpha:", .{ @as(f64, c.r), @as(f64, c.g), @as(f64, c.b), @as(f64, c.a) });
+        return objc.msg(?objc.Object, uc, "CGColor", .{});
+    }
+    const ns = objc.msg(objc.Object, objc.class("NSColor"), "colorWithSRGBRed:green:blue:alpha:", .{ @as(f64, c.r), @as(f64, c.g), @as(f64, c.b), @as(f64, c.a) });
     return objc.msg(?objc.Object, ns, "CGColor", .{});
 }
 
 fn cgRect(r: ui.Rect) objc.CGRect {
-    return .{
-        .origin = .{ .x = r.x, .y = r.y },
-        .size = .{ .width = r.w, .height = r.h },
-    };
+    return .{ .origin = .{ .x = r.x, .y = r.y }, .size = .{ .width = r.w, .height = r.h } };
 }
 
 fn insetFraction(r: objc.CGRect, f: f64) objc.CGRect {
     const dx = r.size.width * f;
     const dy = r.size.height * f;
-    return .{
-        .origin = .{ .x = r.origin.x + dx, .y = r.origin.y + dy },
-        .size = .{ .width = @max(0, r.size.width - 2 * dx), .height = @max(0, r.size.height - 2 * dy) },
-    };
+    return .{ .origin = .{ .x = r.origin.x + dx, .y = r.origin.y + dy }, .size = .{ .width = @max(0, r.size.width - 2 * dx), .height = @max(0, r.size.height - 2 * dy) } };
 }
 
 fn pictureViewClass() objc.Class {
     return objc.defineClass(.{
         .name = "KeaStagePictureView",
-        .superclass = "NSImageView",
-        .methods = &.{
-            .{ .name = "hitTest:", .imp = &hitNothing, .types = "@@:{CGPoint=dd}" },
-        },
+        .superclass = if (comptime platform.is_ios) "UIImageView" else "NSImageView",
+        .methods = if (comptime platform.is_ios) &.{} else &.{.{ .name = "hitTest:", .imp = &hitNothing, .types = "@@:{CGPoint=dd}" }},
     });
 }
 
 fn hitNothing(_: objc.Object, _: objc.SEL, _: objc.CGPoint) callconv(.c) ?objc.Object {
     return null;
+}
+
+fn setViewAlpha(view: objc.Object, alpha: f32) void {
+    objc.msg(void, view, if (comptime platform.is_ios) "setAlpha:" else "setAlphaValue:", .{@as(f64, alpha)});
+}
+
+const IosAnim = struct {
+    view: objc.Object,
+    rect: ?objc.CGRect = null,
+    alpha: ?f32 = null,
+    fn run(s: *@This()) void {
+        if (s.rect) |r| objc.msg(void, s.view, "setFrame:", .{r});
+        if (s.alpha) |a| setViewAlpha(s.view, a);
+    }
+};
+
+fn onRemoveIos(d: *RemoveDone, _: objc.BOOL) void {
+    d.finish();
+}
+
+fn onThenFadeIos(d: *ThenFadeDone, _: objc.BOOL) void {
+    d.finish();
+}
+
+fn moveIos(view: objc.Object, rect: objc.CGRect, duration: f64) void {
+    if (duration <= 0) return objc.msg(void, view, "setFrame:", .{rect});
+    var act: IosAnim = .{ .view = view, .rect = rect };
+    var blk = objc.Block(IosAnim, &.{}).init(&act, IosAnim.run);
+    objc.msg(void, objc.class("UIView"), "animateWithDuration:animations:", .{ duration, &blk });
+}
+
+fn fadeIos(view: objc.Object, serial: usize, to_alpha: f32, duration: f64, remove_after: bool) void {
+    var act: IosAnim = .{ .view = view, .alpha = to_alpha };
+    var blk = objc.Block(IosAnim, &.{}).init(&act, IosAnim.run);
+    if (!remove_after) return objc.msg(void, objc.class("UIView"), "animateWithDuration:animations:", .{ duration, &blk });
+    const done = std.heap.c_allocator.create(RemoveDone) catch {
+        setViewAlpha(view, to_alpha);
+        objc.setZig(view, @as(?*anyopaque, null));
+        objc.msg(void, view, "removeFromSuperview", .{});
+        return;
+    };
+    done.* = .{ .view = objc.retain(view), .serial = serial };
+    var comp = objc.Block(RemoveDone, &.{objc.BOOL}).init(done, onRemoveIos);
+    objc.msg(void, objc.class("UIView"), "animateWithDuration:animations:completion:", .{ duration, &blk, &comp });
+}
+
+fn travelIos(e: *Entry, target: objc.CGRect, fade_too: bool) void {
+    var act: IosAnim = .{ .view = e.view, .rect = target, .alpha = if (fade_too) 0 else null };
+    var blk = objc.Block(IosAnim, &.{}).init(&act, IosAnim.run);
+    if (!fade_too) {
+        const after = std.heap.c_allocator.create(ThenFadeDone) catch return objc.msg(void, objc.class("UIView"), "animateWithDuration:animations:", .{ @as(f64, 0.32), &blk });
+        after.* = .{ .view = objc.retain(e.view), .serial = e.serial };
+        var comp = objc.Block(ThenFadeDone, &.{objc.BOOL}).init(after, onThenFadeIos);
+        objc.msg(void, objc.class("UIView"), "animateWithDuration:animations:completion:", .{ @as(f64, 0.32), &blk, &comp });
+    } else {
+        e.fading_out = true;
+        const done = std.heap.c_allocator.create(RemoveDone) catch return objc.msg(void, objc.class("UIView"), "animateWithDuration:animations:", .{ @as(f64, 0.32), &blk });
+        done.* = .{ .view = objc.retain(e.view), .serial = e.serial };
+        var comp = objc.Block(RemoveDone, &.{objc.BOOL}).init(done, onRemoveIos);
+        objc.msg(void, objc.class("UIView"), "animateWithDuration:animations:completion:", .{ @as(f64, 0.32), &blk, &comp });
+    }
 }

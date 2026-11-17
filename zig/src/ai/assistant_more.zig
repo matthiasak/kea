@@ -3,6 +3,7 @@
 const std = @import("std");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;
+const platform = @import("../sys/platform.zig");
 const json = @import("../data/json.zig");
 const cs = @import("../data/chats_store.zig");
 const ai = @import("ai.zig");
@@ -376,6 +377,19 @@ pub fn pasteFromClipboard(self: *Assistant) bool {
     if (nanoui.clipboard.readText(self.gpa) catch null) |txt| {
         defer self.gpa.free(txt);
         if (txt.len > 0) return false;
+    }
+    if (comptime platform.is_ios) {
+        const p_ios = objc.Pool.push();
+        defer p_ios.pop();
+        if (platform.readPasteboardImagePng()) |nsdata| {
+            const n = objc.msg(objc.NSUInteger, nsdata, "length", .{});
+            if (n > 0) {
+                const ptr = objc.msg([*]const u8, nsdata, "bytes", .{});
+                self.addAttachment("Clipboard Image.png", "image/png", ptr[0..n], true);
+                return true;
+            }
+        }
+        return false;
     }
     const pool = objc.Pool.push();
     defer pool.pop();

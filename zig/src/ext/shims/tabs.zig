@@ -9,6 +9,7 @@ const favicons = @import("../../web/favicons.zig");
 const Parts = @import("../../data/url.zig").Parts;
 const Tab = @import("../../web/tab.zig").Tab;
 const Extensions = @import("../controller.zig").Extensions;
+const platform = @import("../../sys/platform.zig");
 const Call = ans.Call;
 
 /// A tab as the shim names it: `i`, its place in its window's row as
@@ -50,23 +51,28 @@ fn favIconURL(owner: *Extensions, tab: *Tab) ?[]const u8 {
 fn small(gpa: std.mem.Allocator, png: []const u8) ?[]u8 {
     const pool = objc.Pool.push();
     defer pool.pop();
-    const side: objc.NSInteger = 32;
     const data = objc.msg(objc.Object, objc.class("NSData"), "dataWithBytes:length:", .{ png.ptr, png.len });
-    const image = objc.msg(?objc.Object, objc.alloc("NSImage"), "initWithData:", .{data}) orelse return null;
-    objc.autorelease(image);
-    const rep = objc.msg(?objc.Object, objc.alloc("NSBitmapImageRep"), "initWithBitmapDataPlanes:pixelsWide:pixelsHigh:bitsPerSample:samplesPerPixel:hasAlpha:isPlanar:colorSpaceName:bytesPerRow:bitsPerPixel:", .{
-        @as(?*anyopaque, null), side, side, @as(objc.NSInteger, 8), @as(objc.NSInteger, 4), objc.YES, objc.NO, objc.nsString("NSDeviceRGBColorSpace"), @as(objc.NSInteger, 0), @as(objc.NSInteger, 0),
-    }) orelse return null;
-    objc.autorelease(rep);
-    const ctx_class = objc.class("NSGraphicsContext");
-    objc.msg(void, ctx_class, "saveGraphicsState", .{});
-    objc.msg(void, ctx_class, "setCurrentContext:", .{objc.msg(objc.Object, ctx_class, "graphicsContextWithBitmapImageRep:", .{rep})});
-    objc.msg(void, image, "drawInRect:", .{objc.CGRect{ .size = .{ .width = 32, .height = 32 } }});
-    objc.msg(void, ctx_class, "restoreGraphicsState", .{});
-    const props = objc.msg(objc.Object, objc.class("NSDictionary"), "dictionary", .{});
-    // NSBitmapImageFileTypePNG
-    const out = objc.msg(?objc.Object, rep, "representationUsingType:properties:", .{ @as(objc.NSUInteger, 4), props }) orelse return null;
-    const bytes = @import("../value.zig").bytes(out);
+    const out = if (comptime platform.is_ios) blk: {
+        const image = objc.msg(?objc.Object, objc.class("UIImage"), "imageWithData:", .{data}) orelse return null;
+        break :blk platform.pngDataOfImage(image) orelse return null;
+    } else blk: {
+        const side: objc.NSInteger = 32;
+        const image = objc.msg(?objc.Object, objc.alloc("NSImage"), "initWithData:", .{data}) orelse return null;
+        objc.autorelease(image);
+        const rep = objc.msg(?objc.Object, objc.alloc("NSBitmapImageRep"), "initWithBitmapDataPlanes:pixelsWide:pixelsHigh:bitsPerSample:samplesPerPixel:hasAlpha:isPlanar:colorSpaceName:bytesPerRow:bitsPerPixel:", .{
+            @as(?*anyopaque, null), side, side, @as(objc.NSInteger, 8), @as(objc.NSInteger, 4), objc.YES, objc.NO, objc.nsString("NSDeviceRGBColorSpace"), @as(objc.NSInteger, 0), @as(objc.NSInteger, 0),
+        }) orelse return null;
+        objc.autorelease(rep);
+        const ctx_class = objc.class("NSGraphicsContext");
+        objc.msg(void, ctx_class, "saveGraphicsState", .{});
+        objc.msg(void, ctx_class, "setCurrentContext:", .{objc.msg(objc.Object, ctx_class, "graphicsContextWithBitmapImageRep:", .{rep})});
+        objc.msg(void, image, "drawInRect:", .{objc.CGRect{ .size = .{ .width = 32, .height = 32 } }});
+        objc.msg(void, ctx_class, "restoreGraphicsState", .{});
+        const props = objc.msg(objc.Object, objc.class("NSDictionary"), "dictionary", .{});
+        break :blk objc.msg(?objc.Object, rep, "representationUsingType:properties:", .{ @as(objc.NSUInteger, 4), props }) orelse return null;
+    };
+    const p_bytes = objc.msg(?[*]const u8, out, "bytes", .{});
+    const bytes: []const u8 = if (p_bytes) |pb| pb[0..objc.msg(objc.NSUInteger, out, "length", .{})] else &.{};
     const enc = std.base64.standard.Encoder;
     const prefix = "data:image/png;base64,";
     const url = gpa.alloc(u8, prefix.len + enc.calcSize(bytes.len)) catch return null;

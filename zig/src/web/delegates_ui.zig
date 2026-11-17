@@ -17,22 +17,28 @@ const nav = @import("delegates_nav.zig");
 const page_view = @import("page_view.zig");
 const state = @import("tab_state.zig");
 const dialogs = @import("dialogs.zig");
+const platform = @import("../sys/platform.zig");
 
-pub const methods = [_]objc.Method{
+const base_methods = [_]objc.Method{
     .{ .name = "webView:createWebViewWithConfiguration:forNavigationAction:windowFeatures:", .imp = &createWebView, .types = "@@:@@@@" },
     .{ .name = "webView:runJavaScriptAlertPanelWithMessage:initiatedByFrame:completionHandler:", .imp = &runAlert, .types = "v@:@@@@?" },
     .{ .name = "webView:runJavaScriptConfirmPanelWithMessage:initiatedByFrame:completionHandler:", .imp = &runConfirm, .types = "v@:@@@@?" },
     .{ .name = "webView:runJavaScriptTextInputPanelWithPrompt:defaultText:initiatedByFrame:completionHandler:", .imp = &runPrompt, .types = "v@:@@@@@?" },
-    .{ .name = "webView:runOpenPanelWithParameters:initiatedByFrame:completionHandler:", .imp = &runOpenPanel, .types = "v@:@@@@?" },
     .{ .name = "webView:didReceiveAuthenticationChallenge:completionHandler:", .imp = &challenged, .types = "v@:@@@?" },
     .{ .name = "webView:requestMediaCapturePermissionForOrigin:initiatedByFrame:type:decisionHandler:", .imp = &askedForCapture, .types = "v@:@@@q@?" },
+    .{ .name = "webViewDidClose:", .imp = &didClose, .types = "v@:@" },
+    .{ .name = "webViewWebContentProcessDidTerminate:", .imp = &didTerminate, .types = "v@:@" },
+};
+
+const mac_methods = if (platform.is_ios) [_]objc.Method{} else [_]objc.Method{
+    .{ .name = "webView:runOpenPanelWithParameters:initiatedByFrame:completionHandler:", .imp = &runOpenPanel, .types = "v@:@@@@?" },
     .{ .name = "_webView:requestNotificationPermissionForSecurityOrigin:decisionHandler:", .imp = &@import("notifications.zig").asked, .types = "v@:@@@?" },
     .{ .name = "_webView:requestGeolocationPermissionForOrigin:initiatedByFrame:decisionHandler:", .imp = &askedForLocation, .types = "v@:@@@@?" },
     .{ .name = "_webView:printFrame:pdfFirstPageSize:completionHandler:", .imp = &printFrame, .types = "v@:@@{CGSize=dd}@?" },
     .{ .name = "_webViewDidRequestPointerLock:completionHandler:", .imp = &pointerLock, .types = "v@:@@?" },
-    .{ .name = "webViewDidClose:", .imp = &didClose, .types = "v@:@" },
-    .{ .name = "webViewWebContentProcessDidTerminate:", .imp = &didTerminate, .types = "v@:@" },
 };
+
+pub const methods = base_methods ++ mac_methods;
 
 fn originHost(frame: objc.Object) []const u8 {
     const origin = objc.msg(objc.Object, frame, "securityOrigin", .{});
@@ -67,7 +73,7 @@ fn createWebView(self: objc.Object, _: objc.SEL, wv: objc.Object, configuration:
     const kind = objc.msg(objc.NSInteger, action, "navigationType", .{});
     const flags = objc.msg(objc.NSUInteger, action, "modifierFlags", .{});
     const user_gesture = kind == 0 or flags != 0 or
-        (objc.msg(objc.BOOL, action, "respondsToSelector:", .{objc.sel("_isUserInitiated")}) and objc.msg(objc.BOOL, action, "_isUserInitiated", .{}));
+        (if (comptime platform.is_ios) false else (objc.msg(objc.BOOL, action, "respondsToSelector:", .{objc.sel("_isUserInitiated")}) and objc.msg(objc.BOOL, action, "_isUserInitiated", .{})));
     const src_parts = Parts.parse(source.url());
     const src_host = if (src_parts) |sp| sp.hostName() orelse "" else "";
     const ext_src = if (src_parts) |sp| sp.schemeIs("chrome-extension") or sp.schemeIs("webkit-extension") or sp.schemeIs("kea-test") else false;
@@ -230,12 +236,25 @@ pub fn handOff(t: *Tab, wv: objc.Object, url: objc.Object, scheme: []const u8, a
         (top.len > 0 and asker.len > 0 and dialogs.sameSite(asker, top));
     const target = objc.msg(?objc.Object, action, "targetFrame", .{});
     if (!((target != null and objc.msg(objc.BOOL, target.?, "isMainFrame", .{})) or clicked or own_site)) return;
+    if (comptime platform.is_ios) {
+        if (!platform.canOpenExternalURL(url)) return;
+        if (t.kea.opts.hidden) return;
+        if (clicked and (std.mem.eql(u8, scheme, "mailto") or std.mem.eql(u8, scheme, "tel"))) {
+            _ = platform.openExternalURL(url);
+            return;
+        }
+        const name = if (scheme.len > 0) scheme else "another app";
+        const a = dialogs.make(t, .hand_off, top, name, null) orelse return;
+        a.subject = objc.retain(url);
+        dialogs.ask(t, a);
+        return;
+    }
     const workspace = objc.msg(objc.Object, objc.class("NSWorkspace"), "sharedWorkspace", .{});
     const app = objc.msg(?objc.Object, workspace, "URLForApplicationToOpenURL:", .{url}) orelse return;
     // A hidden run never shows the question.
     if (t.kea.opts.hidden) return;
     if (clicked and (std.mem.eql(u8, scheme, "mailto") or std.mem.eql(u8, scheme, "tel"))) {
-        _ = objc.msg(objc.BOOL, workspace, "openURL:", .{url});
+        _ = platform.openExternalURL(url);
         return;
     }
     const manager = objc.msg(objc.Object, objc.class("NSFileManager"), "defaultManager", .{});

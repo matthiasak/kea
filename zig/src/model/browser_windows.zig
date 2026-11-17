@@ -5,6 +5,7 @@
 const std = @import("std");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;
+const platform = @import("../sys/platform.zig");
 const Browser = @import("browser.zig").Browser;
 const Kea = @import("../app/kea.zig").Kea;
 const Tab = @import("../web/tab.zig").Tab;
@@ -22,7 +23,7 @@ pub fn moveToWindow(self: *Browser, tab: *Tab, target: ?*Browser, point: ?objc.C
     const destination = target orelse made: {
         var frame: ?objc.CGRect = null;
         if (point) |p| {
-            const size = if (self.window) |w| objc.msg(objc.CGRect, w.nswindow, "frame", .{}).size else browsers.default_size;
+            const size = if (self.window) |w| windowFrame(w).size else browsers.default_size;
             frame = .{ .origin = .{ .x = p.x - 120, .y = p.y - size.height + 20 }, .size = size };
         }
         const record: WindowRecord = .{ .id = Uuid.random(), .space = self.space_id };
@@ -37,9 +38,10 @@ pub fn moveToWindow(self: *Browser, tab: *Tab, target: ?*Browser, point: ?objc.C
 /// new one there. False when over this window, where the drag keeps its
 /// meaning, or when it can't leave (a pin, or the window's only tab).
 pub fn dragOut(self: *Browser, tab: *Tab, point: objc.CGPoint) bool {
+    if (comptime platform.is_ios) return false;
     if (tab.pin != null) return false;
     const w = self.window orelse return false;
-    const frame = objc.msg(objc.CGRect, w.nswindow, "frame", .{});
+    const frame = windowFrame(w);
     if (contains(frame, point, 12)) return false;
     if (under(self.kea, self, point) == null and self.tabs.items.len <= 1) return false;
     // After the drag has let go, not inside it.
@@ -67,12 +69,21 @@ const Later = struct {
 
 /// The open window under `point`, other than `self`'s.
 fn under(kea: *Kea, self: *Browser, point: objc.CGPoint) ?*Browser {
+    if (comptime platform.is_ios) return null;
     for (kea.browsers.items) |b| {
         if (b == self or b.shut) continue;
         const w = b.window orelse continue;
-        if (contains(objc.msg(objc.CGRect, w.nswindow, "frame", .{}), point, 0)) return b;
+        if (contains(windowFrame(w), point, 0)) return b;
     }
     return null;
+}
+
+fn windowFrame(w: *nanoui.Window) objc.CGRect {
+    if (comptime platform.is_ios) {
+        const f = w.frame();
+        return .{ .origin = .{ .x = f.x, .y = f.y }, .size = .{ .width = f.width, .height = f.height } };
+    }
+    return objc.msg(objc.CGRect, w.nswindow, "frame", .{});
 }
 
 fn contains(r: objc.CGRect, p: objc.CGPoint, outset: f64) bool {

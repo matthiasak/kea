@@ -7,13 +7,9 @@ const std = @import("std");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;
 const dispatch = @import("../sys/dispatch.zig");
+const platform = @import("../sys/platform.zig");
 const Then = @import("keys.zig").Then;
 
-extern "c" fn dispatch_after_f(when: u64, queue: dispatch.Queue, context: ?*anyopaque, work: dispatch.Work) void;
-extern "c" fn dispatch_time(when: u64, delta: i64) u64;
-extern "c" fn getuid() u32;
-const Passwd = extern struct { name: ?[*:0]u8, passwd: ?[*:0]u8, uid: u32, gid: u32, change: isize, class: ?[*:0]u8, gecos: ?[*:0]u8, dir: ?[*:0]u8, shell: ?[*:0]u8, expire: isize };
-extern "c" fn getpwuid(uid: u32) ?*Passwd;
 
 const Job = struct {
     gpa: std.mem.Allocator,
@@ -71,6 +67,7 @@ const Delivery = struct {
 /// `command` run in the background; `then(ctx, key)` on the main thread,
 /// the key on `gpa` (the receiver frees it), or null.
 pub fn run(gpa: std.mem.Allocator, command: []const u8, ctx: *anyopaque, then: Then) void {
+    if (comptime platform.is_ios) return then(ctx, null);
     // The job crosses threads: the C allocator, which is thread-safe.
     const a = std.heap.c_allocator;
     const j = a.create(Job) catch return then(ctx, null);
@@ -82,10 +79,18 @@ pub fn run(gpa: std.mem.Allocator, command: []const u8, ctx: *anyopaque, then: T
 }
 
 fn read(raw: ?*anyopaque) callconv(.c) void {
+    if (comptime platform.is_ios) return;
+    const M = struct {
+        extern "c" fn dispatch_after_f(when: u64, queue: dispatch.Queue, context: ?*anyopaque, work: dispatch.Work) void;
+        extern "c" fn dispatch_time(when: u64, delta: i64) u64;
+        extern "c" fn getuid() u32;
+        const Passwd = extern struct { name: ?[*:0]u8, passwd: ?[*:0]u8, uid: u32, gid: u32, change: isize, class: ?[*:0]u8, gecos: ?[*:0]u8, dir: ?[*:0]u8, shell: ?[*:0]u8, expire: isize };
+        extern "c" fn getpwuid(uid: u32) ?*Passwd;
+    };
     const j: *Job = @ptrCast(@alignCast(raw.?));
     const pool = objc.Pool.push();
     defer pool.pop();
-    const shell: []const u8 = if (getpwuid(getuid())) |pw| if (pw.shell) |s| std.mem.span(s) else "/bin/zsh" else "/bin/zsh";
+    const shell: []const u8 = if (M.getpwuid(M.getuid())) |pw| if (pw.shell) |s| std.mem.span(s) else "/bin/zsh" else "/bin/zsh";
     const task = objc.msg(objc.Object, objc.class("NSTask"), "new", .{});
     j.task = task;
     objc.msg(void, task, "setExecutableURL:", .{objc.msg(objc.Object, objc.class("NSURL"), "fileURLWithPath:", .{objc.nsString(shell)})});
@@ -103,7 +108,7 @@ fn read(raw: ?*anyopaque) callconv(.c) void {
         return j.unref();
     }
     const background = dispatch.dispatch_get_global_queue(dispatch.qos_user_initiated, 0);
-    dispatch_after_f(dispatch_time(0, 10 * std.time.ns_per_s), background, j, timedOut);
+    M.dispatch_after_f(M.dispatch_time(0, 10 * std.time.ns_per_s), background, j, timedOut);
     const handle = objc.msg(objc.Object, out, "fileHandleForReading", .{});
     const data = objc.msg(objc.Object, handle, "readDataToEndOfFile", .{});
     const len = objc.msg(objc.NSUInteger, data, "length", .{});
@@ -113,6 +118,11 @@ fn read(raw: ?*anyopaque) callconv(.c) void {
 }
 
 fn timedOut(raw: ?*anyopaque) callconv(.c) void {
+    if (comptime platform.is_ios) return;
+    const M = struct {
+        extern "c" fn dispatch_after_f(when: u64, queue: dispatch.Queue, context: ?*anyopaque, work: dispatch.Work) void;
+        extern "c" fn dispatch_time(when: u64, delta: i64) u64;
+    };
     const j: *Job = @ptrCast(@alignCast(raw.?));
     j.answer(null);
     const task = j.task orelse return j.unref();
@@ -120,7 +130,7 @@ fn timedOut(raw: ?*anyopaque) callconv(.c) void {
     objc.msg(void, task, "terminate", .{});
     // An interactive shell ignores the first; the timer's hold passes to the kill.
     const background = dispatch.dispatch_get_global_queue(dispatch.qos_user_initiated, 0);
-    dispatch_after_f(dispatch_time(0, std.time.ns_per_s), background, j, killed);
+    M.dispatch_after_f(M.dispatch_time(0, std.time.ns_per_s), background, j, killed);
 }
 
 fn killed(raw: ?*anyopaque) callconv(.c) void {

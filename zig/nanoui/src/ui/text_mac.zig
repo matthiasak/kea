@@ -52,6 +52,9 @@ pub const Glyph = struct { font: u16, glyph: u16, x: f32, y: f32, index: u32 = 0
 
 pub const Layout = struct { width: f32, glyphs: []const Glyph };
 
+/// Shaped glyphs by the chunk (as wrapped lines are, `wrap_cache.zig`).
+const GlyphSlab = @import("wrap_cache.zig").Slab(Glyph, 65536);
+
 /// A line of wrapped text: a byte range and its width.
 pub const Line = struct { start: usize, end: usize, width: f32 };
 
@@ -74,11 +77,18 @@ pub const TextSystem = struct {
     tables: std.AutoHashMapUnmanaged(FontKey, *shaper.Table) = .empty,
     layouts: std.AutoHashMapUnmanaged(u64, Layout) = .empty,
     previous: std.AutoHashMapUnmanaged(u64, Layout) = .empty,
+    /// The glyphs of `layouts` and of `previous`: once warmed, shaping needn't reach the heap.
+    cur_glyphs: GlyphSlab = .{},
+    prev_glyphs: GlyphSlab = .{},
     wraps: @import("wrap_cache.zig").WrapCache(Line) = .{},
     scratch_glyphs: std.ArrayList(u16) = .empty,
     scratch_points: std.ArrayList(objc.CGPoint) = .empty,
     scratch_bytes_of: std.ArrayList(u32) = .empty,
     scratch_indices: std.ArrayList(cf.CFIndex) = .empty,
+    /// The glyphs of the line being shaped, before the slab copies them.
+    scratch_out: std.ArrayList(Glyph) = .empty,
+    /// The lines of the wrap being made, before the cache copies them.
+    scratch_lines: std.ArrayList(Line) = .empty,
     /// The theme's font families (null: the system's).
     family: ?[]const u8 = null,
     mono_family: ?[]const u8 = null,
@@ -102,15 +112,17 @@ pub const TextSystem = struct {
         self.tables.deinit(self.gpa);
         for (self.run_fonts.items) |f| cf.CFRelease(f);
         self.run_fonts.deinit(self.gpa);
-        freeLayouts(self.gpa, &self.layouts);
-        freeLayouts(self.gpa, &self.previous);
         self.layouts.deinit(self.gpa);
         self.previous.deinit(self.gpa);
+        self.cur_glyphs.deinit(self.gpa);
+        self.prev_glyphs.deinit(self.gpa);
         self.wraps.deinit(self.gpa);
         self.scratch_glyphs.deinit(self.gpa);
         self.scratch_points.deinit(self.gpa);
         self.scratch_bytes_of.deinit(self.gpa);
         self.scratch_indices.deinit(self.gpa);
+        self.scratch_out.deinit(self.gpa);
+        self.scratch_lines.deinit(self.gpa);
         self.atlas.deinit();
     }
 
@@ -151,8 +163,10 @@ pub const TextSystem = struct {
         self.tables.clearRetainingCapacity();
         for (self.run_fonts.items) |f| cf.CFRelease(f);
         self.run_fonts.clearRetainingCapacity();
-        freeLayouts(self.gpa, &self.layouts);
-        freeLayouts(self.gpa, &self.previous);
+        self.layouts.clearRetainingCapacity();
+        self.previous.clearRetainingCapacity();
+        self.cur_glyphs.reset();
+        self.prev_glyphs.reset();
         self.wraps.clear(self.gpa);
         self.atlas.reset();
     }
@@ -175,16 +189,12 @@ pub const TextSystem = struct {
     pub fn beginFrame(self: *TextSystem) void {
         self.atlas.reset_during_frame = false;
         if (self.layouts.count() >= 4096) {
-            freeLayouts(self.gpa, &self.previous);
+            self.previous.clearRetainingCapacity();
+            self.prev_glyphs.reset();
             std.mem.swap(std.AutoHashMapUnmanaged(u64, Layout), &self.layouts, &self.previous);
+            std.mem.swap(GlyphSlab, &self.cur_glyphs, &self.prev_glyphs);
         }
         self.wraps.beginFrame(self.gpa);
-    }
-
-    fn freeLayouts(gpa: std.mem.Allocator, map: *std.AutoHashMapUnmanaged(u64, Layout)) void {
-        var it = map.valueIterator();
-        while (it.next()) |l| gpa.free(l.glyphs);
-        map.clearRetainingCapacity();
     }
 
     pub fn font(self: *TextSystem, style: types.TextStyle) Font {
@@ -243,19 +253,17 @@ pub const TextSystem = struct {
     /// A layout made in this frame or the last.
     pub fn cached(self: *TextSystem, k: u64) ?Layout {
         if (self.layouts.get(k)) |l| return l;
-        if (self.previous.fetchRemove(k)) |kv| {
-            self.layouts.put(self.gpa, k, kv.value) catch {};
-            return kv.value;
-        }
-        return null;
+        const kv = self.previous.fetchRemove(k) orelse return null;
+        // Last frame's slab goes at the next turn: this frame keeps its own copy.
+        const glyphs = self.cur_glyphs.alloc(self.gpa, kv.value.glyphs.len) orelse return null;
+        @memcpy(glyphs, kv.value.glyphs);
+        return self.keep(k, .{ .width = kv.value.width, .glyphs = glyphs });
     }
 
-    /// Keeps a new layout for this frame and the next.
+    /// Keeps a new layout for this frame and the next; its glyphs are the
+    /// slab's, good that long even when the map has no room to remember it.
     pub fn keep(self: *TextSystem, k: u64, l: Layout) Layout {
-        self.layouts.put(self.gpa, k, l) catch {
-            self.gpa.free(l.glyphs);
-            return .{ .width = l.width, .glyphs = &.{} };
-        };
+        self.layouts.put(self.gpa, k, l) catch {};
         return l;
     }
 
@@ -267,11 +275,11 @@ pub const TextSystem = struct {
         return self.glyphsOf(ln, s);
     }
 
-    /// The glyphs of a shaped line of `s`, with byte offsets.
+    /// The glyphs of a shaped line of `s`, with byte offsets, in this frame's slab.
     pub fn glyphsOf(self: *TextSystem, ln: cf.CTLineRef, s: []const u8) !Layout {
         const w: f32 = @floatCast(cf.CTLineGetTypographicBounds(ln, null, null, null));
-        var glyphs: std.ArrayList(Glyph) = .empty;
-        errdefer glyphs.deinit(self.gpa);
+        const out = &self.scratch_out;
+        out.clearRetainingCapacity();
         const bytes_of = &self.scratch_bytes_of;
         bytes_of.clearRetainingCapacity();
         {
@@ -304,10 +312,12 @@ pub const TextSystem = struct {
             for (self.scratch_glyphs.items, self.scratch_points.items, indices.items) |g, p, u| {
                 const u16i: usize = @intCast(@max(0, u));
                 const at = if (u16i < bytes_of.items.len) bytes_of.items[u16i] else @as(u32, @intCast(s.len));
-                try glyphs.append(self.gpa, .{ .font = fid, .glyph = g, .x = @floatCast(p.x), .y = @floatCast(p.y), .index = at });
+                try out.append(self.gpa, .{ .font = fid, .glyph = g, .x = @floatCast(p.x), .y = @floatCast(p.y), .index = at });
             }
         }
-        return .{ .width = w, .glyphs = try glyphs.toOwnedSlice(self.gpa) };
+        const glyphs = self.cur_glyphs.alloc(self.gpa, out.items.len) orelse return error.OutOfMemory;
+        @memcpy(glyphs, out.items);
+        return .{ .width = w, .glyphs = glyphs };
     }
 
     /// Printable ASCII through the cached tables, null if it needs CoreText.
@@ -327,7 +337,7 @@ pub const TextSystem = struct {
         var xs: [256]f32 = undefined;
         const w = t.layout(self.gpa, s, gs[0..s.len], xs[0..s.len]) orelse return null;
         const fid = self.fontId(@ptrCast(t.run_font orelse return null));
-        const glyphs = try self.gpa.alloc(Glyph, s.len);
+        const glyphs = self.cur_glyphs.alloc(self.gpa, s.len) orelse return error.OutOfMemory;
         for (glyphs, gs[0..s.len], xs[0..s.len], 0..) |*g, id, x, i| g.* = .{ .font = fid, .glyph = id, .x = x, .y = 0, .index = @intCast(i) };
         return .{ .width = w, .glyphs = glyphs };
     }
@@ -356,12 +366,8 @@ pub const TextSystem = struct {
         const styled = rich.styled(spans);
         const k = key(s, style, (@as(u64, @intFromFloat(@max(0, @min(max_width, 1e6)))) + 2) ^ (if (styled) rich.spansHash(spans, 0, s.len) else 0));
         if (self.wraps.get(self.gpa, k)) |lines| return lines;
-        if (self.oneLine(s, style, spans, max_width)) |line_| {
-            const one = self.gpa.alloc(Line, 1) catch return &.{};
-            one[0] = line_;
-            return self.wraps.put(self.gpa, k, one);
-        }
-        return self.wraps.put(self.gpa, k, self.breakLines(s, style, spans, max_width) catch return &.{});
+        if (self.oneLine(s, style, spans, max_width)) |line_| return self.wraps.put(self.gpa, k, &.{line_});
+        return self.wraps.put(self.gpa, k, self.typeset(s, style, spans, max_width));
     }
 
     /// `s` as one line, when it has no line breaks and fits: what CoreText
@@ -379,11 +385,16 @@ pub const TextSystem = struct {
         return .{ .start = 0, .end = trimmed.len, .width = w };
     }
 
-    /// `s` broken where CoreText's typesetter suggests.
+    /// `s` broken where CoreText's typesetter suggests; the caller's to free.
     pub fn breakLines(self: *TextSystem, s: []const u8, style: types.TextStyle, spans: []const types.Span, max_width: f32) ![]Line {
+        return self.gpa.dupe(Line, self.typeset(s, style, spans, max_width));
+    }
+
+    /// The same, in `scratch_lines` until the next wrap.
+    fn typeset(self: *TextSystem, s: []const u8, style: types.TextStyle, spans: []const types.Span, max_width: f32) []const Line {
         const styled = rich.styled(spans);
-        var lines: std.ArrayList(Line) = .empty;
-        defer lines.deinit(self.gpa);
+        const lines = &self.scratch_lines;
+        lines.clearRetainingCapacity();
         const attr = if (styled) rich.attributed(self, s, style, spans, 0) else cf.attributed(s, self.font(style).ref);
         defer cf.CFRelease(attr);
         const ts = cf.CTTypesetterCreateWithAttributedString(attr).?;
@@ -401,7 +412,7 @@ pub const TextSystem = struct {
             start16 += n;
         }
         if (lines.items.len == 0) lines.append(self.gpa, .{ .start = 0, .end = 0, .width = 0 }) catch {};
-        return lines.toOwnedSlice(self.gpa);
+        return lines.items;
     }
 
     /// The x offset of the caret before byte `index` of `s`.

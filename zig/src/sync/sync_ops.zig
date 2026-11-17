@@ -6,6 +6,7 @@
 //! the jobs run on Sync's queue.
 const std = @import("std");
 const objc = @import("nanoui").objc;
+const platform = @import("../sys/platform.zig");
 const json = @import("../data/json.zig");
 const core = @import("core.zig");
 const keyring = @import("keyring.zig");
@@ -469,12 +470,8 @@ pub fn readKinds(defaults: objc.Object) sync_mod.Kinds {
     return out;
 }
 
-extern "c" fn SCDynamicStoreCopyComputerName(store: ?*anyopaque, encoding: ?*u32) ?objc.Object;
-
 pub fn computerName(gpa: Allocator) []u8 {
     const pool = objc.Pool.push();
     defer pool.pop();
-    const s = SCDynamicStoreCopyComputerName(null, null) orelse return dupe(gpa, "Mac");
-    defer objc.release(s);
-    return dupe(gpa, objc.fromNSString(s));
+    return platform.deviceName(gpa) orelse dupe(gpa, if (comptime platform.is_ios) "iPhone" else "Mac");
 }

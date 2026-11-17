@@ -16,7 +16,7 @@ const layout = @import("math/layout.zig");
 const Ctx = view.Ctx;
 
 /// `src` laid out in `ms` at `size`, kept between frames with the answer.
-fn mathBox(x: *const Ctx, src: []const u8, ms: layout.MathStyle, size: f32) ?layout.Box {
+pub fn mathBox(x: *const Ctx, src: []const u8, ms: layout.MathStyle, size: f32) ?layout.Box {
     var h = std.hash.Wyhash.init(@intFromEnum(ms));
     h.update(src);
     h.update(std.mem.asBytes(&size));
@@ -38,7 +38,7 @@ pub fn displayBlock(x: *const Ctx, text: []const u8, raw: []const u8, cp: rich.C
     const z = x.o.zoom;
     const th = theme.MdTheme.of(c.theme.dark, x.p);
     const box = mathBox(x, text, .display, 13.5 * z) orelse return;
-    const i = c.open(.{ .direction = .row, .width = .fill, .padding = .xy(4, 6 * z), .radius = 8, .background = th.math_block_bg, .selectable = true }, null);
+    const i = c.open(.{ .direction = .row, .width = .fill, .padding = .xy(8, 8 * z), .radius = 8, .background = th.math_block_bg, .selectable = true }, null);
     defer c.end();
     const wide = if (c.rects.get(c.node(i).id)) |r| box.w + 12 > r.w else false;
     c.node(i).style.justify = if (wide) .start else .center;
@@ -60,12 +60,19 @@ pub fn inlineRich(x: *const Ctx, shown: inline_.Shown, spans: []const ui.Span, s
     const a = c.alloc();
     const str = shown.text;
     const th = theme.MdTheme.of(c.theme.dark, x.p);
-    const outer = c.open(.{ .direction = .column, .width = if (avail_in == null and style.wrap) .fill else .auto, .selectable = selectable }, null);
+    const outer = c.open(.{ .direction = .column, .gap = 2.5 * x.o.zoom, .width = if (avail_in == null and style.wrap) .fill else .auto, .selectable = selectable }, null);
     defer c.end();
-    const avail: f32 = if (!style.wrap) std.math.inf(f32) else avail_in orelse if (c.rects.get(c.node(outer).id)) |r| r.w else blk: {
+    const outer_id = c.node(outer).id;
+    const box = x.st.boxState(x.b.gpa, outer_id);
+    const avail: f32 = if (!style.wrap) std.math.inf(f32) else avail_in orelse if (c.rects.get(outer_id)) |r| blk: {
+        if (box.packed_w > 0 and @abs(box.packed_w - r.w) > 0.5) c.animationFrame();
+        box.packed_w = r.w;
+        break :blk r.w;
+    } else blk: {
         c.animationFrame();
-        break :blk @max(160, x.b.prefs.chat_width - 72);
+        break :blk @max(160, @min(c.size.w - 48, x.b.prefs.chat_width - 72));
     };
+    const pack_w: f32 = if (std.math.isInf(avail)) avail else @max(60, avail - 4);
     const boxes = a.alloc(?layout.Box, shown.maths.len) catch return;
     for (shown.maths, boxes) |m, *b| b.* = mathBox(x, m.tex, .text, style.size);
 
@@ -75,7 +82,7 @@ pub fn inlineRich(x: *const Ctx, shown: inline_.Shown, spans: []const ui.Span, s
     var mi: usize = 0;
     while (pos < str.len) {
         if (mi < shown.maths.len and shown.maths[mi].start == pos) {
-            const w = if (boxes[mi]) |b| b.w + 2 else 0;
+            const w = if (boxes[mi]) |b| b.w + 4 else 0;
             items.append(a, .{ .start = pos, .end = shown.maths[mi].end, .math = mi, .w = w }) catch return;
             pos = shown.maths[mi].end;
             mi += 1;
@@ -104,7 +111,7 @@ pub fn inlineRich(x: *const Ctx, shown: inline_.Shown, spans: []const ui.Span, s
             x_at = 0;
             continue;
         }
-        if (x_at > 0 and x_at + it.w > avail) {
+        if (x_at > 0 and x_at + it.w > pack_w) {
             breaks.append(a, k) catch return;
             x_at = 0;
         }
@@ -121,7 +128,7 @@ pub fn inlineRich(x: *const Ctx, shown: inline_.Shown, spans: []const ui.Span, s
         const line = items.items[from..to];
         var asc = p_asc;
         for (line) |it| if (it.math) |m| if (boxes[m]) |b| {
-            asc = @max(asc, b.ascent + 1);
+            asc = @max(asc, b.ascent + 1.5);
         };
         ui.row(c, .{ .align_items = .start });
         defer ui.end(c);
@@ -133,23 +140,28 @@ pub fn inlineRich(x: *const Ctx, shown: inline_.Shown, spans: []const ui.Span, s
                 continue;
             }
             // After a line break the text copies on from a new line.
-            const join = if (it.start == 0) cm.join else if (str[it.start - 1] == '\n') "\n" else "";
+            const prev_wrapped_space = from > 0 and k == 0 and !items.items[from - 1].nl and it.start > 0 and str[it.start - 1] == ' ';
+            const join = if (it.start == 0) cm.join else if (str[it.start - 1] == '\n') "\n" else if (prev_wrapped_space) " " else "";
             if (it.math) |m| {
                 k += 1;
                 const b = boxes[m] orelse continue;
                 const raw = shown.maths[m].raw;
                 ui.column(c, .{ .padding = .{ .top = asc - b.ascent - 1 } });
-                const cv = ui.canvas(c, .{ .width = .{ .px = b.w + 2 }, .height = .{ .px = b.height() + 2 } });
+                const cv = ui.canvas(c, .{ .width = .{ .px = b.w + 4 }, .height = .{ .px = b.height() + 3 } });
                 cv.copy_text = c.print("{s}{s}{s}", .{ if (it.start == 0) cm.prefix else "", raw, if (it.end == str.len) cm.suffix else "" });
                 cv.copy_join = join;
-                layout.emit(cv, b, 1, 1 + b.ascent, th.math_ink, x.p.muted, 1.0);
+                layout.emit(cv, b, 2, 1.5 + b.ascent, th.math_ink, x.p.muted, 1.0);
                 ui.end(c);
                 continue;
             }
-            // The line's prose up to its next formula, one text.
+            // The line's prose up to its next formula, one text; trim trailing spaces only at wrapped line ends.
             var e = k;
             while (e < line.len and line[e].math == null and !line[e].nl) e += 1;
-            prose(x, str[0..], shown.links, spans, style, cm, line[k].start, line[e - 1].end, join, asc - p_asc);
+            var end_b = line[e - 1].end;
+            if (e == line.len and to < items.items.len) {
+                while (end_b > line[k].start and str[end_b - 1] == ' ') end_b -= 1;
+            }
+            prose(x, str[0..], shown.links, spans, style, cm, line[k].start, end_b, join, asc - p_asc, pack_w);
             k = e;
         }
     }
@@ -157,7 +169,7 @@ pub fn inlineRich(x: *const Ctx, shown: inline_.Shown, spans: []const ui.Span, s
 
 /// Bytes [s, e) of `str` as one unwrapped text, `top` down: its spans,
 /// links and source map cut to it.
-fn prose(x: *const Ctx, str: []const u8, links: []const inline_.Link, spans: []const ui.Span, style: ui.TextStyle, cm: ui.CopyMap, s: usize, e: usize, join: []const u8, top: f32) void {
+fn prose(x: *const Ctx, str: []const u8, links: []const inline_.Link, spans: []const ui.Span, style: ui.TextStyle, cm: ui.CopyMap, s: usize, e: usize, join: []const u8, top: f32, max_w: f32) void {
     const a = x.c.alloc();
     var sub_spans: std.ArrayList(ui.Span) = .empty;
     for (spans) |sp| if (sp.end > s and sp.start < e) {
@@ -177,8 +189,9 @@ fn prose(x: *const Ctx, str: []const u8, links: []const inline_.Link, spans: []c
     };
     const mapped = cm.open.len > e and cm.close.len > e;
     var st = style;
-    st.wrap = false;
-    rich.leaf(x, .{ .padding = .{ .top = top } }, str[s..e], sub_links.items, sub_spans.items, st, .{
+    const overlong = !std.math.isInf(max_w) and rich.width(x.c, str, spans, style, s, e) > max_w + 2;
+    st.wrap = overlong;
+    rich.leaf(x, .{ .width = if (overlong) .fill else .auto, .padding = .{ .top = top } }, str[s..e], sub_links.items, sub_spans.items, st, .{
         .src = cm.src,
         .open = if (mapped) cm.open[s .. e + 1] else &.{},
         .close = if (mapped) cm.close[s .. e + 1] else &.{},

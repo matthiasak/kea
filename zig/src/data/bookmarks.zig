@@ -10,6 +10,7 @@ const address = @import("../model/address.zig");
 const Store = @import("store.zig").Store;
 const Uuid = json.Uuid;
 const undo_ops = @import("bookmarks_undo.zig");
+pub const category = @import("bookmarks_category.zig");
 
 pub const Bookmark = struct {
     id: Uuid,
@@ -17,6 +18,8 @@ pub const Bookmark = struct {
     /// Null for a folder.
     url: ?[]const u8 = null,
     children: ?[]Bookmark = null,
+    /// The topic a top-level site is filed under (bookmarks_category.zig); null for none.
+    category: ?[]const u8 = null,
 
     pub fn isFolder(b: Bookmark) bool {
         return b.url == null;
@@ -153,9 +156,8 @@ pub const Bookmarks = struct {
         };
     }
 
-    /// Every site and folder whose title or address holds all the words,
-    /// with the folders it sits in (chrome.bookmarks.search's rule). On `a`,
-    /// meant to be an arena.
+    /// Every site and folder whose title or address holds all the words, with the
+    /// folders it sits in (chrome.bookmarks.search's rule). On `a`, meant to be an arena.
     pub fn matches(self: *const Bookmarks, a: std.mem.Allocator, text: []const u8) ![]Match {
         const lowered = try url.lower(a, text);
         var words: std.ArrayList([]const u8) = .empty;
@@ -193,8 +195,7 @@ pub const Bookmarks = struct {
         }
     }
 
-    /// The folders `id` sits in, outermost first; empty at the top level,
-    /// null when it isn't here. On `a`.
+    /// The folders `id` sits in, outermost first (empty at the top level); null when it isn't here. On `a`.
     pub fn pathTo(self: *const Bookmarks, a: std.mem.Allocator, id: Uuid) !?[]*const Bookmark {
         var above: std.ArrayList(*const Bookmark) = .empty;
         return if (try walkPath(a, self.roots, id, &above)) above.items else null;
@@ -301,10 +302,9 @@ pub const Bookmarks = struct {
         self.commit(&w);
     }
 
-    /// Takes bookmarks and whole folders out of wherever they sit and puts
-    /// them, in reading order, into `into` (the top level for null) from
-    /// `at` among what is there, or at the end. `at` counts the list as it
-    /// reads before the move. Moving a folder into itself is refused.
+    /// Takes bookmarks and whole folders out of wherever they sit and puts them, in reading order, into
+    /// `into` (the top level for null) from `at` (counted as the list reads before the move), or at the end.
+    /// Refused for a folder into itself. At the top level a site takes on its new neighbours' category.
     pub fn move(self: *Bookmarks, moving: []const Uuid, into: ?Uuid, at: ?usize) void {
         var w = self.begin() orelse return;
         const a = w.allocator();
@@ -324,6 +324,7 @@ pub const Bookmarks = struct {
             const ok = place(a, node, into, if (start) |s| s + i else null, &w.roots) catch false;
             if (!ok) return w.drop();
         }
+        if (into == null) category.adoptNeighborCategory(a, w.roots, @min(start orelse w.roots.len, w.roots.len - nodes.len), nodes.len);
         self.commit(&w);
     }
 
@@ -346,13 +347,13 @@ pub const Bookmarks = struct {
         return made.id;
     }
 
-    /// One folder's own list (the top level for null): folders first, each
-    /// kind by name, or the sites by site and then name.
+    /// One folder's own list (the top level for null): folders first, each kind by name, or the sites by
+    /// site and then name. A top level filed by category keeps that order, each category sorted on its own.
     pub fn sort(self: *Bookmarks, folder_id: ?Uuid, key: SortKey) void {
         var w = self.begin() orelse return;
         if (folder_id) |id| {
             if (findMut(w.roots, id)) |f| if (f.children) |kids| ordered(kids, key);
-        } else ordered(w.roots, key);
+        } else if (category.countCategories(w.roots) > 0) category.sortWithinRuns(w.roots, key, before) else ordered(w.roots, key);
         self.commit(&w);
     }
 
@@ -419,7 +420,7 @@ pub const Bookmarks = struct {
     }
 
     /// The changed tree kept and saved, or dropped when nothing changed.
-    fn commit(self: *Bookmarks, w: *Work) void {
+    pub fn commit(self: *Bookmarks, w: *Work) void {
         if (same(w.roots, self.roots)) return w.drop();
         self.set(w);
     }
@@ -458,6 +459,7 @@ pub const Bookmarks = struct {
         return n;
     }
 
+    pub const cat = category;
     pub const merge = @import("bookmarks_merge.zig");
     pub const take = merge.take;
     pub const takeNoting = merge.takeNoting;
@@ -469,8 +471,7 @@ pub const Bookmarks = struct {
     pub const stopUndo = undo_ops.stop;
 };
 
-// ponytail: id sets are slices scanned linearly, O(n·m); a hash set if a
-// manager selection of thousands ever feels slow.
+// ponytail: id sets are slices scanned linearly, O(n·m); a hash set if selections of thousands feel slow.
 pub fn has(set: []const Uuid, id: Uuid) bool {
     for (set) |x| if (x.eql(id)) return true;
     return false;
@@ -479,7 +480,7 @@ pub fn has(set: []const Uuid, id: Uuid) bool {
 fn same(a: []const Bookmark, b: []const Bookmark) bool {
     if (a.len != b.len) return false;
     for (a, b) |x, y| {
-        if (!x.id.eql(y.id) or !std.mem.eql(u8, x.title, y.title)) return false;
+        if (!x.id.eql(y.id) or !std.mem.eql(u8, x.title, y.title) or !category.optEq(x.category, y.category)) return false;
         if ((x.url == null) != (y.url == null) or (x.url != null and !std.mem.eql(u8, x.url.?, y.url.?))) return false;
         if ((x.children == null) != (y.children == null)) return false;
         if (x.children != null and !same(x.children.?, y.children.?)) return false;
@@ -503,7 +504,7 @@ fn find(nodes: []const Bookmark, id: Uuid) ?*const Bookmark {
     return null;
 }
 
-fn findMut(nodes: []Bookmark, id: Uuid) ?*Bookmark {
+pub fn findMut(nodes: []Bookmark, id: Uuid) ?*Bookmark {
     for (nodes) |*b| {
         if (b.id.eql(id)) return b;
         if (b.children) |kids| if (findMut(kids, id)) |found| return found;
@@ -584,7 +585,7 @@ fn before(key: SortKey, x: Bookmark, y: Bookmark) bool {
 }
 
 /// Its host without www, as `sort(by: .site)` reads it.
-fn siteOf(b: Bookmark) []const u8 {
+pub fn siteOf(b: Bookmark) []const u8 {
     const h = (url.Parts.parse(b.url orelse return "") orelse return "").hostName() orelse return "";
     return if (std.ascii.startsWithIgnoreCase(h, "www.")) h[4..] else h;
 }
@@ -592,4 +593,5 @@ fn siteOf(b: Bookmark) []const u8 {
 test {
     _ = @import("bookmarks_tests.zig");
     _ = @import("bookmarks_file.zig");
+    _ = @import("bookmarks_category.zig");
 }

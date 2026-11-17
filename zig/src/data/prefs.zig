@@ -5,6 +5,7 @@
 const std = @import("std");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;
+const platform = @import("../sys/platform.zig");
 const Store = @import("store.zig").Store;
 const keywords_file = @import("keywords.zig");
 pub const Keyword = keywords_file.Keyword;
@@ -111,6 +112,7 @@ pub const keys = .{
     .peeks_links = "links.peek",
     .little_links = "links.little",
     .always_shows_downloads = "downloads.button",
+    .bookmarks_auto_sort = "bookmarks.auto_sort",
     .bookmarks_bar = "bookmarks.bar",
     .bookmarks_sidebar = "bookmarks.sidebar",
     .chat_zoom = "ai.zoom",
@@ -207,6 +209,7 @@ pub const Prefs = struct {
     peeks_links: bool = true,
     little_links: bool = false,
     always_shows_downloads: bool = false,
+    bookmarks_auto_sort: bool = true,
     bookmarks_bar: bool = false,
     bookmarks_sidebar: bool = false,
     chat_zoom: f64 = 1,
@@ -255,7 +258,7 @@ pub const Prefs = struct {
         var p: Prefs = .{ .gpa = gpa, .store = store, .opts = opts };
         inline for (@typeInfo(@TypeOf(keys)).@"struct".field_names) |name| p.read(name);
         // Before the first window, and not deferred.
-        if (opts.app) |app| objc.msg(void, app, "setAppearance:", .{appearance(p.look)});
+        if (opts.app) |app| if (comptime platform.is_ios) applyLookIos(p.look) else objc.msg(void, app, "setAppearance:", .{appearance(p.look)});
         if (store.bool("sidebar") == null) {
             const manner = store.string("manner");
             defer if (manner) |m| gpa.free(m);
@@ -446,8 +449,8 @@ pub const Prefs = struct {
         const pool = objc.Pool.push();
         defer pool.pop();
         const fm = objc.msg(objc.Object, objc.class("NSFileManager"), "defaultManager", .{});
-        // NSDownloadsDirectory, NSUserDomainMask
-        const urls = objc.msg(objc.Object, fm, "URLsForDirectory:inDomains:", .{ @as(objc.NSUInteger, 15), @as(objc.NSUInteger, 1) });
+        // NSDocumentDirectory on iOS, NSDownloadsDirectory on macOS; NSUserDomainMask.
+        const urls = objc.msg(objc.Object, fm, "URLsForDirectory:inDomains:", .{ @as(objc.NSUInteger, if (comptime platform.is_ios) 9 else 15), @as(objc.NSUInteger, 1) });
         const url = objc.msg(?objc.Object, urls, "firstObject", .{}) orelse return error.NoDownloads;
         return self.gpa.dupe(u8, objc.fromNSString(objc.msg(objc.Object, url, "path", .{})));
     }
@@ -513,6 +516,7 @@ pub const Prefs = struct {
 
     fn applyNow(ctx: ?*anyopaque) callconv(.c) void {
         const look: Look = @enumFromInt(@intFromPtr(ctx) - 1);
+        if (comptime platform.is_ios) return applyLookIos(look);
         const pool = objc.Pool.push();
         defer pool.pop();
         const app = objc.msg(?objc.Object, objc.class("NSApplication"), "sharedApplication", .{}) orelse return;
@@ -538,6 +542,16 @@ pub const Prefs = struct {
     }
 };
 
+fn applyLookIos(look: Look) void {
+    const style: objc.NSInteger = switch (look) {
+        .system => 0,
+        .light => 1,
+        .dark => 2,
+    };
+    if (nanoui.App.shared()) |a| if (a.uiwindow) |win|
+        objc.msg(void, win, "setOverrideUserInterfaceStyle:", .{style});
+}
+
 /// `Look.appearance`: nil follows the Mac.
 fn appearance(look: Look) ?objc.Object {
     const name = switch (look) {
@@ -549,23 +563,26 @@ fn appearance(look: Look) ?objc.Object {
 }
 
 fn spellingCorrection() bool {
+    if (comptime platform.is_ios) return true;
     return objc.msg(objc.BOOL, objc.class("NSSpellChecker"), "isAutomaticSpellingCorrectionEnabled", .{});
 }
 
-extern "c" fn SecTaskCreateFromSelf(allocator: ?*anyopaque) ?*anyopaque;
-extern "c" fn SecTaskCopyValueForEntitlement(task: *anyopaque, entitlement: objc.Object, err: ?*?*anyopaque) ?objc.Object;
-extern "c" fn CFRelease(cf: *anyopaque) void;
-extern "c" const kCFBooleanTrue: objc.Object;
-
 /// `entitledToPasskeys`: asked of the running process's own signature.
 fn entitledToPasskeys() bool {
+    if (comptime platform.is_ios) return false;
+    const M = struct {
+        extern "c" fn SecTaskCreateFromSelf(allocator: ?*anyopaque) ?*anyopaque;
+        extern "c" fn SecTaskCopyValueForEntitlement(task: *anyopaque, entitlement: objc.Object, err: ?*?*anyopaque) ?objc.Object;
+        extern "c" fn CFRelease(cf: *anyopaque) void;
+        extern "c" const kCFBooleanTrue: objc.Object;
+    };
     const pool = objc.Pool.push();
     defer pool.pop();
-    const task = SecTaskCreateFromSelf(null) orelse return false;
-    defer CFRelease(task);
-    const value = SecTaskCopyValueForEntitlement(task, objc.nsString("com.apple.developer.web-browser.public-key-credential"), null) orelse return false;
-    defer CFRelease(value);
-    return value == kCFBooleanTrue;
+    const task = M.SecTaskCreateFromSelf(null) orelse return false;
+    defer M.CFRelease(task);
+    const value = M.SecTaskCopyValueForEntitlement(task, objc.nsString("com.apple.developer.web-browser.public-key-credential"), null) orelse return false;
+    defer M.CFRelease(value);
+    return value == M.kCFBooleanTrue;
 }
 
 test {

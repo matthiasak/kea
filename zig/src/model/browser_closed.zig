@@ -5,6 +5,7 @@ const std = @import("std");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;
 const ui = nanoui.ui;
+const platform = @import("../sys/platform.zig");
 const Browser = @import("browser.zig").Browser;
 const Tab = @import("../web/tab.zig").Tab;
 const Uuid = @import("../data/json.zig").Uuid;
@@ -69,7 +70,7 @@ pub fn close(self: *Browser, tab: *Tab) void {
 
     if (self.tabs.items.len == 1) {
         if (tab.isBlank()) {
-            if (self.window) |w| objc.msg(void, w.nswindow, "performClose:", .{@as(?objc.Object, null)});
+            if (self.window) |w| if (comptime platform.is_ios) w.close() else objc.msg(void, w.nswindow, "performClose:", .{@as(?objc.Object, null)});
             return;
         }
         remember(self, tab, 0, null, false);

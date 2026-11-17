@@ -6,6 +6,7 @@ const std = @import("std");
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
 const objc = nanoui.objc;
+const platform = @import("../sys/platform.zig");
 const Palette = @import("../design/palette.zig").Palette;
 
 const Picture = struct { bytes: []u8, w: f32, h: f32 };
@@ -25,6 +26,11 @@ pub fn popUpButton(c: *ui.Context, p: *const Palette, label: []const u8, title: 
     if (picture(title, c.theme.dark, c.scale, held)) |pic| {
         const key = c.print("kea.popup.{x}", .{hash(title, c.theme.dark, c.scale, held)});
         _ = ui.image(c, .{ .key = key, .bytes = pic.bytes, .max_width = pic.w, .max_height = pic.h, .radius = 0, .scale = c.scale });
+    } else if (comptime platform.is_ios) {
+        ui.row(c, .{ .gap = 6, .padding = .xy(12, 8), .min_height = 36, .radius = 8, .background = if (held) p.hover else p.wash, .border = p.hairline, .align_items = .center });
+        ui.text(c, title, .{ .size = 13, .color = p.ink, .truncate = .ellipsis });
+        ui.icon(c, "chevron.up.chevron.down", .{ .size = 10, .weight = .semibold, .color = p.muted });
+        ui.end(c);
     } else {
         // No AppKit to draw it (never in practice): the title alone.
         ui.text(c, title, .{ .size = 13, .color = p.ink });
@@ -58,6 +64,7 @@ fn picture(title: []const u8, dark: bool, scale: f32, held: bool) ?Picture {
 }
 
 fn draw(title: []const u8, dark: bool, scale: f32, held: bool) ?Picture {
+    if (comptime platform.is_ios) return null;
     const pool = objc.Pool.push();
     defer pool.pop();
     const button = objc.msg(?objc.Object, objc.alloc("NSPopUpButton"), "initWithFrame:pullsDown:", .{ objc.CGRect{}, objc.NO }) orelse return null;
@@ -87,6 +94,7 @@ fn draw(title: []const u8, dark: bool, scale: f32, held: bool) ?Picture {
 }
 
 test "the system's pop-up button draws as a picture its own size" {
+    if (comptime platform.is_ios) return error.SkipZigTest;
     const pic = picture("Google", false, 2, false) orelse return error.NotDrawn;
     try std.testing.expect(pic.w > 40 and pic.h >= 16 and pic.h <= 32);
     try std.testing.expectEqualStrings("\x89PNG", pic.bytes[0..4]);
@@ -99,6 +107,7 @@ test "the system's pop-up button draws as a picture its own size" {
 
 /// Pixels of `png` at least half opaque.
 fn inked(png: []const u8) usize {
+    if (comptime platform.is_ios) return 0;
     const data = objc.msg(objc.Object, objc.class("NSData"), "dataWithBytes:length:", .{ png.ptr, @as(objc.NSUInteger, png.len) });
     const rep = objc.msg(?objc.Object, objc.class("NSBitmapImageRep"), "imageRepWithData:", .{data}) orelse return 0;
     const w: usize = @intCast(objc.msg(objc.NSInteger, rep, "pixelsWide", .{}));

@@ -7,6 +7,7 @@ const std = @import("std");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;
 const ui = nanoui.ui;
+const platform = @import("../sys/platform.zig");
 const Browser = @import("../model/browser.zig").Browser;
 const Palette = @import("../design/palette.zig").Palette;
 const plate = @import("controls_plate.zig");
@@ -131,7 +132,7 @@ fn open(path: []const u8) void {
     const pool = objc.Pool.push();
     defer pool.pop();
     const url = objc.msg(objc.Object, objc.class("NSURL"), "fileURLWithPath:", .{objc.nsString(path)});
-    _ = objc.msg(objc.BOOL, objc.msg(objc.Object, objc.class("NSWorkspace"), "sharedWorkspace", .{}), "openURL:", .{url});
+    _ = platform.openExternalURL(url);
 }
 
 /// `ByteCountFormatter.string(fromByteCount:countStyle: .file)` in pure Zig.

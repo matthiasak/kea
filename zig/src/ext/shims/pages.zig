@@ -11,6 +11,7 @@ const offscreen = @import("../offscreen.zig");
 const capture = @import("../capture.zig");
 const auth = @import("../auth.zig");
 const Extensions = @import("../controller.zig").Extensions;
+const platform = @import("../../sys/platform.zig");
 
 const Value = ans.Value;
 
@@ -153,7 +154,7 @@ fn pages(c: *ans.Call) ans.Error!Value {
         const host = ext.idOf(address) orelse continue;
         if (!eql(host, c.id)) continue;
         const window = objc.msg(?objc.Object, web, "window", .{});
-        const visible = if (window) |w| (objc.msg(objc.NSUInteger, w, "occlusionState", .{}) & 2) != 0 else false; // NSWindowOcclusionStateVisible
+        const visible = if (window) |w| (if (comptime platform.is_ios) !objc.msg(objc.BOOL, w, "isHidden", .{}) else (objc.msg(objc.NSUInteger, w, "occlusionState", .{}) & 2) != 0) else false;
         const shown = tab.id == c.browser.active_id and visible;
         const key = if (window) |w| objc.msg(objc.BOOL, w, "isKeyWindow", .{}) else false;
         try out.append(a, .{ .id = try std.fmt.allocPrint(a, "{d}", .{tab.id}), .url = address, .visible = shown, .focused = shown and key });

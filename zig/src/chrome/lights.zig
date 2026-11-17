@@ -14,6 +14,7 @@ const std = @import("std");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;
 const ui = nanoui.ui;
+const platform = @import("../sys/platform.zig");
 const metrics = @import("../design/metrics.zig");
 const palette = @import("../design/palette.zig");
 const Prefs = @import("../data/prefs.zig").Prefs;
@@ -29,14 +30,14 @@ const CGSize = objc.CGSize;
 /// Dock): minimize, nothing, or fill the screen.
 pub fn dragStrip(b: *Browser, c: *ui.Context, style: ui.Style, on_double: enum { zoom, new_tab }) void {
     var s = style;
-    s.window_drag = true;
+    if (comptime !platform.is_ios) s.window_drag = true;
     const i = c.open(s, null);
     c.end();
     const it = c.interact(i, .{});
     if (!it.double_clicked) return;
     switch (on_double) {
         .new_tab => b.newTab(),
-        .zoom => if (b.window) |w| switch (titleBarAction()) {
+        .zoom => if (comptime !platform.is_ios) if (b.window) |w| switch (titleBarAction()) {
             .minimize => w.minimize(),
             .none => {},
             .zoom => w.zoom(),
@@ -127,6 +128,7 @@ pub const Lights = struct {
 
     /// Starts looking after `window`'s lights (`Lights.keep` + `dress`).
     pub fn keep(gpa: std.mem.Allocator, window: objc.Object, prefs: *const Prefs) !*Lights {
+        if (comptime platform.is_ios) return error.OutOfMemory;
         const pool = objc.Pool.push();
         defer pool.pop();
         const self = try gpa.create(Lights);
@@ -166,6 +168,7 @@ pub const Lights = struct {
     }
 
     pub fn drop(self: *Lights) void {
+        if (comptime platform.is_ios) return;
         objc.msg(void, notificationCenter(), "removeObserver:", .{self.observer});
         objc.setZig(self.observer, null);
         objc.release(self.observer);
@@ -180,12 +183,14 @@ pub const Lights = struct {
     /// The column moved or changed sides (`Lights.refresh` on the sidebar's
     /// prefs): placed again when the centre it wants differs.
     pub fn follow(self: *Lights) void {
+        if (comptime platform.is_ios) return;
         if (self.wantX() != self.placed_x) self.place();
     }
 
     /// The app came forward (true) or stepped away: the resting circles go
     /// off or on, over the buttons where they are now.
     pub fn appActive(self: *Lights, active: bool) void {
+        if (comptime platform.is_ios) return;
         self.measure();
         if (self.resting) |v| objc.msg(void, v, "setHidden:", .{active});
     }

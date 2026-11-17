@@ -206,7 +206,8 @@ pub const Renderer = struct {
         if (objc.dispatch_semaphore_wait(self.in_flight, dispatch_time(0, std.time.ns_per_s)) != 0) {
             return .{ .drawable_wait_ms = (cf.CACurrentMediaTime() - t0) * 1000, .sync = self.live_resize };
         }
-        const drawable = given orelse {
+        const next = given orelse if (objc.uikit) objc.msg(?objc.Object, self.layer, "nextDrawable", .{}) else null;
+        const drawable = next orelse {
             _ = objc.dispatch_semaphore_signal(self.in_flight);
             return .{ .drawable_wait_ms = (cf.CACurrentMediaTime() - t0) * 1000, .sync = self.live_resize };
         };

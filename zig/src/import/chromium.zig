@@ -6,6 +6,7 @@
 //! Every file is read from a copy (`files.Snapshot`), never underneath the
 //! browser that owns it.
 const std = @import("std");
+const platform = @import("../sys/platform.zig");
 const files = @import("files.zig");
 const src = @import("sources.zig");
 const sqlite = @import("../sys/sqlite.zig");
@@ -104,6 +105,7 @@ pub const Source = struct {
 
     /// Whether the app is in /Applications or ~/Applications.
     pub fn appInstalled(s: Source, a: std.mem.Allocator) !bool {
+        if (comptime platform.is_ios) return false;
         const home_apps = try files.join(a, src.home(), "Applications");
         for ([_][]const u8{ "/Applications", home_apps }) |dir| {
             if (files.exists(try files.join(a, dir, s.app))) return true;
@@ -137,6 +139,7 @@ pub const Missing = struct { source: Source, looked: []const u8 };
 /// name, with where it looked ("~/Library/…"). None in a test run.
 pub fn unreadable(a: std.mem.Allocator, base: Base) ![]Missing {
     var out: std.ArrayList(Missing) = .empty;
+    if (comptime platform.is_ios) return out.items;
     if (base.testing) return out.items;
     const home = src.home();
     for (known) |s| {

@@ -7,7 +7,7 @@ pub const android = @import("tools/android/apk.zig");
 
 const examples = [_][]const u8{ "hello", "counter", "gallery" };
 const frameworks = [_][]const u8{ "AppKit", "WebKit", "Metal", "QuartzCore", "CoreText", "CoreGraphics", "CoreFoundation", "Foundation", "ImageIO", "UniformTypeIdentifiers", "CoreVideo" };
-const ios_frameworks = [_][]const u8{ "UIKit", "Metal", "QuartzCore", "CoreText", "CoreGraphics", "CoreFoundation", "Foundation", "ImageIO", "UniformTypeIdentifiers", "CoreVideo" };
+const ios_frameworks = [_][]const u8{ "UIKit", "WebKit", "Metal", "QuartzCore", "CoreText", "CoreGraphics", "CoreFoundation", "Foundation", "ImageIO", "UniformTypeIdentifiers", "CoreVideo" };
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
@@ -43,9 +43,9 @@ pub fn build(b: *std.Build) void {
         if (std.zig.system.darwin.getSdk(b.allocator, b.graph.io, &target.result)) |sdk| {
             nanoui.addSystemFrameworkPath(.{ .cwd_relative = b.pathJoin(&.{ sdk, "System/Library/Frameworks" }) });
             nanoui.addLibraryPath(.{ .cwd_relative = b.pathJoin(&.{ sdk, "usr/lib" }) });
+            for (ios_frameworks) |f| nanoui.linkFramework(f, .{});
+            nanoui.linkSystemLibrary("objc", .{});
         }
-        for (ios_frameworks) |f| nanoui.linkFramework(f, .{});
-        nanoui.linkSystemLibrary("objc", .{});
     }
     if (target.result.abi.isAndroid()) {
         // The NDK's libraries; OpenGL ES is loaded with dlopen.

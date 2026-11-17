@@ -9,6 +9,7 @@ const std = @import("std");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;
 const ui = nanoui.ui;
+const platform = @import("../sys/platform.zig");
 const Kea = @import("kea.zig").Kea;
 const Browser = @import("../model/browser.zig").Browser;
 const Tab = @import("../web/tab.zig").Tab;
@@ -42,8 +43,8 @@ const held = command | shift | option | control;
 const watched: u64 = (1 << 1) | (1 << 10) | (1 << 12);
 
 pub fn install(kea: *Kea) void {
-    if (kea.key_monitor != null) return;
-    kea.key_monitor = appkit.addLocalMonitor(watched, kea, seen);
+    if (comptime platform.is_ios) return;
+    if (kea.key_monitor == null) kea.key_monitor = appkit.addLocalMonitor(watched, kea, seen);
 }
 
 pub fn uninstall(kea: *Kea) void {
@@ -54,6 +55,7 @@ pub fn uninstall(kea: *Kea) void {
 
 fn seen(kea: *Kea, event: objc.Object) ?objc.Object {
     const window = objc.msg(?objc.Object, event, "window", .{});
+    inspector.had_keys_on_click = objc.msg(objc.NSUInteger, event, "type", .{}) == 1 and inspectorHasKeys(event);
     const b = browsers.browserFor(kea, window) orelse browsers.acting(kea) orelse return event;
     return switch (objc.msg(objc.NSUInteger, event, "type", .{})) {
         1 => if (clicked(b, event)) null else event,
@@ -68,7 +70,7 @@ fn seen(kea: *Kea, event: objc.Object) ?objc.Object {
 /// A click on the tab switcher, in this window only, in the top-left
 /// points the chrome is drawn in (`Browser.clickTabSwitcher`).
 pub fn clicked(b: *Browser, event: objc.Object) bool {
-    if (!b.switcher.visible) return false;
+    if ((comptime platform.is_ios) or !b.switcher.visible) return false;
     const w = b.window orelse return false;
     if (objc.msg(?objc.Object, event, "window", .{}) != w.nswindow) return false;
     const content = objc.msg(?objc.Object, w.nswindow, "contentView", .{}) orelse return false;
@@ -105,11 +107,25 @@ pub fn handedToPage(event: objc.Object) bool {
 
 /// `take`: whether the key was the app's, and done.
 pub fn take(b: *Browser, event: objc.Object) bool {
+    if (comptime platform.is_ios) return false;
     const window = objc.msg(?objc.Object, event, "window", .{});
     // A question hanging from the window (Ask) answers its own keys.
     if (window) |w| if (objc.msg(?objc.Object, w, "sheetParent", .{}) != null) return false;
+    // A key being typed into Settings › Shortcuts is for the box (including F12).
+    if (b.kea.shortcuts.recording) return false;
+    if (isInspectorWindow(window)) {
+        if (inspecting(b, event, window)) return true;
+        if (objc.msg(objc.NSUInteger, event, "modifierFlags", .{}) & held == command) {
+            const pool = objc.Pool.push();
+            defer pool.pop();
+            if (plainIs(event, "w")) {
+                objc.msg(void, window.?, "performClose:", .{@as(?objc.Object, null)});
+                return true;
+            }
+        }
+        return false;
+    }
     if (inspecting(b, event, window)) return true;
-    // A small window's keys are its own (web/little.zig has its monitor).
     if (little.owning(window) != null) return false;
     if (popup.owns(window)) {
         const flags = objc.msg(objc.NSUInteger, event, "modifierFlags", .{}) & held;
@@ -139,8 +155,6 @@ pub fn take(b: *Browser, event: objc.Object) bool {
         if (pw.window) |w| objc.msg(void, w.nswindow, "performClose:", .{@as(?objc.Object, null)});
         return true;
     };
-    // A key being typed into Settings › Shortcuts is for the box.
-    if (b.kea.shortcuts.recording) return false;
     const pool = objc.Pool.push();
     defer pool.pop();
     const flags = objc.msg(objc.NSUInteger, event, "modifierFlags", .{}) & held;
@@ -156,6 +170,8 @@ pub fn take(b: *Browser, event: objc.Object) bool {
     // Esc while a tab is carried over the pages: put back (`TabDrag.cancel`).
     if (code == 53 and @import("../chrome/split_drop.zig").cancel(b)) return true;
 
+    const in_inspector = inspectorHasKeys(event);
+    if (in_inspector and code == 53 and flags == 0) return false;
     // While the tab switcher is up, ⌃ and the arrows move through it and
     // ⌃Tab goes on below; any other key puts it away, and Escape does
     // nothing else.
@@ -318,6 +334,8 @@ pub fn take(b: *Browser, event: objc.Object) bool {
     // Clearing, reachable from a page's editor.
     if (shifted and code == 51) return done(history_panel.showClearing(b));
 
+    // Docked Web Inspector handles its own ⌘ shortcuts (Console ⌘K, Search ⌘F/⌘G, brackets).
+    if (in_inspector and !shifted and (key.len == 1 and (key[0] == 'k' or key[0] == 'f' or key[0] == 'g' or key[0] == '[' or key[0] == ']' or key[0] == 'z'))) return false;
     // The page's turn first, for the keys it may want.
     if (pageFirst(b, event, key, shifted)) return false;
 
@@ -482,16 +500,36 @@ fn responder(event: objc.Object) ?objc.Object {
 
 extern "c" fn objc_getClass(name: [*:0]const u8) ?objc.Class;
 
+fn isInspectorWindow(window: ?objc.Object) bool {
+    if (comptime platform.is_ios) return false;
+    const w = window orelse return false;
+    const cls = objc_getClass("_WKInspectorWindow") orelse return false;
+    return objc.msg(objc.BOOL, w, "isKindOfClass:", .{cls});
+}
+
+fn inspectorHasKeys(event: objc.Object) bool {
+    var cur = responder(event);
+    const cls = objc_getClass("WKInspectorWKWebView") orelse return false;
+    while (cur) |v| {
+        if (objc.msg(objc.BOOL, v, "isKindOfClass:", .{cls})) return true;
+        if (!objc.msg(objc.BOOL, v, "respondsToSelector:", .{objc.sel("superview")})) break;
+        cur = objc.msg(?objc.Object, v, "superview", .{});
+    }
+    return false;
+}
+
 fn pageHasKeys(event: objc.Object) bool {
+    if (inspectorHasKeys(event)) return true;
     const r = responder(event) orelse return false;
     const cls = objc_getClass("KeaPageView") orelse return false;
     return objc.msg(objc.BOOL, r, "isKindOfClass:", .{cls});
 }
 
 /// Whether the caret is in something editable: a text box of the chrome's,
-/// a field editor, or one on the page in any frame (the view has an input
-/// context only then).
+/// a field editor, Web Inspector, or one on the page in any frame.
 fn caretIn(b: *Browser, event: objc.Object) bool {
+    if (comptime platform.is_ios) return false;
+    if (inspectorHasKeys(event)) return true;
     if (responder(event)) |r| {
         if (objc.msg(objc.BOOL, r, "isKindOfClass:", .{objc.class("NSTextView")})) return true;
         if (b.window) |w| if (w.surface) |s| if (r == s.nsview and s.ctx.focus != 0) return true;
@@ -507,6 +545,7 @@ fn editable(t: *const Tab) bool {
 
 /// An input method composing text keeps Tab, Return and Escape for itself.
 fn hasMarkedText(b: *Browser, event: objc.Object) bool {
+    if (comptime platform.is_ios) return false;
     if (responder(event)) |r| {
         if (objc.msg(objc.BOOL, r, "isKindOfClass:", .{objc.class("NSTextView")}))
             return objc.msg(objc.BOOL, r, "hasMarkedText", .{});
@@ -540,7 +579,8 @@ fn inspecting(b: *Browser, event: objc.Object, window: ?objc.Object) bool {
         inspector.toggleInspector(b);
         return true;
     }
-    if (flags != command | option or (little.owning(window) == null and !popup.owns(window))) return false;
+    const ext_win = if (browsers.browserFor(b.kea, window)) |pw| pw.ext.popup != null else false;
+    if (flags != command | option or (little.owning(window) == null and !popup.owns(window) and !ext_win and !isInspectorWindow(window))) return false;
     const pool = objc.Pool.push();
     defer pool.pop();
     const run: *const fn (*Browser) void = if (plainIs(event, "i")) inspector.toggleInspector else if (plainIs(event, "j")) inspector.showConsole else if (plainIs(event, "c")) inspector.inspectElement else if (plainIs(event, "u")) inspector.showPageSource else return false;

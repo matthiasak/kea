@@ -36,10 +36,10 @@ fn bothPanes(h: *Harness) !void {
     for ([_]*app.Tab{ left, right }, 0..) |t, i| {
         const wv = t.web orelse return h.fail("page {d} has no web view", .{i});
         try h.expect(sh.slots.items[i].webview == wv, "slot {d} doesn't hold its page", .{i});
-        try h.expect(objc.msg(?objc.Object, wv, "superview", .{}) == sh.stage_view, "page {d} isn't on the stage", .{i});
+        const box = sh.boxOf(wv) orelse return h.fail("page {d} isn't on the stage", .{i});
         try h.expect(!objc.msg(objc.BOOL, wv, "isHidden", .{}), "page {d} is hidden", .{i});
         try h.expect(objc.msg(f64, wv, "alphaValue", .{}) > 0.99, "page {d} hasn't faded in", .{i});
-        const f = objc.msg(objc.CGRect, wv, "frame", .{});
+        const f = objc.msg(objc.CGRect, box, "frame", .{});
         const r = holes[i];
         const off = @abs(f.origin.x - r.x) + @abs(f.origin.y - r.y) + @abs(f.size.width - r.w) + @abs(f.size.height - r.h);
         try h.expect(off < 1, "page {d} at ({d:.1},{d:.1},{d:.1},{d:.1}), hole ({d:.1},{d:.1},{d:.1},{d:.1})", .{ i, f.origin.x, f.origin.y, f.size.width, f.size.height, r.x, r.y, r.w, r.h });

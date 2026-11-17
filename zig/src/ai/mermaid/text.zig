@@ -8,6 +8,7 @@
 const std = @import("std");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;
+const platform = @import("../../sys/platform.zig");
 
 pub const Lines = []const []const u8;
 
@@ -200,6 +201,16 @@ var app_ready = false;
 pub fn textWidth(text: []const u8, bold: bool, size: f64) f64 {
     const pool = objc.Pool.push();
     defer pool.pop();
+    if (comptime platform.is_ios) {
+        const M = struct {
+            extern "c" const NSFontAttributeName: objc.Object;
+        };
+        const font = objc.msg(objc.Object, objc.class("UIFont"), if (bold) "boldSystemFontOfSize:" else "systemFontOfSize:", .{size});
+        const attrs = objc.msg(objc.Object, objc.class("NSDictionary"), "dictionaryWithObject:forKey:", .{ font, M.NSFontAttributeName });
+        const str = objc.msg(objc.Object, objc.alloc("NSAttributedString"), "initWithString:attributes:", .{ objc.nsString(text), attrs });
+        defer objc.release(str);
+        return @ceil(objc.msg(objc.CGSize, str, "size", .{}).width);
+    }
     if (!app_ready) {
         _ = objc.msg(objc.Object, objc.class("NSApplication"), "sharedApplication", .{});
         app_ready = true;

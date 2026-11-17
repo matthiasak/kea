@@ -83,7 +83,7 @@ pub fn run(b: *Browser, a: A, name: []const u8, args_json: []const u8, ctx: *any
                 const alloc = j.a;
                 std.heap.c_allocator.destroy(j);
                 const r = got orelse return done_inner(ctx_inner, .{ .text = "That page isn't open in a tab.", .said = said_inner });
-                const body = alloc.dupe(u8, sse.prefix(r.text, 8000)) catch r.text;
+                const body = alloc.dupe(u8, sse.prefix(r.text, 60_000)) catch r.text;
                 done_inner(ctx_inner, .{ .text = body, .said = said_inner, .read = r });
             }
         };

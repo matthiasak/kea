@@ -5,6 +5,7 @@
 const std = @import("std");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;
+const platform = @import("../sys/platform.zig");
 const Tab = @import("../web/tab.zig").Tab;
 const Browser = @import("../model/browser.zig").Browser;
 const Kea = @import("../app/kea.zig").Kea;
@@ -221,7 +222,7 @@ fn moveAnswered(t: *Tab, holds: bool, arg: usize) void {
     if (!holds) return moveDone(m, true);
     const detail = std.fmt.allocPrint(b.gpa, "This page has unsaved form entries. It will reopen in \u{201C}{s}\u{201D} with that Space\u{2019}s sign-ins, so the entries may be lost.", .{b.kea.spaces.value[at].name}) catch return moveDone(m, false);
     defer b.gpa.free(detail);
-    appkit.ask(if (b.window) |w| w.nswindow else null, .{ .title = "Move Tab?", .detail = detail, .confirm = "Move" }, m, sure);
+    appkit.ask(platform.nativeWindow(b.window), .{ .title = "Move Tab?", .detail = detail, .confirm = "Move" }, m, sure);
 }
 
 fn sure(m: *Moving, a: appkit.Answer) void {

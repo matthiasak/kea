@@ -48,3 +48,38 @@ test "organize with AI shows the proposal and Apply reorganises" {
     try std.testing.expectEqualStrings("Sites", b.bookmarks.roots[0].title);
     try std.testing.expectEqualStrings("Beta", b.bookmarks.roots[0].children.?[0].title);
 }
+
+fn flatStream(_: ?*anyopaque, _: *app.ai_core.Ai, _: client.Ask, sink: client.Sink) ?client.Handle {
+    sink.piece(sink.ctx, "{\"groups\":[{\"category\":\"AI & ML Research\",\"items\":[1]},{\"category\":\"EE & Chip Design\",\"items\":[3]},{\"category\":\"Housing Search\",\"items\":[2,4]}],\"remove\":[]}");
+    sink.done(sink.ctx, null);
+    return null;
+}
+
+test "organize with AI defaults to flat semantic-neighbor categories and Apply renders headers" {
+    var f: Fixture = undefined;
+    try f.init(gpa, .{ .sidebar = false });
+    defer f.deinit();
+    const b = f.browser;
+    _ = b.bookmarks.add("https://arxiv.org/", "arXiv");
+    _ = b.bookmarks.add("https://zillow.com/", "Zillow");
+    _ = b.bookmarks.add("https://digikey.com/", "DigiKey");
+    _ = b.bookmarks.add("https://redfin.com/", "Redfin");
+    ready(b);
+    b.kea.ai.client = .{ .ctx = null, .stream = flatStream };
+    app.sheet.show(b, .bookmarking);
+    f.tester.settle(1);
+    app.bookmarks_proposal.send(b, "");
+    f.tester.settle(1);
+    try std.testing.expect(f.tester.hasText("4 bookmarks in 3 categories"));
+    try std.testing.expect(f.tester.hasText("AI & ML Research"));
+    try std.testing.expect(f.tester.hasText("EE & Chip Design"));
+    try std.testing.expect(f.tester.hasText("Housing Search"));
+    try f.tester.clickText("Apply");
+    f.tester.settle(1);
+    try std.testing.expectEqual(@as(usize, 4), b.bookmarks.roots.len);
+    for (b.bookmarks.roots) |r| try std.testing.expect(!r.isFolder());
+    try std.testing.expectEqualStrings("AI & ML Research", b.bookmarks.roots[0].category.?);
+    try std.testing.expectEqualStrings("EE & Chip Design", b.bookmarks.roots[1].category.?);
+    try std.testing.expectEqualStrings("Housing Search", b.bookmarks.roots[2].category.?);
+    try std.testing.expectEqualStrings("Housing Search", b.bookmarks.roots[3].category.?);
+}

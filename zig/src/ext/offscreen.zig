@@ -11,6 +11,7 @@ const Extensions = @import("controller.zig").Extensions;
 const config = @import("../web/config.zig");
 const dialogs = @import("../web/dialogs.zig");
 const capture = @import("capture.zig");
+const platform = @import("../sys/platform.zig");
 
 pub const Closed = "The offscreen document was closed.";
 
@@ -121,7 +122,9 @@ pub fn create(owner: *Extensions, path: []const u8, why: []const []const u8, con
     @import("../web/config.zig").inspector(prefs, true);
     // One made to record from the microphone may start while nobody sees it,
     // as in Chrome; Kea still asks first, and the pill says it is listening.
-    for (why) |r| if (std.mem.eql(u8, r, "USER_MEDIA")) capture.set("_setGetUserMediaRequiresFocus:", false, prefs);
+    if (comptime !platform.is_ios) {
+        for (why) |r| if (std.mem.eql(u8, r, "USER_MEDIA")) capture.set("_setGetUserMediaRequiresFocus:", false, prefs);
+    }
     objc.msg(void, configuration, "setPreferences:", .{prefs});
 
     const doc = make(owner, id, to, why, context, configuration) catch return reply.fail(refused);
@@ -135,6 +138,11 @@ pub fn create(owner: *Extensions, path: []const u8, why: []const []const u8, con
     // iframes; it is never inserted into a browser's tabs.
     objc.msg(void, context, "didOpenTab:", .{doc.delegate});
     load(doc, reply);
+}
+
+/// The live offscreen document's `WKWebView` for extension `id`, for Web Inspector.
+pub fn webViewFor(id: []const u8) ?objc.Object {
+    return if (documents.get(id)) |doc| doc.web else null;
 }
 
 fn make(owner: *Extensions, id: []const u8, to: objc.Object, why: []const []const u8, context: objc.Object, configuration: objc.Object) !*Document {

@@ -62,6 +62,8 @@ pub const TextSystem = struct {
     layouts: std.AutoHashMapUnmanaged(u64, Layout) = .empty,
     previous: std.AutoHashMapUnmanaged(u64, Layout) = .empty,
     wraps: @import("wrap_cache.zig").WrapCache(Line) = .{},
+    /// The lines of the wrap being made, before the cache copies them.
+    scratch_lines: std.ArrayList(Line) = .empty,
     family: ?[]const u8 = null,
     mono_family: ?[]const u8 = null,
     /// Every size times this (`Context.setZoom`).
@@ -81,6 +83,7 @@ pub const TextSystem = struct {
         self.layouts.deinit(self.gpa);
         self.previous.deinit(self.gpa);
         self.wraps.deinit(self.gpa);
+        self.scratch_lines.deinit(self.gpa);
         self.atlas.deinit();
         self.db.deinit();
     }
@@ -294,11 +297,11 @@ pub const TextSystem = struct {
         const k = key(s, style, (@as(u64, @intFromFloat(@max(0, @min(max_width, 1e6)))) + 2) ^ (if (styled) rich.spansHash(spans, 0, s.len) else 0));
         if (self.wraps.get(self.gpa, k)) |lines| return lines;
         const lay = if (styled) rich.layout(self, s, style, spans, 0) else self.layout(s, style);
-        var lines: std.ArrayList(Line) = .empty;
-        defer lines.deinit(self.gpa);
-        breakLines(self.gpa, &lines, s, lay, @max(1, max_width)) catch {};
+        const lines = &self.scratch_lines;
+        lines.clearRetainingCapacity();
+        breakLines(self.gpa, lines, s, lay, @max(1, max_width)) catch {};
         if (lines.items.len == 0) lines.append(self.gpa, .{ .start = 0, .end = 0, .width = 0 }) catch {};
-        return self.wraps.put(self.gpa, k, lines.toOwnedSlice(self.gpa) catch return &.{});
+        return self.wraps.put(self.gpa, k, lines.items);
     }
 
     pub fn caretX(self: *TextSystem, s: []const u8, style: types.TextStyle, index: usize) f32 {

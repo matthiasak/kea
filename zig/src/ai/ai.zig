@@ -101,6 +101,9 @@ pub const Ai = struct {
     /// true`); the chrome sets it.
     open_settings: ?*const fn (b: *Browser) void = null,
     no_tools: std.StringHashMapUnmanaged(void) = .empty,
+    auto_jobs: std.ArrayList(*anyopaque) = .empty,
+    on_bookmarks_changed: ?*const fn (ctx: *anyopaque) void = null,
+    on_bookmarks_ctx: ?*anyopaque = null,
 
     pub fn create(gpa: std.mem.Allocator, store: *Store, prefs: *Prefs, testing: bool) !*Ai {
         const self = try gpa.create(Ai);
@@ -118,6 +121,8 @@ pub const Ai = struct {
 
     /// Every assistant is destroyed first (their windows close before this).
     pub fn destroy(self: *Ai) void {
+        @import("organize_auto.zig").cancelAll(self);
+        self.auto_jobs.deinit(self.gpa);
         if (self.session) |s| s.destroy();
         self.assistants.deinit(self.gpa);
         var ntit = self.no_tools.keyIterator();
@@ -233,4 +238,5 @@ fn has(list: []const []const u8, s: []const u8) bool {
 
 test {
     _ = @import("ai_tests.zig");
+    _ = @import("organize_auto.zig");
 }

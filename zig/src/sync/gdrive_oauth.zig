@@ -6,6 +6,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const objc = @import("nanoui").objc;
+const platform = @import("../sys/platform.zig");
 const json = @import("../data/json.zig");
 const urlsession = @import("../sys/urlsession.zig");
 const keychain = @import("../sys/keychain.zig");
@@ -293,7 +294,7 @@ pub const LoopbackFlow = struct {
             const pool = objc.Pool.push();
             defer pool.pop();
             if (objc.msg(?objc.Object, objc.class("NSURL"), "URLWithString:", .{objc.nsString(url)})) |u|
-                _ = objc.msg(objc.BOOL, objc.msg(objc.Object, objc.class("NSWorkspace"), "sharedWorkspace", .{}), "openURL:", .{u});
+                _ = platform.openExternalURL(u);
         }
         return self;
     }

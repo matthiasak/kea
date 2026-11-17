@@ -7,6 +7,7 @@ const std = @import("std");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;
 const ui = nanoui.ui;
+const platform = @import("../sys/platform.zig");
 const Kea = @import("kea.zig").Kea;
 const app_name = @import("kea.zig").app_name;
 const Browser = @import("../model/browser.zig").Browser;
@@ -17,9 +18,6 @@ const WindowRecord = windows_file.WindowRecord;
 const json = @import("../data/json.zig");
 const Uuid = json.Uuid;
 const CGRect = objc.CGRect;
-
-extern fn NSStringFromRect(rect: CGRect) objc.Object;
-extern fn NSRectFromString(string: objc.Object) CGRect;
 
 /// The first window's size, and every window's least.
 pub const default_size: objc.CGSize = .{ .width = 1180, .height = 780 };
@@ -84,7 +82,7 @@ fn openAs(kea: *Kea, record: ?*const WindowRecord, frame: ?CGRect, popup: ?[]con
     // A new window from one in full screen: in full screen of its own, sized
     // as a window for when it leaves it.
     const full = popup == null and !first and frame == null and beside != null and beside.?.isFullScreen();
-    const size: objc.CGSize = if (popup != null) .{ .width = 480, .height = 600 } else if (first or full or beside == null) default_size else objc.msg(CGRect, beside.?.nswindow, "frame", .{}).size;
+    const size: objc.CGSize = if (popup != null) .{ .width = 480, .height = 600 } else if (comptime platform.is_ios) default_size else if (first or full or beside == null) default_size else objc.msg(CGRect, beside.?.nswindow, "frame", .{}).size;
     const off: ?f64 = if (kea.opts.hidden) -20000 else null;
     const win = try app.newWindow(.{
         .title = app_name,
@@ -92,7 +90,7 @@ fn openAs(kea: *Kea, record: ?*const WindowRecord, frame: ?CGRect, popup: ?[]con
         .height = size.height,
         .min_width = if (popup != null) 200 else min_size.width,
         .min_height = if (popup != null) 150 else min_size.height,
-        .title_bar = .hidden,
+        .title_bar = if (comptime platform.is_ios) .default else .hidden,
         .visible = false,
         .x = off,
         .y = off,
@@ -105,25 +103,24 @@ fn openAs(kea: *Kea, record: ?*const WindowRecord, frame: ?CGRect, popup: ?[]con
         .on_fullscreen = .{ .ctx = b, .func = onFullscreen },
         .content = .{ .view = ui.View.init(b, window_view.view) },
     });
-    const ns = win.nswindow;
-    // The strip does the dragging, never the page underneath.
-    objc.msg(void, ns, "setMovableByWindowBackground:", .{objc.NO});
-    if (frame) |f| {
-        objc.msg(void, ns, "setFrame:display:", .{ f, objc.NO });
-    } else if (!first and !full and popup == null) if (beside) |f| {
-        // Down and to the right of the window in front, as new windows go.
-        const fr = objc.msg(CGRect, f.nswindow, "frame", .{});
-        const from: objc.CGPoint = .{ .x = fr.origin.x, .y = fr.origin.y + fr.size.height };
-        // AppKit's cascade pulls a window back onto a screen; a hidden run's
-        // steps the same way by hand and stays off every one.
-        const top_left = if (kea.opts.hidden)
-            objc.CGPoint{ .x = from.x + hidden_cascade, .y = from.y - hidden_cascade }
-        else
-            objc.msg(objc.CGPoint, ns, "cascadeTopLeftFromPoint:", .{from});
-        objc.msg(void, ns, "setFrameTopLeftPoint:", .{top_left});
-    };
+    if (comptime !platform.is_ios) {
+        const ns = win.nswindow;
+        // The strip does the dragging, never the page underneath.
+        objc.msg(void, ns, "setMovableByWindowBackground:", .{objc.NO});
+        if (frame) |f| {
+            objc.msg(void, ns, "setFrame:display:", .{ f, objc.NO });
+        } else if (!first and !full and popup == null) if (beside) |f| {
+            // Down and to the right of the window in front, as new windows go.
+            const fr = objc.msg(CGRect, f.nswindow, "frame", .{});
+            const from: objc.CGPoint = .{ .x = fr.origin.x, .y = fr.origin.y + fr.size.height };
+            const top_left = if (kea.opts.hidden)
+                objc.CGPoint{ .x = from.x + hidden_cascade, .y = from.y - hidden_cascade }
+            else
+                objc.msg(objc.CGPoint, ns, "cascadeTopLeftFromPoint:", .{from});
+            objc.msg(void, ns, "setFrameTopLeftPoint:", .{top_left});
+        };
+    }
     try b.bindWindow(win);
-    if (win.surface) |s| s.keys_released = .{ .ctx = b, .func = keysReleased };
     // Extensions see every window; the first one starts them (`register`,
     // `Extensions.start(for:)`, Browser.swift:1544).
     if (kea.ext) |e| e.start(b);
@@ -151,7 +148,7 @@ pub fn show(b: *Browser) void {
     b.shut = false;
     if (b.kea.opts.hidden) return;
     if (b.window) |w| {
-        if (objc.msg(objc.BOOL, w.nswindow, "isMiniaturized", .{}))
+        if (comptime !platform.is_ios) if (objc.msg(objc.BOOL, w.nswindow, "isMiniaturized", .{}))
             objc.msg(void, w.nswindow, "deminiaturize:", .{@as(?objc.Object, null)});
         w.show();
     }
@@ -173,6 +170,7 @@ pub fn ensureWindow(kea: *Kea) ?*Browser {
 }
 
 fn comeForward(kea: *Kea) void {
+    if (comptime platform.is_ios) return;
     if (kea.opts.root != null or kea.opts.hidden) return;
     if (kea.ui_app) |a| objc.msg(void, a.nsapp, "activateIgnoringOtherApps:", .{objc.YES});
 }
@@ -213,9 +211,21 @@ fn reopenRecord(kea: *Kea, r: *const WindowRecord) !*Browser {
 /// `WindowRecord.rect`: the saved frame, when it's a real window's.
 pub fn rect(frame: ?[]const u8) ?CGRect {
     const s = frame orelse return null;
-    const pool = objc.Pool.push();
-    defer pool.pop();
-    const r = NSRectFromString(objc.nsString(s));
+    const r: CGRect = if (comptime platform.is_ios) blk: {
+        var it = std.mem.tokenizeAny(u8, s, "{} ,");
+        const x = std.fmt.parseFloat(f64, it.next() orelse return null) catch return null;
+        const y = std.fmt.parseFloat(f64, it.next() orelse return null) catch return null;
+        const w = std.fmt.parseFloat(f64, it.next() orelse return null) catch return null;
+        const h = std.fmt.parseFloat(f64, it.next() orelse return null) catch return null;
+        break :blk .{ .origin = .{ .x = x, .y = y }, .size = .{ .width = w, .height = h } };
+    } else blk: {
+        const M = struct {
+            extern fn NSRectFromString(string: objc.Object) CGRect;
+        };
+        const pool = objc.Pool.push();
+        defer pool.pop();
+        break :blk M.NSRectFromString(objc.nsString(s));
+    };
     return if (r.size.width > 100 and r.size.height > 100) r else null;
 }
 
@@ -294,7 +304,7 @@ fn remember(kea: *Kea, b: *Browser) void {
 fn becomePrimary(b: *Browser) void {
     b.becomePrimary();
     // The first window, opened next launch, comes back where this one is.
-    if (b.kea.opts.root == null and !b.kea.opts.hidden) if (b.window) |w| {
+    if (comptime !platform.is_ios) if (b.kea.opts.root == null and !b.kea.opts.hidden) if (b.window) |w| {
         _ = objc.msg(objc.BOOL, w.nswindow, "setFrameAutosaveName:", .{objc.nsString("kea")});
         objc.msg(void, w.nswindow, "saveFrameUsingName:", .{objc.nsString("kea")});
     };
@@ -322,11 +332,14 @@ pub fn lastClosedAt(kea: *Kea) ?f64 {
 /// A window's state as a record: frame, space and, when asked, its rows.
 fn recordOf(arena: std.mem.Allocator, b: *Browser, rows: bool) !WindowRecord {
     var r: WindowRecord = .{ .id = b.record_id, .space = b.space_id };
-    if (b.window) |w| {
+    if (comptime !platform.is_ios) if (b.window) |w| {
+        const M = struct {
+            extern fn NSStringFromRect(rect: CGRect) objc.Object;
+        };
         const pool = objc.Pool.push();
         defer pool.pop();
-        r.frame = try arena.dupe(u8, objc.fromNSString(NSStringFromRect(objc.msg(CGRect, w.nswindow, "frame", .{}))));
-    }
+        r.frame = try arena.dupe(u8, objc.fromNSString(M.NSStringFromRect(objc.msg(CGRect, w.nswindow, "frame", .{}))));
+    };
     if (rows) r.rows = try b.allRows(arena);
     return r;
 }
@@ -424,7 +437,7 @@ fn onFullscreen(ctx: *anyopaque, w: *nanoui.Window) void {
     if (b.shut and !w.isFullScreen()) w.hide();
 }
 
-fn keysReleased(ctx: ?*anyopaque, _: *ui.Surface) void {
+pub fn keysReleased(ctx: ?*anyopaque, _: *nanoui.Surface) void {
     const b: *Browser = @ptrCast(@alignCast(ctx orelse return));
     @import("../chrome/omnibox.zig").giveKeys(b);
 }
@@ -432,6 +445,7 @@ fn keysReleased(ctx: ?*anyopaque, _: *ui.Surface) void {
 // MARK: watching frames (`Browsers.watchFrames`)
 
 fn watchFrames(kea: *Kea) void {
+    if (comptime platform.is_ios) return;
     if (kea.windows.observer != null) return;
     const pool = objc.Pool.push();
     defer pool.pop();
@@ -461,6 +475,7 @@ fn watchFrames(kea: *Kea) void {
 }
 
 fn unwatch(kea: *Kea) void {
+    if (comptime platform.is_ios) return;
     if (kea.windows.observer) |o| {
         objc.msg(void, objc.msg(objc.Object, objc.class("NSNotificationCenter"), "defaultCenter", .{}), "removeObserver:", .{o});
         objc.setZig(o, null);
@@ -475,6 +490,12 @@ fn unwatch(kea: *Kea) void {
 }
 
 pub fn browserFor(kea: *Kea, window: ?objc.Object) ?*Browser {
+    if (comptime platform.is_ios) {
+        const uiw = window orelse return null;
+        for (kea.browsers.items) |b| if (platform.nativeWindow(b.window) == uiw and b.window.?.isFocused()) return b;
+        for (kea.browsers.items) |b| if (platform.nativeWindow(b.window) == uiw) return b;
+        return null;
+    }
     const ns = window orelse return null;
     for (kea.browsers.items) |b| if (b.window) |w| if (w.nswindow == ns) return b;
     return null;
@@ -487,11 +508,13 @@ fn framed(self_obj: objc.Object, _: objc.SEL, note: objc.Object) callconv(.c) vo
 }
 
 fn menuEnded(self_obj: objc.Object, _: objc.SEL, _: objc.Object) callconv(.c) void {
+    if (comptime platform.is_ios) return;
     const kea = objc.getZig(Kea, self_obj) orelse return;
     for (kea.browsers.items) |b| if (b.window) |w| objc.msg(void, w.nswindow, "setMovable:", .{objc.YES});
 }
 
 fn pressed(kea: *Kea, event: objc.Object) ?objc.Object {
+    if (comptime platform.is_ios) return event;
     const b = browserFor(kea, objc.msg(?objc.Object, event, "window", .{})) orelse return event;
     const w = b.window.?;
     const up = objc.msg(objc.NSUInteger, event, "type", .{}) == 2;

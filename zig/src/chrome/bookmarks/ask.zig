@@ -5,6 +5,7 @@
 const std = @import("std");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;
+const platform = @import("../../sys/platform.zig");
 const Browser = @import("../../model/browser.zig").Browser;
 const Kea = @import("../../app/kea.zig").Kea;
 const bm = @import("../../data/bookmarks.zig");
@@ -94,7 +95,8 @@ const Asked = struct {
 };
 
 fn text(field: objc.Object) []const u8 {
-    return std.mem.trim(u8, objc.fromNSString(objc.msg(objc.Object, field, "stringValue", .{})), " \t\r\n");
+    const ns = if (comptime platform.is_ios) objc.msg(?objc.Object, field, "text", .{}) else objc.msg(?objc.Object, field, "stringValue", .{});
+    return std.mem.trim(u8, objc.fromNSString(ns), " \t\r\n");
 }
 
 /// The folders down to `id` open, and `id` itself.
@@ -118,7 +120,7 @@ fn make(b: *Browser, kind: Kind, ids: []const Uuid) ?*Asked {
 }
 
 fn window(b: *Browser) ?objc.Object {
-    return if (b.window) |w| w.nswindow else null;
+    return platform.nativeWindow(b.window);
 }
 
 fn idsOf(nodes: []const Bookmark, out: []Uuid) []Uuid {
@@ -203,6 +205,42 @@ pub fn edit(b: *Browser, node: Bookmark) void {
     const a = make(b, .edit, &.{node.id}) orelse return;
     const pool = objc.Pool.push();
     defer pool.pop();
+    if (comptime platform.is_ios) {
+        const vc = platform.topViewController() orelse return a.free();
+        const ac = objc.retain(objc.msg(objc.Object, objc.class("UIAlertController"), "alertControllerWithTitle:message:preferredStyle:", .{
+            objc.nsString("Edit Bookmark"), @as(?objc.Object, null), @as(objc.NSInteger, 1),
+        }));
+        a.alert = ac;
+        const F = struct {
+            slot: *?objc.Object,
+            ph: objc.Object,
+            val: objc.Object,
+            fn cfg(self: *@This(), tf: objc.Object) void {
+                objc.msg(void, tf, "setPlaceholder:", .{self.ph});
+                objc.msg(void, tf, "setText:", .{self.val});
+                self.slot.* = objc.retain(tf);
+            }
+        };
+        for ([_][2][]const u8{ .{ "Name", node.title }, .{ "Address", node.url orelse "" } }, 0..) |pair, i| {
+            var fc: F = .{ .slot = &a.fields[i], .ph = objc.nsString(pair[0]), .val = objc.nsString(pair[1]) };
+            var blk = objc.Block(F, &.{objc.Object}).init(&fc, F.cfg);
+            objc.msg(void, ac, "addTextFieldWithConfigurationHandler:", .{&blk});
+        }
+        const Handlers = struct {
+            fn onSave(self: *Asked, _: objc.Object) void {
+                self.edited(1000);
+            }
+            fn onCancel(self: *Asked, _: objc.Object) void {
+                self.edited(0);
+            }
+        };
+        var save_blk = objc.Block(Asked, &.{objc.Object}).init(a, Handlers.onSave);
+        var cancel_blk = objc.Block(Asked, &.{objc.Object}).init(a, Handlers.onCancel);
+        objc.msg(void, ac, "addAction:", .{objc.msg(objc.Object, objc.class("UIAlertAction"), "actionWithTitle:style:handler:", .{ objc.nsString("Cancel"), @as(objc.NSInteger, 1), &cancel_blk })});
+        objc.msg(void, ac, "addAction:", .{objc.msg(objc.Object, objc.class("UIAlertAction"), "actionWithTitle:style:handler:", .{ objc.nsString("Save"), @as(objc.NSInteger, 0), &save_blk })});
+        objc.msg(void, vc, "presentViewController:animated:completion:", .{ ac, objc.YES, @as(?*anyopaque, null) });
+        return;
+    }
     const alert = objc.new("NSAlert");
     objc.msg(void, alert, "setMessageText:", .{objc.nsString("Edit Bookmark")});
     const box = objc.msg(objc.Object, objc.alloc("NSView"), "initWithFrame:", .{objc.CGRect{ .size = .{ .width = 260, .height = 56 } }});

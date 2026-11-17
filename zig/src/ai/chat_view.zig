@@ -8,11 +8,14 @@ const std = @import("std");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;
 const ui = nanoui.ui;
+const platform = @import("../sys/platform.zig");
 const MenuItem = nanoui.MenuItem;
 const Browser = @import("../model/browser.zig").Browser;
 const Kea = @import("../app/kea.zig").Kea;
 const Palette = @import("../design/palette.zig").Palette;
+const metrics = @import("../design/metrics.zig");
 const side_panels = @import("../chrome/side_panels.zig");
+const compact_bar = @import("../chrome/compact_bar.zig");
 const controls = @import("../chrome/controls.zig");
 const PanelWindow = @import("../chrome/popped.zig").PanelWindow;
 const appkit = @import("../sys/appkit.zig");
@@ -136,6 +139,10 @@ pub const Do = union(enum) {
 
 /// The panel, `width` wide in its column (null: let out or popped).
 pub fn view(b: *Browser, c: *ui.Context, p: *const Palette, on_left: bool, width: ?f32, expanded: bool, is_popped: bool) void {
+    viewWithCards(b, c, p, on_left, width, expanded, is_popped, false);
+}
+
+pub fn viewWithCards(b: *Browser, c: *ui.Context, p: *const Palette, on_left: bool, width: ?f32, expanded: bool, is_popped: bool, cards: bool) void {
     const a = b.assisting orelse return;
     const st = &b.chat;
     const z: f32 = @floatCast(b.prefs.chat_zoom);
@@ -165,32 +172,50 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette, on_left: bool, width
         st.hovered = null;
     }
 
-    side_panels.begin(c, p, .chat, width, expanded);
+    side_panels.beginWithCards(c, p, .chat, on_left, width, expanded, cards);
     const body = c.open(.{ .width = .fill, .height = .fill }, "kea.chat.body");
-    const roomy = if (c.rects.get(c.node(body).id)) |r| r.w >= 600 else false;
+    const est_w = estimateBodyWidth(b, c.size.w, width, is_popped, cards);
+    const avail_w: f32 = if (c.rects.get(c.node(body).id)) |r| (if (@abs(r.w - est_w) <= 2) r.w else est_w) else est_w;
+    const roomy = avail_w >= 600;
     header(b, c, p, a, &todo, roomy, expanded, is_popped);
     _ = c.leaf(.{ .width = .fill, .height = px(1), .background = p.hairline }, .none, null);
     if (roomy) {
         ui.row(c, .{ .width = .fill, .grow = 1 });
+        const list_w: f32 = if (a.listing and !a.shy) 221 else 0;
         if (a.listing and !a.shy) {
             ui.column(c, .{ .width = px(220), .height = .fill });
             if (a.m.chats.index.len > 40) chat_list.virtualView(b, c, p, a, st, &todo) else chat_list.view(b, c, p, a, st, &todo);
             ui.end(c);
             _ = c.leaf(.{ .width = px(1), .height = .fill, .background = p.hairline }, .none, null);
         }
-        chatColumn(b, c, p, a, st, &todo, z, true);
+        chatColumn(b, c, p, a, st, &todo, z, true, @max(0, avail_w - list_w));
         ui.end(c);
     } else if (a.listing) {
         ui.column(c, .{ .width = .fill, .grow = 1 });
         if (a.m.chats.index.len > 40) chat_list.virtualView(b, c, p, a, st, &todo) else chat_list.view(b, c, p, a, st, &todo);
         ui.end(c);
-    } else chatColumn(b, c, p, a, st, &todo, z, false);
+    } else chatColumn(b, c, p, a, st, &todo, z, false, avail_w);
     c.end();
-    side_panels.end(b, c, p, .chat, on_left, width);
+    side_panels.endWithCards(b, c, p, .chat, on_left, width, cards);
     if (todo != .none) {
         apply(b, a, todo, roomy);
         c.changed = true;
     }
+}
+
+fn estimateBodyWidth(b: *const Browser, win_w: f32, width: ?f32, is_popped: bool, cards: bool) f32 {
+    if (width) |w| return if (cards) @max(0, w - metrics.card_gap) else w;
+    if (is_popped) return win_w;
+    const side_w: f32 = if (b.prefs.sidebar and !b.folded and !compact_bar.isCompactPhone(win_w) and !compact_bar.isNarrowOverlay(win_w))
+        b.prefs.effectiveSideWidth()
+    else if (cards)
+        metrics.card_gap
+    else
+        0;
+    const far_w: f32 = if (cards) metrics.card_gap else 0;
+    const marks_w: f32 = if (b.prefs.bookmarks_sidebar and !b.prefs.marks_popped and b.expanded_panel != .bookmarks and !compact_bar.isNarrowOverlay(win_w)) b.prefs.marks_width else 0;
+    const web_w: f32 = if (b.web_panel_tab != null and b.expanded_panel != .web and !compact_bar.isNarrowOverlay(win_w)) b.prefs.web_width else 0;
+    return @max(0, win_w - side_w - far_w - marks_w - web_w);
 }
 
 fn header(b: *Browser, c: *ui.Context, p: *const Palette, a: *Assistant, todo: *Do, roomy: bool, expanded: bool, is_popped: bool) void {
@@ -217,15 +242,16 @@ fn header(b: *Browser, c: *ui.Context, p: *const Palette, a: *Assistant, todo: *
     if (!is_popped and controls.door(c, p, "xmark", .{ .help = "Close" }).clicked) todo.* = .close;
 }
 
-fn chatColumn(b: *Browser, c: *ui.Context, p: *const Palette, a: *Assistant, st: *State, todo: *Do, z: f32, in_row: bool) void {
+fn chatColumn(b: *Browser, c: *ui.Context, p: *const Palette, a: *Assistant, st: *State, todo: *Do, z: f32, in_row: bool, col_w: f32) void {
     // Keyed: the composer keeps the focus as the chat list comes and goes beside it.
     _ = c.open(if (in_row) .{ .grow = 1, .min_width = 0, .height = .fill } else .{ .width = .fill, .grow = 1 }, "kea.chat.column");
     defer ui.end(c);
-    const sc = c.open(.{ .scroll = true, .scroll_bar = false, .follow_end = true, .width = .fill, .grow = 1 }, "kea.chat.transcript");
+    const sc = c.open(.{ .scroll = true, .scroll_bar = true, .follow_end = true, .width = .fill, .grow = 1, .align_items = .center }, "kea.chat.transcript");
     const sc_id = c.node(sc).id;
     if (c.rects.get(sc_id)) |r| {
         if (st.last_transcript_h > r.h and r.h > 0) {
             if (c.scroll.getPtr(sc_id)) |off| off.* += st.last_transcript_h - r.h;
+            c.animationFrame();
         }
         st.last_transcript_h = r.h;
     }
@@ -241,10 +267,15 @@ fn chatColumn(b: *Browser, c: *ui.Context, p: *const Palette, a: *Assistant, st:
         const max_s = c.scroll_max.get(sc_id) orelse 0;
         c.capScroll(sc_id, cur + (max_s - cur) * @min(1.0, c.dt * 18.0) + 1.5);
     }
-    if (a.chat.turns.len > 8) turns.virtualConversation(b, c, p, a, st, todo, z, sc_id) else turns.conversation(b, c, p, a, st, todo, z);
+    if (a.chat.turns.len > 8) turns.virtualConversation(b, c, p, a, st, todo, z, sc_id, col_w) else turns.conversation(b, c, p, a, st, todo, z);
     c.end();
-    if (a.notice == null) turns.askAnythingDock(b, c, p, a, st, todo, z);
+    _ = c.leaf(.{ .width = .fill, .height = px(1), .background = p.hairline }, .none, null);
+    ui.column(c, .{ .width = .fill, .align_items = .center, .background = p.ground });
+    ui.column(c, .{ .width = .fill, .max_width = 760 * z });
+    if (a.notice == null) turns.askAnythingDock(b, c, p, a, st, todo, z, col_w);
     composer.view(b, c, p, a, st, todo);
+    ui.end(c);
+    ui.end(c);
 }
 /// `todo` done, once the panel is built.
 fn apply(b: *Browser, a: *Assistant, todo: Do, roomy: bool) void {
@@ -273,6 +304,7 @@ fn apply(b: *Browser, a: *Assistant, todo: Do, roomy: bool) void {
             // `draft += draft.isEmpty || draft.hasSuffix(" ") ? "@" : " @"`
             const d = a.draft.items;
             a.draft.appendSlice(a.gpa, if (d.len == 0 or d[d.len - 1] == ' ') "@" else " @") catch {};
+            b.chat.pins_folded = false;
             b.chat.typing = true;
         },
         .pick => |s| a.pick(s),
@@ -409,7 +441,7 @@ fn rename(b: *Browser, act: Act) void {
     };
     const r = std.heap.c_allocator.create(Renaming) catch return;
     r.* = .{ .kea = act.kea, .window = act.window, .chat = act.chat };
-    const win: ?objc.Object = if (b.chat.window) |w| (if (w.window) |nw| nw.nswindow else null) else if (b.window) |w| w.nswindow else null;
+    const win: ?objc.Object = platform.nativeWindow(if (b.chat.window) |w| w.window else b.window);
     appkit.ask(win, .{ .title = "Rename Chat", .field = .{ .placeholder = "Name", .initial = act.text }, .confirm = "Rename" }, r, Renaming.done);
 }
 pub fn item(arena: std.mem.Allocator, b: *Browser, label: []const u8, what: Act.What, id: Uuid, text: []const u8, disabled: bool) !MenuItem {
@@ -465,9 +497,15 @@ const Later = struct {
         defer arena.deinit();
         const template = l.build(arena.allocator(), b, l.id) catch return;
         if (template.len == 0) return;
-        const m = nanoui.Menu.create(b.gpa, @import("../app/kea.zig").app_name, template) catch return;
-        defer m.destroy();
-        m.popup(s.nsview, l.at.x, l.at.y);
+        if (comptime platform.is_ios) {
+            const m = nanoui.Menu.create(b.gpa, template) catch return;
+            defer m.destroy();
+            if (platform.nativeView(s)) |v| m.popup(v, l.at.x, l.at.y);
+        } else {
+            const m = nanoui.Menu.create(b.gpa, @import("../app/kea.zig").app_name, template) catch return;
+            defer m.destroy();
+            m.popup(s.nsview, l.at.x, l.at.y);
+        }
     }
 };
 pub fn menuLater(b: *Browser, at: ui.Point, id: Uuid, build: Build) void {

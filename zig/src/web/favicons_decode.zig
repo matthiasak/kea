@@ -6,6 +6,7 @@ const std = @import("std");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;
 const cg = @import("../sys/cg.zig");
+const platform = @import("../sys/platform.zig");
 
 pub const Mono = @import("../chrome/mark.zig").Mono;
 
@@ -68,6 +69,7 @@ fn isSvgBytes(bytes: []const u8) bool {
 }
 
 fn squareSvg(gpa: std.mem.Allocator, bytes: []const u8) ?[]u8 {
+    if (comptime platform.is_ios) return null;
     const nsdata = objc.msg(?objc.Object, objc.class("NSData"), "dataWithBytes:length:", .{ bytes.ptr, @as(objc.NSUInteger, bytes.len) }) orelse return null;
     const img = objc.msg(?objc.Object, objc.alloc("NSImage"), "initWithData:", .{nsdata}) orelse return null;
     defer objc.release(img);

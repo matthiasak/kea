@@ -119,3 +119,143 @@ test "organizer asks with 8,192 tokens and a 1,024 thinking budget" {
     try t.expectEqualStrings("on this Mac · Ollama · m", p.place);
     try t.expectEqualStrings("No bookmarks to organize", (try org.refusal(a, &.{}, ai.ollama)).?);
 }
+
+test "flat groups JSON parses into folderless 1D semantic neighbor categories" {
+    var rig: Rig = undefined;
+    try rig.init(t.allocator);
+    defer rig.deinit();
+    var marks = bm.Bookmarks.init(t.allocator, &rig.store);
+    defer marks.deinit();
+    _ = marks.add("https://arxiv.org/list/cs.LG/recent", "arXiv ML");
+    _ = marks.add("https://bpc157.guide/", "Peptide Protocols");
+    _ = marks.add("https://riscv.org/specifications/", "RISC-V Specs");
+    _ = marks.add("https://examine.com/supplements/magnesium/", "Examine Magnesium");
+    _ = marks.add("https://huggingface.co/papers", "Daily Papers");
+    _ = marks.add("https://arxiv.org/list/cs.LG/recent#dup", "arXiv ML copy");
+    var arena: std.heap.ArenaAllocator = .init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const base = try bm.Bookmark.copy(a, marks.roots);
+    const list = try listOf(a, base);
+    const answer =
+        \\```json
+        \\{
+        \\  "groups": [
+        \\    {"category": "  AI & ML Research  ", "items": [1, " 5 ", 1]},
+        \\    {"name": "EE & Chip Design", "items": [3]},
+        \\    {"category": "Health & Supplements", "items": [4]},
+        \\    {"category": "Peptides", "items": [2]},
+        \\    {"category": "Empty", "items": []}
+        \\  ],
+        \\  "remove": [6, 99, "bad"]
+        \\}
+        \\```
+    ;
+    const p = (try org.proposal(t.allocator, answer, base, list, "Groq · llama")).?;
+    defer p.destroy();
+    try t.expectEqual(@as(usize, 5), p.tree.len);
+    try t.expectEqual(@as(usize, 1), p.removed.len);
+    try t.expectEqual(@as(usize, 0), p.left_out);
+    try t.expect(p.removed[0].id.eql(list[5].id));
+    for (p.tree) |node| {
+        try t.expect(!node.isFolder());
+        try t.expect(node.children == null);
+    }
+    try t.expectEqualStrings("arXiv ML", p.tree[0].title);
+    try t.expectEqualStrings("AI & ML Research", p.tree[0].category.?);
+    try t.expectEqualStrings("Daily Papers", p.tree[1].title);
+    try t.expectEqualStrings("AI & ML Research", p.tree[1].category.?);
+    try t.expectEqualStrings("RISC-V Specs", p.tree[2].title);
+    try t.expectEqualStrings("EE & Chip Design", p.tree[2].category.?);
+    try t.expectEqualStrings("Examine Magnesium", p.tree[3].title);
+    try t.expectEqualStrings("Health & Supplements", p.tree[3].category.?);
+    try t.expectEqualStrings("Peptide Protocols", p.tree[4].title);
+    try t.expectEqualStrings("Peptides", p.tree[4].category.?);
+    try t.expectEqual(@as(usize, 4), bm.Bookmarks.cat.countCategories(p.tree));
+
+    // Empty groups with no removals returns null; blank category falls back to "General"; bare numbers stay uncategorized.
+    try t.expect((try org.proposal(t.allocator, "{\"groups\":[]}", base, list, "x")) == null);
+    const fallback = (try org.proposal(t.allocator, "{\"groups\":[{\"category\":\"   \",\"items\":[1]},2]}", base, list, "x")).?;
+    defer fallback.destroy();
+    try t.expectEqualStrings("General", fallback.tree[0].category.?);
+    try t.expect(fallback.tree[1].category == null);
+    try t.expectEqual(@as(usize, 4), fallback.left_out);
+}
+
+test "same detects category-only changes and apply commits flat categories" {
+    var rig: Rig = undefined;
+    try rig.init(t.allocator);
+    defer rig.deinit();
+    var marks = bm.Bookmarks.init(t.allocator, &rig.store);
+    defer marks.deinit();
+    _ = marks.add("https://arxiv.org/", "arXiv");
+    _ = marks.add("https://ieee.org/", "IEEE");
+    var arena: std.heap.ArenaAllocator = .init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const GroupStub = struct {
+        fn stream(_: ?*anyopaque, _: *ai.Ai, _: client.Ask, sink: client.Sink) ?client.Handle {
+            sink.piece(sink.ctx, "{\"groups\":[{\"category\":\"AI & ML Research\",\"items\":[1]},{\"category\":\"EE & Chip Design\",\"items\":[2]}],\"remove\":[]}");
+            sink.done(sink.ctx, null);
+            return null;
+        }
+    };
+    rig.ai.client = .{ .ctx = null, .stream = GroupStub.stream };
+    var heard: Heard = .{};
+    var slot: ?*org.Organizing = null;
+    org.ask(rig.ai, marks.roots, "", ai.ollama, "m", &heard, Heard.then, &slot);
+    const p = heard.got.?;
+    defer p.destroy();
+    try t.expect(p.tree[0].id.eql(marks.roots[0].id));
+    try t.expect(p.tree[1].id.eql(marks.roots[1].id));
+    try t.expect(!org.same(marks.roots, p.tree));
+    try t.expectEqual(org.Applied.applied, org.apply(&marks, p));
+    try t.expect(org.same(marks.roots, p.tree));
+    try t.expectEqualStrings("AI & ML Research", marks.roots[0].category.?);
+    try t.expectEqualStrings("EE & Chip Design", marks.roots[1].category.?);
+
+    // Opening metadata encodes category alone and folder + category together; system prompt specifies "groups" default.
+    const sys = try org.system(a, "fence-1");
+    try t.expect(std.mem.indexOf(u8, sys, "\"groups\"") != null);
+    try t.expect(std.mem.indexOf(u8, sys, "\"tree\"") != null);
+    const sub = try a.alloc(bm.Bookmark, 1);
+    sub[0] = .{ .id = json.Uuid.random(), .title = "Spec", .url = "https://chip.dev/spec", .category = "Chips" };
+    const mixed = try a.alloc(bm.Bookmark, 2);
+    mixed[0] = bm.Bookmark.folder("Work", sub);
+    mixed[1] = marks.roots[0];
+    const open_txt = try org.opening(a, try org.sites(a, mixed), org.standing, "fence-1");
+    try t.expect(std.mem.indexOf(u8, open_txt, "1. Spec — chip.dev/spec  (in: Work · category: Chips)") != null);
+    try t.expect(std.mem.indexOf(u8, open_txt, "2. arXiv — arxiv.org/  (category: AI & ML Research)") != null);
+}
+
+test "tree JSON stays backwards-compatible for folder requests and category entries" {
+    var arena: std.heap.ArenaAllocator = .init(t.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const base = try a.alloc(bm.Bookmark, 3);
+    base[0] = .{ .id = json.Uuid.random(), .title = "Paper", .url = "https://arxiv.org/abs/1", .category = "Old" };
+    base[1] = .{ .id = json.Uuid.random(), .title = "RTL", .url = "https://hdlbits.01xz.net/", .category = "Old" };
+    base[2] = .{ .id = json.Uuid.random(), .title = "Deals", .url = "https://slickdeals.net/", .category = null };
+    const list = try listOf(a, base);
+
+    const foldered = (try org.proposal(t.allocator, "{\"tree\":[{\"folder\":\"Engineering\",\"items\":[1,{\"folder\":\"Hardware\",\"items\":[2]}]},3]}", base, list, "x")).?;
+    defer foldered.destroy();
+    try t.expectEqual(@as(usize, 2), foldered.tree.len);
+    try t.expect(foldered.tree[0].isFolder());
+    try t.expectEqualStrings("Engineering", foldered.tree[0].title);
+    try t.expect(foldered.tree[0].category == null);
+    try t.expect(foldered.tree[0].children.?[0].category == null);
+    try t.expect(foldered.tree[0].children.?[1].isFolder());
+    try t.expectEqualStrings("Hardware", foldered.tree[0].children.?[1].title);
+    try t.expect(foldered.tree[0].children.?[1].children.?[0].category == null);
+    try t.expect(!foldered.tree[1].isFolder());
+    try t.expect(foldered.tree[1].category == null);
+
+    // A "category" object inside "tree" (with no "folder") flattens cleanly into categorized top-level bookmarks.
+    const flat_in_tree = (try org.proposal(t.allocator, "{\"tree\":[{\"category\":\"Shopping & Deals\",\"items\":[3]}]}", base, list, "x")).?;
+    defer flat_in_tree.destroy();
+    try t.expect(!flat_in_tree.tree[0].isFolder());
+    try t.expectEqualStrings("Shopping & Deals", flat_in_tree.tree[0].category.?);
+}

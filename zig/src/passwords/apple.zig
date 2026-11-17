@@ -5,6 +5,7 @@
 const std = @import("std");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;
+const platform = @import("../sys/platform.zig");
 const Browser = @import("../model/browser.zig").Browser;
 const Kea = @import("../app/kea.zig").Kea;
 const Uuid = @import("../data/json.zig").Uuid;
@@ -27,6 +28,7 @@ const heap = std.heap.c_allocator;
 const manifest_path = "/Library/Google/Chrome/NativeMessagingHosts/com.apple.passwordmanager.json";
 
 pub fn available() bool {
+    if (comptime platform.is_ios) return false;
     return access(manifest_path, 0) == 0;
 }
 
@@ -154,9 +156,14 @@ fn proved(ctx: *MoveCtx, ok: bool) void {
     nanoui.shell.showInFolder(path);
     const pool = objc.Pool.push();
     defer pool.pop();
-    const ws = objc.msg(objc.Object, objc.class("NSWorkspace"), "sharedWorkspace", .{});
-    if (objc.msg(?objc.Object, ws, "URLForApplicationWithBundleIdentifier:", .{objc.nsString("com.apple.Passwords")})) |u| {
-        _ = objc.msg(objc.BOOL, ws, "openURL:", .{u});
+    if (comptime platform.is_ios) {
+        if (objc.msg(?objc.Object, objc.class("NSURL"), "URLWithString:", .{objc.nsString("app-settings:")})) |u|
+            _ = platform.openExternalURL(u);
+    } else {
+        const ws = objc.msg(objc.Object, objc.class("NSWorkspace"), "sharedWorkspace", .{});
+        if (objc.msg(?objc.Object, ws, "URLForApplicationWithBundleIdentifier:", .{objc.nsString("com.apple.Passwords")})) |u| {
+            _ = platform.openExternalURL(u);
+        }
     }
     b.announce("In Passwords, choose File › Import Passwords… and pick Kea Passwords.csv.");
 }

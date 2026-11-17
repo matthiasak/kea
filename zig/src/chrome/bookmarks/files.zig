@@ -5,6 +5,7 @@
 const std = @import("std");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;
+const platform = @import("../../sys/platform.zig");
 const Browser = @import("../../model/browser.zig").Browser;
 const Kea = @import("../../app/kea.zig").Kea;
 const Uuid = @import("../../data/json.zig").Uuid;
@@ -33,7 +34,31 @@ const Pending = struct {
     }
 };
 
+const IosPick = struct {
+    kea: *Kea,
+    record: Uuid,
+    fn run(ctx: ?*anyopaque) callconv(.c) void {
+        const self: *IosPick = @ptrCast(@alignCast(ctx.?));
+        defer std.heap.c_allocator.destroy(self);
+        const b0 = for (self.kea.browsers.items) |x| {
+            if (x.record_id.eql(self.record)) break x;
+        } else return;
+        const paths = (nanoui.dialog.open(b0.gpa, .{
+            .title = "Bring In",
+            .extensions = &.{ "html", "htm", "csv", "txt", "zip", "json" },
+        }) catch null) orelse return;
+        defer nanoui.dialog.freePaths(b0.gpa, paths);
+        if (paths.len == 0) return;
+        const b = for (self.kea.browsers.items) |x| {
+            if (x.record_id.eql(self.record)) break x;
+        } else return;
+        _ = takers.takeFile(b, paths[0]);
+        b.redraw();
+    }
+};
+
 fn begin(b: *Browser, panel: objc.Object) void {
+    if (comptime platform.is_ios) return;
     const w = b.window orelse return;
     const p = std.heap.c_allocator.create(Pending) catch return;
     p.* = .{ .kea = b.kea, .record = b.record_id, .panel = objc.retain(panel) };
@@ -51,6 +76,12 @@ fn types(ids: []const []const u8) objc.Object {
 /// once, never copied. Nothing while a file is already coming in.
 pub fn importFile(b: *Browser) void {
     if (b.window == null or b.importing.file != null) return;
+    if (comptime platform.is_ios) {
+        const pick = std.heap.c_allocator.create(IosPick) catch return;
+        pick.* = .{ .kea = b.kea, .record = b.record_id };
+        objc.dispatchMain(pick, IosPick.run);
+        return;
+    }
     const pool = objc.Pool.push();
     defer pool.pop();
     const panel = objc.msg(objc.Object, objc.class("NSOpenPanel"), "openPanel", .{});

@@ -9,6 +9,7 @@ const nanoui = @import("nanoui");
 const objc = nanoui.objc;
 const Browser = @import("../model/browser.zig").Browser;
 const Prefs = @import("../data/prefs.zig").Prefs;
+const platform = @import("../sys/platform.zig");
 
 pub const Substitution = enum {
     quotes,
@@ -43,6 +44,7 @@ pub const Substitution = enum {
 
     /// What the Mac says, for every app that hasn't been told otherwise.
     pub fn mac(s: Substitution) bool {
+        if (comptime platform.is_ios) return false;
         const checker = objc.class("NSSpellChecker");
         return switch (s) {
             .quotes => objc.msg(objc.BOOL, checker, "isAutomaticQuoteSubstitutionEnabled", .{}),
@@ -59,6 +61,7 @@ pub const Substitution = enum {
     /// Whether it's on in pages, asked of WebKit the way a menu's tick is;
     /// without a view yet, what WebKit will read.
     pub fn isOn(s: Substitution, prefs: *const Prefs, web: ?objc.Object) bool {
+        if (comptime platform.is_ios) return false;
         const wv = web orelse return defaults(prefs).get(s);
         if (!objc.msg(objc.BOOL, wv, "respondsToSelector:", .{objc.sel(s.action())})) return defaults(prefs).get(s);
         const pool = objc.Pool.push();
@@ -72,6 +75,7 @@ pub const Substitution = enum {
     /// Flipped for every page through WebKit's own action; without a view
     /// yet, written where WebKit will read it.
     pub fn toggle(s: Substitution, prefs: *const Prefs, web: ?objc.Object) void {
+        if (comptime platform.is_ios) return;
         if (web) |wv| if (objc.msg(objc.BOOL, wv, "respondsToSelector:", .{objc.sel(s.action())})) {
             objc.msg(void, wv, s.action(), .{@as(?objc.Object, null)});
             return;
@@ -102,6 +106,7 @@ fn defaults(prefs: *const Prefs) Defaults {
 /// memory only, so a choice made in the menu stays the one that counts and
 /// the Mac's setting is read afresh at each launch.
 pub fn register(prefs: *const Prefs) void {
+    if (comptime platform.is_ios) return;
     const pool = objc.Pool.push();
     defer pool.pop();
     const start = objc.msg(objc.Object, objc.class("NSMutableDictionary"), "dictionary", .{});
@@ -132,6 +137,7 @@ pub fn toggleSubstitution(b: *Browser, s: Substitution) void {
 
 /// The Mac's own panel of them, as Show Substitutions opens it in Safari.
 pub fn showPanel() void {
+    if (comptime platform.is_ios) return;
     const checker = objc.msg(objc.Object, objc.class("NSSpellChecker"), "sharedSpellChecker", .{});
     objc.msg(void, objc.msg(objc.Object, checker, "substitutionsPanel", .{}), "orderFront:", .{@as(?objc.Object, null)});
 }

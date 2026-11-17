@@ -18,6 +18,7 @@ const curtain_js = @import("curtain_js.zig");
 const store_relay = @import("../ext/store_relay.zig");
 const forms = @import("../passwords/forms.zig");
 const passkeys = @import("../passwords/passkeys.zig");
+const platform = @import("../sys/platform.zig");
 
 const scroll_script = @embedFile("js/scroll_relay.js");
 const middle_script = @embedFile("js/middle_relay.js");
@@ -139,11 +140,12 @@ pub fn arm(t: *Tab, css: []const u8) void {
     addCached(ucc, &Cached.favicons_relay, favicons.relay_script, false, true, w);
     if (prefs.auto_scroll) addCached(ucc, &Cached.auto_scroll, auto_scroll_script, false, true, w);
     // Every frame: a swipe over an embedded map is the map's.
-    addCached(ucc, &Cached.swipe, swipe_script, true, false, w);
-    addCached(ucc, &Cached.image, image_script, false, false, w);
-    if (prefs.shows_links) addCached(ucc, &Cached.link, link_script, false, false, w);
-    // The main frame only: a middle-click inside an ad's frame is its own.
-    addCached(ucc, &Cached.middle, middle_script, false, true, w);
+    if (comptime !platform.is_ios) {
+        addCached(ucc, &Cached.swipe, swipe_script, true, false, w);
+        addCached(ucc, &Cached.image, image_script, false, false, w);
+        if (prefs.shows_links) addCached(ucc, &Cached.link, link_script, false, false, w);
+        addCached(ucc, &Cached.middle, middle_script, false, true, w);
+    }
     // The store's "Add to Kea" only where Kea can add extensions.
     if (t.kea.ext != null) addCached(ucc, &Cached.store, store_relay.script, false, true, w);
     // Every frame, in the page's own world and ahead of its scripts.

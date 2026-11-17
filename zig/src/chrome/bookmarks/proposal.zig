@@ -4,6 +4,7 @@
 const std = @import("std");
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
+const platform = @import("../../sys/platform.zig");
 const Browser = @import("../../model/browser.zig").Browser;
 const Kea = @import("../../app/kea.zig").Kea;
 const bm = @import("../../data/bookmarks.zig");
@@ -41,7 +42,7 @@ pub fn organizeBookmarks(b: *Browser) void {
     const detail = organize.notice(a, b.kea.ai, ready.provider, count) catch return;
     const asked = std.heap.c_allocator.create(Asked) catch return;
     asked.* = .{ .kea = b.kea, .record = b.record_id };
-    const window = if (b.window) |w| w.nswindow else null;
+    const window = platform.nativeWindow(b.window);
     appkit.ask(window, .{ .title = "Organize with AI", .detail = detail, .field = .{ .placeholder = organize.standing }, .confirm = "Organize" }, asked, Asked.done);
 }
 
@@ -104,10 +105,15 @@ pub fn asking(b: *Browser, c: *ui.Context, p: *const Palette, says: []const u8) 
 pub fn view(b: *Browser, c: *ui.Context, p: *const Palette, proposal: *const organize.Proposal) void {
     ui.column(c, .{ .width = .fill, .gap = 10 });
     defer ui.end(c);
-    const n = if (Bookmarks.folders(c.alloc(), proposal.tree)) |all| all.len else |_| 0;
+    const n_folders = if (Bookmarks.folders(c.alloc(), proposal.tree)) |all| all.len else |_| 0;
+    const n_cats = Bookmarks.cat.countCategories(proposal.tree);
     const removed = if (proposal.removed.len == 0) "" else c.print(" \u{00B7} {d} to remove", .{proposal.removed.len});
     const left = if (proposal.left_out == 0) "" else c.print(" \u{00B7} {d} left at the end", .{proposal.left_out});
-    ui.text(c, c.print("{d} bookmarks in {d} folder{s}{s}{s}", .{ Bookmarks.count(proposal.tree), n, if (n == 1) "" else "s", removed, left }), .{ .size = 12, .color = p.muted });
+    const summary = if (n_folders == 0 and n_cats > 0)
+        c.print("{d} bookmarks in {d} {s}{s}{s}", .{ Bookmarks.count(proposal.tree), n_cats, if (n_cats == 1) "category" else "categories", removed, left })
+    else
+        c.print("{d} bookmarks in {d} folder{s}{s}{s}", .{ Bookmarks.count(proposal.tree), n_folders, if (n_folders == 1) "" else "s", removed, left });
+    ui.text(c, summary, .{ .size = 12, .color = p.muted });
 
     plate.cardBox(c, p);
     _ = c.open(.{ .width = .fill, .max_height = 360, .scroll = true, .direction = .column, .scroll_bar = false }, "bm.proposal.tree");
@@ -159,7 +165,22 @@ pub fn frame(b: *Browser) void {
 }
 
 fn rows(b: *Browser, c: *ui.Context, p: *const Palette, nodes: []const Bookmark, depth: usize) void {
+    var prev_cat: ?[]const u8 = null;
     for (nodes) |*node| {
+        if (depth == 0) {
+            if (node.isFolder()) {
+                prev_cat = null;
+            } else {
+                const cat = Bookmarks.cat.norm(node.category);
+                if (cat != null and !Bookmarks.cat.optEq(prev_cat, cat)) {
+                    ui.row(c, .{ .width = .fill, .gap = 6, .align_items = .center, .padding = .{ .left = 10, .right = 10, .top = 7, .bottom = 2 } });
+                    ui.text(c, cat.?, .{ .size = 11, .weight = .semibold, .color = p.muted, .truncate = .ellipsis });
+                    _ = c.leaf(.{ .grow = 1, .height = px(1), .background = p.hairline.alpha(0.75) }, .none, null);
+                    ui.end(c);
+                }
+                prev_cat = cat;
+            }
+        }
         ui.row(c, .{ .width = .fill, .gap = 8, .align_items = .center, .padding = .{ .left = @as(f32, @floatFromInt(depth)) * 18 + 10, .top = 4, .bottom = 4 } });
         if (node.isFolder()) {
             _ = c.open(.{ .width = px(15), .align_items = .center, .justify = .center }, null);

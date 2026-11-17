@@ -2,6 +2,7 @@
 //! its public suffix. `registrable` asks macOS's own list, as `Vault` does.
 const std = @import("std");
 const objc = @import("nanoui").objc;
+const platform = @import("../sys/platform.zig");
 const url_mod = @import("url.zig");
 
 pub const IsSuffix = *const fn (name: []const u8) bool;
@@ -41,6 +42,7 @@ var looked = false;
 /// WebKit's own public-suffix test (`_CFHostIsDomainTopLevel`, private to
 /// CFNetwork), or null when this macOS lacks it. Main thread.
 pub fn publicSuffix() ?IsSuffix {
+    if (comptime platform.is_ios) return null;
     if (!looked) {
         looked = true;
         const lib = std.c.dlopen("/System/Library/Frameworks/CFNetwork.framework/CFNetwork", .{ .NOW = true });

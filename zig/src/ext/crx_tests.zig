@@ -1,6 +1,7 @@
 const std = @import("std");
 const objc = @import("nanoui").objc;
 const crx = @import("crx.zig");
+const platform = @import("../sys/platform.zig");
 
 extern "c" const kSecAttrKeyType: objc.Object;
 extern "c" const kSecAttrKeyTypeRSA: objc.Object;
@@ -45,17 +46,51 @@ test "crx unpacks fixture" {
     const base = try std.fmt.allocPrint(gpa, "/tmp/kea-crx-test-{d}", .{std.c.getpid()});
     defer gpa.free(base);
     defer _ = objc.msg(objc.BOOL, files, "removeItemAtPath:error:", .{ objc.nsString(base), @as(?*anyopaque, null) });
-    const src = try std.fmt.allocPrint(gpa, "{s}/src", .{base});
-    defer gpa.free(src);
-    _ = objc.msg(objc.BOOL, files, "createDirectoryAtPath:withIntermediateDirectories:attributes:error:", .{ objc.nsString(src), true, @as(?objc.Object, null), @as(?*anyopaque, null) });
-    const manifest = try std.fmt.allocPrint(gpa, "{s}/manifest.json", .{src});
-    defer gpa.free(manifest);
-    _ = objc.msg(objc.BOOL, objc.nsString("{\"manifest_version\":3}"), "writeToFile:atomically:encoding:error:", .{ objc.nsString(manifest), false, @as(objc.NSUInteger, 4), @as(?*anyopaque, null) });
-    const zip_path = try std.fmt.allocPrint(gpa, "{s}/x.zip", .{base});
-    defer gpa.free(zip_path);
-    try std.testing.expect(crx.ditto(&.{ "-c", "-k", src, zip_path }));
-    const zip = bytes(objc.msg(objc.Object, objc.class("NSData"), "dataWithContentsOfFile:", .{objc.nsString(zip_path)}));
-
+    var zip_buf: std.ArrayList(u8) = .empty;
+    defer zip_buf.deinit(gpa);
+    const zip: []const u8 = if (comptime platform.is_ios) blk: {
+        const name = "manifest.json";
+        const body = "{\"manifest_version\":3}";
+        const crc = std.hash.Crc32.hash(body);
+        var lfh: [30]u8 = @splat(0);
+        @memcpy(lfh[0..4], "PK\x03\x04");
+        std.mem.writeInt(u32, lfh[14..18], crc, .little);
+        std.mem.writeInt(u32, lfh[18..22], body.len, .little);
+        std.mem.writeInt(u32, lfh[22..26], body.len, .little);
+        std.mem.writeInt(u16, lfh[26..28], name.len, .little);
+        try zip_buf.appendSlice(gpa, &lfh);
+        try zip_buf.appendSlice(gpa, name);
+        try zip_buf.appendSlice(gpa, body);
+        const cd_off: u32 = @intCast(zip_buf.items.len);
+        var cd: [46]u8 = @splat(0);
+        @memcpy(cd[0..4], "PK\x01\x02");
+        std.mem.writeInt(u32, cd[16..20], crc, .little);
+        std.mem.writeInt(u32, cd[20..24], body.len, .little);
+        std.mem.writeInt(u32, cd[24..28], body.len, .little);
+        std.mem.writeInt(u16, cd[28..30], name.len, .little);
+        try zip_buf.appendSlice(gpa, &cd);
+        try zip_buf.appendSlice(gpa, name);
+        const cd_size: u32 = @as(u32, @intCast(zip_buf.items.len)) - cd_off;
+        var eocd: [22]u8 = @splat(0);
+        @memcpy(eocd[0..4], "PK\x05\x06");
+        std.mem.writeInt(u16, eocd[8..10], 1, .little);
+        std.mem.writeInt(u16, eocd[10..12], 1, .little);
+        std.mem.writeInt(u32, eocd[12..16], cd_size, .little);
+        std.mem.writeInt(u32, eocd[16..20], cd_off, .little);
+        try zip_buf.appendSlice(gpa, &eocd);
+        break :blk zip_buf.items;
+    } else blk: {
+        const src = try std.fmt.allocPrint(gpa, "{s}/src", .{base});
+        defer gpa.free(src);
+        _ = objc.msg(objc.BOOL, files, "createDirectoryAtPath:withIntermediateDirectories:attributes:error:", .{ objc.nsString(src), true, @as(?objc.Object, null), @as(?*anyopaque, null) });
+        const manifest = try std.fmt.allocPrint(gpa, "{s}/manifest.json", .{src});
+        defer gpa.free(manifest);
+        _ = objc.msg(objc.BOOL, objc.nsString("{\"manifest_version\":3}"), "writeToFile:atomically:encoding:error:", .{ objc.nsString(manifest), false, @as(objc.NSUInteger, 4), @as(?*anyopaque, null) });
+        const zip_path = try std.fmt.allocPrint(gpa, "{s}/x.zip", .{base});
+        defer gpa.free(zip_path);
+        try std.testing.expect(crx.ditto(&.{ "-c", "-k", src, zip_path }));
+        break :blk bytes(objc.msg(objc.Object, objc.class("NSData"), "dataWithContentsOfFile:", .{objc.nsString(zip_path)}));
+    };
     // An RSA key kept nowhere (no kSecAttrIsPermanent).
     const params = objc.msg(objc.Object, objc.class("NSMutableDictionary"), "dictionary", .{});
     objc.msg(void, params, "setObject:forKey:", .{ kSecAttrKeyTypeRSA, kSecAttrKeyType });

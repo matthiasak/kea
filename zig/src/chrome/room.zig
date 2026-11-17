@@ -6,6 +6,7 @@ const std = @import("std");
 const ui = @import("nanoui").ui;
 const metrics = @import("../design/metrics.zig");
 
+const compact_bar = @import("compact_bar.zig");
 /// `BookmarksBar.height`.
 pub const bar_height: f32 = 30;
 
@@ -35,14 +36,27 @@ pub const Room = struct {
     /// 0 before the window is measured.
     window_width: f32 = 0,
 
+    pub fn compactPhone(r: Room) bool {
+        return compact_bar.isCompactPhone(r.window_width);
+    }
+
+    pub fn narrowOverlay(r: Room) bool {
+        return compact_bar.isNarrowOverlay(r.window_width);
+    }
+
+    /// On iPad Split View (`600..899pt`), the sidebar slides over the page instead of squeezing it.
+    pub fn overlaySidebar(r: Room) bool {
+        return r.narrowOverlay() and !r.compactPhone() and r.sidebar_pref and !r.folded and !r.fullscreen;
+    }
+
     /// The page as a card on the window's ground.
     pub fn cards(r: Room) bool {
-        return r.sidebar_pref and !r.fullscreen;
+        return !r.compactPhone() and !r.narrowOverlay() and r.sidebar_pref and !r.fullscreen;
     }
 
     /// The tabs down the side, and not folded away.
     pub fn sidebar(r: Room) bool {
-        return r.sidebar_pref and !r.folded and !r.fullscreen;
+        return !r.compactPhone() and !r.narrowOverlay() and r.sidebar_pref and !r.folded and !r.fullscreen;
     }
 
     pub fn sideOnRight(r: Room) bool {
@@ -51,7 +65,8 @@ pub const Room = struct {
 
     /// The column has its own corner for the lights; the strip needs a band.
     pub fn band(r: Room) f32 {
-        if (r.fullscreen) return 0;
+        if (r.fullscreen or r.compactPhone()) return 0;
+        if (r.narrowOverlay()) return metrics.strip;
         return if (r.sidebar_pref or r.folded) 0 else metrics.strip;
     }
 
@@ -61,7 +76,7 @@ pub const Room = struct {
     }
 
     pub fn barShown(r: Room) bool {
-        return r.bar_pref and r.has_bookmarks and !r.folded and !r.fullscreen;
+        return !r.compactPhone() and r.bar_pref and r.has_bookmarks and !r.folded and !r.fullscreen;
     }
 
     /// What the column and the strip take from the page.

@@ -8,6 +8,7 @@ const asking = @import("../controller_asking.zig");
 const asked = @import("../downloads.zig");
 const keeping = @import("../../web/downloads_keep.zig");
 const files = @import("../../web/downloads.zig");
+const platform = @import("../../sys/platform.zig");
 
 const Value = ans.Value;
 
@@ -96,7 +97,7 @@ fn open(path: []const u8) void {
     const pool = objc.Pool.push();
     defer pool.pop();
     const url = objc.msg(objc.Object, objc.class("NSURL"), "fileURLWithPath:", .{objc.nsString(path)});
-    _ = objc.msg(objc.BOOL, objc.msg(objc.Object, objc.class("NSWorkspace"), "sharedWorkspace", .{}), "openURL:", .{url});
+    _ = platform.openExternalURL(url);
 }
 
 fn eql(a: []const u8, b: []const u8) bool {

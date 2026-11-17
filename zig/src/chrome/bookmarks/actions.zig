@@ -32,7 +32,11 @@ pub fn bookmarkCurrent(b: *Browser) void {
     const t = b.activeTab() orelse return;
     if (t.isBlank()) return;
     const kept = b.bookmarks.bookmarkFor(t.url());
-    const id = if (kept) |k| k.id else b.bookmarks.add(t.url(), t.title()) orelse return;
+    const id = if (kept) |k| k.id else if (b.prefs.bookmarks_auto_sort) blk: {
+        const added = Bookmarks.cat.addOptimistic(b.bookmarks, t.url(), t.title()) orelse return;
+        @import("../../ai/organize_auto.zig").schedule(b.kea.ai, b.bookmarks, added, t.shy);
+        break :blk added.id;
+    } else b.bookmarks.add(t.url(), t.title()) orelse return;
     if (b.folded) return b.announce(if (kept == null) "Bookmarked" else "Already a bookmark");
     const s = &b.marks_ui;
     s.card = id;

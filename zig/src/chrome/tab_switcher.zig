@@ -6,6 +6,7 @@ const std = @import("std");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;
 const ui = nanoui.ui;
+const platform = @import("../sys/platform.zig");
 const Browser = @import("../model/browser.zig").Browser;
 const Tab = @import("../web/tab.zig").Tab;
 const cg = @import("../sys/cg.zig");
@@ -57,7 +58,7 @@ pub const TabSwitcher = struct {
     /// Where the panel and its cards were drawn last, in the window's own
     /// top-left points: a click is taken by the key monitor (`clickTabSwitcher`).
     panel_frame: ?ui.Rect = null,
-    cards: [10]struct { id: u64, rect: ui.Rect } = undefined,
+    cards: [24]struct { id: u64, rect: ui.Rect } = undefined,
     card_count: usize = 0,
 
     pub fn active(s: *const TabSwitcher) bool {
@@ -162,6 +163,25 @@ pub fn switchTabs(b: *Browser, backwards: bool) void {
     for (b.tabs.items) |t| if (b.standsInRow(t)) row.append(b.gpa, t.id) catch return;
     const current = if (b.activeSplit()) |p| p.left() else b.active_id;
     step(b, row.items, current, backwards);
+    b.redraw();
+}
+
+/// Touch / toolbar toggle: shows every tab in the current space as a visual grid
+/// (including when only 1 tab is open), or closes the grid when already up.
+pub fn toggleGrid(b: *Browser) void {
+    const s = &b.switcher;
+    if (s.visible) return cancel(b);
+    s.candidates.clearRetainingCapacity();
+    s.partners.clearRetainingCapacity();
+    if (b.prefs.split_view) for (b.splits.items) |p| if (s.partnerOf(p.left()) == null) {
+        s.partners.append(b.gpa, .{ p.left(), p.right() }) catch {};
+    };
+    for (b.tabs.items) |t| if (b.standsInRow(t)) {
+        if (s.candidates.items.len < s.cards.len) s.candidates.append(b.gpa, t.id) catch {};
+    };
+    if (s.candidates.items.len == 0) return;
+    s.selected = if (b.activeSplit()) |p| p.left() else b.active_id;
+    show(b);
     b.redraw();
 }
 
@@ -433,7 +453,7 @@ fn snapped(job: *Job, image: ?objc.Object, _: ?objc.Object) void {
     const img = image orelse return dropJob(job);
     const pool = objc.Pool.push();
     defer pool.pop();
-    const raw: ?cg.Image = @ptrCast(objc.msg(?*anyopaque, img, "CGImageForProposedRect:context:hints:", .{ @as(?*anyopaque, null), @as(?objc.Object, null), @as(?objc.Object, null) }));
+    const raw: ?cg.Image = @ptrCast(platform.cgImageOf(img));
     job.cgimage = if (raw) |r| CGImageRetain(r) else return dropJob(job);
     dispatch.dispatch_async_f(dispatch.dispatch_get_global_queue(dispatch.qos_user_initiated, 0), job, encodeBg);
 }
@@ -462,12 +482,24 @@ fn encodeBg(p: ?*anyopaque) callconv(.c) void {
         }
         job.w = @floatFromInt(cg.CGImageGetWidth(cgimage));
         job.h = @floatFromInt(cg.CGImageGetHeight(cgimage));
-        const rep = objc.msg(objc.Object, objc.msg(objc.Object, objc.class("NSBitmapImageRep"), "alloc", .{}), "initWithCGImage:", .{@as(*anyopaque, @ptrCast(cgimage))});
-        defer objc.release(rep);
-        // NSBitmapImageFileTypePNG.
-        if (objc.msg(?objc.Object, rep, "representationUsingType:properties:", .{ @as(objc.NSUInteger, 4), objc.msg(objc.Object, objc.class("NSDictionary"), "dictionary", .{}) })) |data| {
-            const bytes: [*]const u8 = @ptrCast(objc.msg(*const anyopaque, data, "bytes", .{}));
-            job.png = std.heap.c_allocator.dupe(u8, bytes[0..objc.msg(objc.NSUInteger, data, "length", .{})]) catch null;
+        if (comptime platform.is_ios) {
+            if (cg.CFDataCreateMutable(null, 0)) |out| {
+                defer cg.CFRelease(out);
+                if (cg.CGImageDestinationCreateWithData(out, @ptrCast(objc.nsString("public.png")), 1, null)) |dest| {
+                    defer cg.CFRelease(dest);
+                    cg.CGImageDestinationAddImage(dest, cgimage, null);
+                    if (cg.CGImageDestinationFinalize(dest))
+                        job.png = std.heap.c_allocator.dupe(u8, cg.CFDataGetBytePtr(out)[0..@intCast(cg.CFDataGetLength(out))]) catch null;
+                }
+            }
+        } else {
+            const rep = objc.msg(objc.Object, objc.msg(objc.Object, objc.class("NSBitmapImageRep"), "alloc", .{}), "initWithCGImage:", .{@as(*anyopaque, @ptrCast(cgimage))});
+            defer objc.release(rep);
+            // NSBitmapImageFileTypePNG.
+            if (objc.msg(?objc.Object, rep, "representationUsingType:properties:", .{ @as(objc.NSUInteger, 4), objc.msg(objc.Object, objc.class("NSDictionary"), "dictionary", .{}) })) |data| {
+                const bytes: [*]const u8 = @ptrCast(objc.msg(*const anyopaque, data, "bytes", .{}));
+                job.png = std.heap.c_allocator.dupe(u8, bytes[0..objc.msg(objc.NSUInteger, data, "length", .{})]) catch null;
+            }
         }
     }
     objc.dispatchMain(job, deliverFg);

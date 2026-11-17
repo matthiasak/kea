@@ -93,7 +93,7 @@ pub fn block(x: *const view.Ctx, language: []const u8, text: []const u8, closed:
         }, null);
     }
     const shown = if (std.mem.indexOfScalar(u8, text, '\r') != null) lf(c.alloc(), text) catch text else text;
-    const spans: []const ui.Span = (if (is_mermaid) highlighted(c.alloc(), p, shown) else theme.highlightCode(c.alloc(), &th, language, shown)) catch &.{};
+    const spans: []const ui.Span = cachedCodeSpans(x, is_mermaid, language, shown, &th);
     const style: ui.TextStyle = .{ .size = 12 * z, .mono = true, .color = th.body, .wrap = wrap_code, .line_height = 1.4 * 12 * z };
     // Mermaid's header line is 12 points whatever the zoom (`highlighted`):
     // zoomed, it is a line of its own between what comes before and after.
@@ -202,6 +202,22 @@ test "a zoomed mermaid source sets its header line apart" {
     try std.testing.expect(parts[1].fixed and parts[1].spans[0].end == 8);
     try std.testing.expectEqualStrings("A-->B\n%% end", parts[2].text.?);
     try std.testing.expectEqualStrings("%% end", parts[2].text.?[parts[2].spans[0].start..parts[2].spans[0].end]);
+}
+
+fn cachedCodeSpans(x: *const view.Ctx, is_mermaid: bool, language: []const u8, shown: []const u8, th: *const theme.MdTheme) []const ui.Span {
+    var h = std.hash.Wyhash.init(@intFromBool(x.c.theme.dark));
+    h.update(language);
+    h.update(&.{0});
+    h.update(shown);
+    const k = h.final();
+    if (x.st.code_spans_cache.get(k)) |sp| return sp;
+    if (!x.o.cache or x.st.code_spans_cache.count() >= 512) {
+        return (if (is_mermaid) highlighted(x.c.alloc(), x.p, shown) else theme.highlightCode(x.c.alloc(), th, language, shown)) catch &.{};
+    }
+    const a = x.st.arenaAlloc(x.b.gpa);
+    const sp = (if (is_mermaid) highlighted(a, x.p, shown) else theme.highlightCode(a, th, language, shown)) catch return &.{};
+    x.st.code_spans_cache.put(x.b.gpa, k, sp) catch {};
+    return sp;
 }
 
 fn pictureKey(text: []const u8, dark: bool, zoom: f32) u64 {

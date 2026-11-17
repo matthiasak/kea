@@ -204,3 +204,40 @@ pub fn save(gpa: std.mem.Allocator, opts: SaveOptions) !?[]u8 {
     defer gpa.free(file);
     return try std.fs.path.join(gpa, &.{ dir, file });
 }
+
+/// Shows `m` as an iOS action sheet / iPadOS anchored popover and waits for
+/// the user's pick (`Menu.popup` on UIKit).
+pub fn popupMenu(m: *@import("../menu_accel.zig").Menu, source_view: anytype, x: f32, y: f32) void {
+    if (m.items.items.len == 0) return;
+    const pool = objc.Pool.push();
+    defer pool.pop();
+    var w: Wait = .{ .button = m.items.items.len };
+    const a = objc.msg(objc.Object, objc.class("UIAlertController"), "alertControllerWithTitle:message:preferredStyle:", .{
+        @as(?objc.Object, null), @as(?objc.Object, null), @as(objc.NSInteger, 0),
+    });
+    const buttons = m.gpa.alloc(Button, m.items.items.len + 1) catch return;
+    defer m.gpa.free(buttons);
+    var shown: usize = 0;
+    for (m.items.items, 0..) |it, i| {
+        if (it.disabled or it.label.len == 0) continue;
+        buttons[i] = .{ .wait = &w, .index = i };
+        var mark_buf: [256]u8 = undefined;
+        const title = if (it.checked) std.fmt.bufPrint(&mark_buf, "\u{2713} {s}", .{it.label}) catch it.label else it.label;
+        addButton(a, title, 0, &buttons[i]);
+        shown += 1;
+    }
+    if (shown == 0) return;
+    buttons[m.items.items.len] = .{ .wait = &w, .index = m.items.items.len };
+    addButton(a, "Cancel", 1, &buttons[m.items.items.len]);
+    if (objc.msg(?objc.Object, a, "popoverPresentationController", .{})) |pop| {
+        if (@TypeOf(source_view) == objc.Object) {
+            objc.msg(void, pop, "setSourceView:", .{source_view});
+            objc.msg(void, pop, "setSourceRect:", .{objc.CGRect{
+                .origin = .{ .x = x, .y = y },
+                .size = .{ .width = 1, .height = 1 },
+            }});
+        }
+    }
+    if (!present(a, &w)) return;
+    if (w.button < m.items.items.len) @import("../menu_accel.zig").Menu.activate(&m.items.items[w.button]);
+}

@@ -8,6 +8,7 @@ const std = @import("std");
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
 const objc = nanoui.objc;
+const platform = @import("../sys/platform.zig");
 const MenuItem = nanoui.MenuItem;
 const Browser = @import("../model/browser.zig").Browser;
 const TabSplit = @import("../model/split.zig").TabSplit;
@@ -121,6 +122,14 @@ const ca_default: ui.Curve = .{ .bezier = .{ 0.25, 0.1, 0.25, 1 } };
 
 /// Settling on even: the trackpad's `.alignment` tick, `.now`.
 fn haptic() void {
+    if (comptime platform.is_ios) {
+        const pool = objc.Pool.push();
+        defer pool.pop();
+        const gen = objc.new("UISelectionFeedbackGenerator");
+        defer objc.release(gen);
+        objc.msg(void, gen, "selectionChanged", .{});
+        return;
+    }
     const performer = objc.msg(objc.Object, objc.class("NSHapticFeedbackManager"), "defaultPerformer", .{});
     objc.msg(void, performer, "performFeedbackPattern:performanceTime:", .{ @as(objc.NSInteger, 1), @as(objc.NSUInteger, 1) });
 }

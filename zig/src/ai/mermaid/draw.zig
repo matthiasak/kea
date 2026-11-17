@@ -4,6 +4,7 @@ const std = @import("std");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;
 const ui = nanoui.ui;
+const platform = @import("../../sys/platform.zig");
 const cg = @import("../../sys/cg.zig");
 const Palette = @import("../../design/palette.zig").Palette;
 const mermaid = @import("mermaid.zig");
@@ -225,9 +226,18 @@ fn head(b: cg.Bitmap, p: *const Palette, kind: mermaid.Head, from: mermaid.Point
 
 /// `str` set in the system font as a CoreText line (owned).
 fn line(str: []const u8, size: f64, bold: bool) ?cg.Line {
-    const font = objc.msg(objc.Object, objc.class("NSFont"), "systemFontOfSize:weight:", .{ size, @as(f64, if (bold) 0.3 else 0) });
+    const font = if (comptime platform.is_ios)
+        objc.msg(objc.Object, objc.class("UIFont"), "systemFontOfSize:weight:", .{ size, @as(f64, if (bold) 0.3 else 0) })
+    else
+        objc.msg(objc.Object, objc.class("NSFont"), "systemFontOfSize:weight:", .{ size, @as(f64, if (bold) 0.3 else 0) });
+    const font_key: objc.Object = if (comptime platform.is_ios) blk: {
+        const M = struct {
+            extern "c" const kCTFontAttributeName: cg.CFStringRef;
+        };
+        break :blk @ptrCast(@constCast(M.kCTFontAttributeName));
+    } else objc.nsString("NSFont");
     const yes = objc.msg(objc.Object, objc.class("NSNumber"), "numberWithBool:", .{true});
-    const keys = [_]objc.Object{ objc.nsString("NSFont"), @ptrCast(@constCast(cg.kCTForegroundColorFromContextAttributeName)) };
+    const keys = [_]objc.Object{ font_key, @ptrCast(@constCast(cg.kCTForegroundColorFromContextAttributeName)) };
     const values = [_]objc.Object{ font, yes };
     const attrs = objc.msg(objc.Object, objc.class("NSDictionary"), "dictionaryWithObjects:forKeys:count:", .{ &values, &keys, @as(objc.NSUInteger, keys.len) });
     const s = objc.msg(objc.Object, objc.msg(objc.Object, objc.class("NSAttributedString"), "alloc", .{}), "initWithString:attributes:", .{ objc.nsString(str), attrs });

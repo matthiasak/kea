@@ -13,6 +13,7 @@ const capture = @import("capture.zig");
 const frames = @import("controller_delegate_frames.zig");
 const dialogs = @import("../web/dialogs.zig");
 const browsers = @import("../app/browsers.zig");
+const platform = @import("../sys/platform.zig");
 
 const C = objc.Object;
 const Sel = objc.SEL;
@@ -26,14 +27,14 @@ pub fn delegate() objc.Object {
     const cls = objc.defineClass(.{
         .name = "KeaPopupDelegate",
         .protocols = &.{ "WKUIDelegate", "WKNavigationDelegate" },
-        .methods = &.{
+        .methods = &([_]objc.Method{
             .{ .name = "webView:requestMediaCapturePermissionForOrigin:initiatedByFrame:type:decisionHandler:", .imp = &askedForCapture, .types = "v@:@@@q@?" },
-            .{ .name = capture.display_selector, .imp = &capture.displayCapture, .types = "v@:@@@B@?" },
             .{ .name = "webViewDidClose:", .imp = &didClose, .types = "v@:@" },
             .{ .name = "webView:didFinishNavigation:", .imp = &didFinish, .types = "v@:@@" },
-            .{ .name = "_webView:navigationDidFinishDocumentLoad:", .imp = &documentLoaded, .types = "v@:@@" },
             .{ .name = "webView:createWebViewWithConfiguration:forNavigationAction:windowFeatures:", .imp = &createWebView, .types = "@@:@@@@" },
-        },
+        } ++ capture.display_methods ++ (if (platform.is_ios) [_]objc.Method{} else [_]objc.Method{
+            .{ .name = "_webView:navigationDidFinishDocumentLoad:", .imp = &documentLoaded, .types = "v@:@@" },
+        })),
     });
     shared = objc.msg(objc.Object, cls, "new", .{});
     return shared.?;

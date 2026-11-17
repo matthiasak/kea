@@ -8,6 +8,7 @@
 const std = @import("std");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;
+const platform = @import("../sys/platform.zig");
 const Kea = @import("kea.zig").Kea;
 const browsers = @import("browsers.zig");
 const little = @import("../web/little.zig");
@@ -74,10 +75,14 @@ fn deliver(kea: *Kea, url: []const u8) void {
     }
     b.arrive(url);
     if (!kea.opts.hidden) if (b.window) |w| {
-        // Put away in the Dock, it stayed there: bringing a window to the
-        // front doesn't take it out (#95).
-        if (objc.msg(objc.BOOL, w.nswindow, "isMiniaturized", .{})) objc.msg(void, w.nswindow, "deminiaturize:", .{@as(?objc.Object, null)});
-        objc.msg(void, w.nswindow, "makeKeyAndOrderFront:", .{@as(?objc.Object, null)});
+        if (comptime platform.is_ios) {
+            w.show();
+        } else {
+            // Put away in the Dock, it stayed there: bringing a window to the
+            // front doesn't take it out (#95).
+            if (objc.msg(objc.BOOL, w.nswindow, "isMiniaturized", .{})) objc.msg(void, w.nswindow, "deminiaturize:", .{@as(?objc.Object, null)});
+            objc.msg(void, w.nswindow, "makeKeyAndOrderFront:", .{@as(?objc.Object, null)});
+        }
     };
     comeForward(kea);
 }
@@ -138,6 +143,11 @@ fn first(kea: *Kea) ?*@import("../model/browser.zig").Browser {
 
 /// `NSApp.windows.contains { $0.isVisible && $0.contentView != nil }`.
 fn anyShown() bool {
+    if (comptime platform.is_ios) {
+        const app = nanoui.App.shared() orelse return false;
+        for (app.windows.items) |w| if (w.isVisible()) return true;
+        return false;
+    }
     const app = objc.msg(objc.Object, objc.class("NSApplication"), "sharedApplication", .{});
     const windows = objc.msg(objc.Object, app, "windows", .{});
     for (0..objc.msg(objc.NSUInteger, windows, "count", .{})) |i| {
@@ -152,6 +162,7 @@ fn anyShown() bool {
 /// not every app does, so a moment later it asks again the old way. Never
 /// a test run's.
 fn comeForward(kea: *Kea) void {
+    if (comptime platform.is_ios) return;
     if (kea.opts.root != null or kea.opts.hidden) return;
     const app = objc.msg(objc.Object, objc.class("NSApplication"), "sharedApplication", .{});
     objc.msg(void, app, "activate", .{});
@@ -159,6 +170,7 @@ fn comeForward(kea: *Kea) void {
 }
 
 fn stillBehind(_: ?*anyopaque) callconv(.c) void {
+    if (comptime platform.is_ios) return;
     const app = objc.msg(objc.Object, objc.class("NSApplication"), "sharedApplication", .{});
     if (!objc.msg(objc.BOOL, app, "isActive", .{})) objc.msg(void, app, "activateIgnoringOtherApps:", .{objc.YES});
 }
@@ -169,6 +181,7 @@ const probe = "https://example.com";
 
 /// True when this app is where links from other apps go.
 pub fn isDefault() bool {
+    if (comptime platform.is_ios) return false;
     const pool = objc.Pool.push();
     defer pool.pop();
     const ws = objc.msg(objc.Object, objc.class("NSWorkspace"), "sharedWorkspace", .{});
@@ -182,6 +195,14 @@ pub fn isDefault() bool {
 /// confirmation; `done(ctx, worked)` hears the answer on the main thread.
 /// Never from a test: it changes the Mac's browser.
 pub fn becomeDefault(ctx: ?*anyopaque, done: *const fn (?*anyopaque, bool) void) void {
+    if (comptime platform.is_ios) {
+        const pool = objc.Pool.push();
+        defer pool.pop();
+        if (objc.msg(?objc.Object, objc.class("NSURL"), "URLWithString:", .{objc.nsString("app-settings:")})) |u|
+            _ = platform.openExternalURL(u);
+        done(ctx, false);
+        return;
+    }
     const asked = std.heap.c_allocator.create(Asked) catch return;
     asked.* = .{ .ctx = ctx, .done = done };
     const pool = objc.Pool.push();

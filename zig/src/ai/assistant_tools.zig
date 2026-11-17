@@ -91,7 +91,7 @@ pub fn ask(r: *Send) void {
         .system = r.round.system_prompt,
         .messages = msgs,
         .key = r.key,
-        .max_tokens = 4096,
+        .max_tokens = 8192,
         .thinking = thinking,
         .effort = effort,
         .tools = use_tools,
@@ -159,7 +159,12 @@ fn toolDone(raw: *anyopaque, res: tools.Result) void {
     const call = r.round.pending.items[idx];
     const id = if (call.id.items.len > 0) call.id.items else (std.fmt.allocPrint(a, "call_{d}", .{idx}) catch "call_0");
     var result_text = res.text;
-    if (res.read) |rd| {
+    if (res.read) |raw_rd| {
+        const share = ubi.budget(r.provider) / @max(r.reads.items.len + 1, 1);
+        const rd = if ((std.unicode.utf8CountCodepoints(raw_rd.text) catch raw_rd.text.len) > share)
+            page.shaped(a, raw_rd.title, raw_rd.url, raw_rd.text, raw_rd.links, share) catch raw_rd
+        else
+            raw_rd;
         r.reads.append(a, rd) catch {};
         if (rd.addressed) {
             if (r.owner()) |self| self.addressed = true;

@@ -6,6 +6,7 @@ const nanoui = @import("nanoui");
 const objc = nanoui.objc;
 const Kea = @import("../app/kea.zig").Kea;
 const Store = @import("../data/store.zig").Store;
+const platform = @import("../sys/platform.zig");
 
 var kea_world: ?objc.Object = null;
 var page_world: ?objc.Object = null;
@@ -53,6 +54,17 @@ var agent: ?[]const u8 = null;
 pub fn userAgentName() []const u8 {
     if (agent) |a| return a;
     const version = safariVersion();
+    if (comptime platform.is_ios) {
+        const pool = objc.Pool.push();
+        defer pool.pop();
+        const dev = objc.msg(objc.Object, objc.class("UIDevice"), "currentDevice", .{});
+        const is_pad = objc.msg(objc.NSInteger, dev, "userInterfaceIdiom", .{}) == 1;
+        agent = if (is_pad)
+            std.fmt.bufPrint(&agent_buf, "Version/{s} Safari/605.1.15", .{version}) catch "Version/18.4 Safari/605.1.15"
+        else
+            std.fmt.bufPrint(&agent_buf, "Version/{s} Mobile/15E148 Safari/604.1", .{version}) catch "Version/18.4 Mobile/15E148 Safari/604.1";
+        return agent.?;
+    }
     agent = std.fmt.bufPrint(&agent_buf, "Version/{s} Safari/605.1.15", .{version}) catch "Version/26.0 Safari/605.1.15";
     return agent.?;
 }
@@ -62,6 +74,10 @@ var version_buf: [32]u8 = undefined;
 fn safariVersion() []const u8 {
     const pool = objc.Pool.push();
     defer pool.pop();
+    if (comptime platform.is_ios) {
+        const os = objc.msg(OsVersion, objc.msg(objc.Object, objc.class("NSProcessInfo"), "processInfo", .{}), "operatingSystemVersion", .{});
+        return std.fmt.bufPrint(&version_buf, "{d}.{d}", .{ os.major, os.minor }) catch "18.4";
+    }
     for ([_][]const u8{ "/System/Cryptexes/App/System/Applications/Safari.app", "/Applications/Safari.app" }) |path| {
         const bundle = objc.msg(?objc.Object, objc.class("NSBundle"), "bundleWithPath:", .{objc.nsString(path)}) orelse continue;
         const info = objc.msg(?objc.Object, bundle, "infoDictionary", .{}) orelse continue;
@@ -85,19 +101,21 @@ pub fn processPool() objc.Object {
     if (shared_pool) |p| return p;
     const pool = objc.Pool.push();
     defer pool.pop();
-    if (objc_getClass("_WKProcessPoolConfiguration")) |cfg_cls| {
-        const cfg = objc.msg(objc.Object, cfg_cls, "new", .{});
-        defer objc.release(cfg);
-        if (objc.msg(objc.BOOL, cfg, "respondsToSelector:", .{objc.sel("setPrewarmsProcessesAutomatically:")}))
-            objc.msg(void, cfg, "setPrewarmsProcessesAutomatically:", .{objc.YES});
-        if (objc.msg(objc.BOOL, cfg, "respondsToSelector:", .{objc.sel("setUsesWebProcessCache:")}))
-            objc.msg(void, cfg, "setUsesWebProcessCache:", .{objc.NO});
-        const raw = objc.alloc("WKProcessPool");
-        if (objc.msg(objc.BOOL, raw, "respondsToSelector:", .{objc.sel("_initWithConfiguration:")})) {
-            shared_pool = objc.msg(objc.Object, raw, "_initWithConfiguration:", .{cfg});
-            return shared_pool.?;
+    if (comptime !platform.is_ios) {
+        if (objc_getClass("_WKProcessPoolConfiguration")) |cfg_cls| {
+            const cfg = objc.msg(objc.Object, cfg_cls, "new", .{});
+            defer objc.release(cfg);
+            if (objc.msg(objc.BOOL, cfg, "respondsToSelector:", .{objc.sel("setPrewarmsProcessesAutomatically:")}))
+                objc.msg(void, cfg, "setPrewarmsProcessesAutomatically:", .{objc.YES});
+            if (objc.msg(objc.BOOL, cfg, "respondsToSelector:", .{objc.sel("setUsesWebProcessCache:")}))
+                objc.msg(void, cfg, "setUsesWebProcessCache:", .{objc.NO});
+            const raw = objc.alloc("WKProcessPool");
+            if (objc.msg(objc.BOOL, raw, "respondsToSelector:", .{objc.sel("_initWithConfiguration:")})) {
+                shared_pool = objc.msg(objc.Object, raw, "_initWithConfiguration:", .{cfg});
+                return shared_pool.?;
+            }
+            objc.release(raw);
         }
-        objc.release(raw);
     }
     shared_pool = objc.new("WKProcessPool");
     return shared_pool.?;
@@ -129,15 +147,22 @@ pub fn configuration(kea: *Kea, shy: bool, data_store: ?objc.Object) objc.Object
     if (kea.opts.scheme_handler) |h| objc.msg(void, config, "setURLSchemeHandler:forURLScheme:", .{ h, objc.nsString("kea-test") });
     objc.msg(void, config, "setApplicationNameForUserAgent:", .{objc.nsString(userAgentName())});
     objc.msg(void, config, "setAllowsAirPlayForMediaPlayback:", .{objc.YES});
-    if (objc.msg(objc.BOOL, config, "respondsToSelector:", .{objc.sel("_setProcessDisplayName:")}))
-        objc.msg(void, config, "_setProcessDisplayName:", .{objc.nsString("Kea Web Content")});
+    if (comptime platform.is_ios) {
+        objc.msg(void, config, "setAllowsInlineMediaPlayback:", .{objc.YES});
+        objc.msg(void, config, "setAllowsPictureInPictureMediaPlayback:", .{objc.YES});
+    } else {
+        if (objc.msg(objc.BOOL, config, "respondsToSelector:", .{objc.sel("_setProcessDisplayName:")}))
+            objc.msg(void, config, "_setProcessDisplayName:", .{objc.nsString("Kea Web Content")});
+    }
     const prefs = objc.msg(objc.Object, config, "preferences", .{});
     objc.msg(void, prefs, "setElementFullscreenEnabled:", .{objc.YES});
     // Every `window.open` reaches `createWebView`, which blocks the unprompted
     // ones into the tab's pop-up badge (or lets an allowed site's through).
     objc.msg(void, prefs, "setJavaScriptCanOpenWindowsAutomatically:", .{objc.YES});
-    if (objc.msg(objc.BOOL, prefs, "respondsToSelector:", .{objc.sel("_setDNSPrefetchingEnabled:")}))
-        objc.msg(void, prefs, "_setDNSPrefetchingEnabled:", .{objc.YES});
+    if (comptime !platform.is_ios) {
+        if (objc.msg(objc.BOOL, prefs, "respondsToSelector:", .{objc.sel("_setDNSPrefetchingEnabled:")}))
+            objc.msg(void, prefs, "_setDNSPrefetchingEnabled:", .{objc.YES});
+    }
     objc.msg(void, config, "setMediaTypesRequiringUserActionForPlayback:", .{playback(&kea.store)});
     // A test run's hidden pages keep running (WKInactiveSchedulingPolicyNone).
     if (kea.opts.root != null and !kea.opts.measuring and objc.msg(objc.BOOL, prefs, "respondsToSelector:", .{objc.sel("setInactiveSchedulingPolicy:")}))
@@ -159,6 +184,7 @@ fn followSignIns(store: objc.Object, keeps: bool) void {
 }
 
 fn setTrackingPrevention(store: objc.Object, on: bool) void {
+    if (comptime platform.is_ios) return;
     if (!objc.msg(objc.BOOL, store, "respondsToSelector:", .{objc.sel("_setResourceLoadStatisticsEnabled:")})) return;
     objc.msg(void, store, "_setResourceLoadStatisticsEnabled:", .{on});
 }
@@ -173,12 +199,14 @@ pub fn followSignInsAll(kea: *Kea, keeps: bool) void {
 }
 /// `Web.inspector`: WebKit's developer extras, asked for first.
 pub fn inspector(prefs: objc.Object, on: bool) void {
+    if (comptime platform.is_ios) return;
     if (!objc.msg(objc.BOOL, prefs, "respondsToSelector:", .{objc.sel("_setDeveloperExtrasEnabled:")})) return;
     objc.msg(void, prefs, "_setDeveloperExtrasEnabled:", .{on});
 }
 
 /// `Muter.set`: the low bit of `_mediaMutedState`, the page's own sound.
 pub fn setMuted(muted: bool, web: objc.Object) void {
+    if (comptime platform.is_ios) return;
     if (!objc.msg(objc.BOOL, web, "respondsToSelector:", .{objc.sel("_mediaMutedState")})) return;
     if (!objc.msg(objc.BOOL, web, "respondsToSelector:", .{objc.sel("_setPageMuted:")})) return;
     const state = objc.msg(objc.NSUInteger, web, "_mediaMutedState", .{});
@@ -203,8 +231,10 @@ pub fn teardownWebView(wv: objc.Object) void {
     objc.msg(void, wv, "setUIDelegate:", .{@as(?objc.Object, null)});
     if (objc.msg(?objc.Object, wv, "layer", .{})) |layer| objc.msg(void, layer, "removeAllAnimations", .{});
     objc.msg(void, wv, "removeFromSuperview", .{});
-    if (objc.msg(objc.BOOL, wv, "respondsToSelector:", .{objc.sel("_close")}))
-        objc.msg(void, wv, "_close", .{});
+    if (comptime !platform.is_ios) {
+        if (objc.msg(objc.BOOL, wv, "respondsToSelector:", .{objc.sel("_close")}))
+            objc.msg(void, wv, "_close", .{});
+    }
 }
 
 // MARK: Autoplay
@@ -227,6 +257,7 @@ pub fn setAutoplay(store: *const Store, on: bool, host: []const u8) void {
 
 /// `Autoplay.apply`: a page about to load at `host` allowed to play.
 pub fn applyAutoplay(store: *const Store, preferences: objc.Object, host: []const u8, shy: bool) void {
+    if (comptime platform.is_ios) return;
     if (shy or host.len == 0 or !autoplayAllowed(store, host) or (store.bool("media.click") orelse false)) return;
     if (!objc.msg(objc.BOOL, preferences, "respondsToSelector:", .{objc.sel("_setAutoplayPolicy:")})) return;
     objc.msg(void, preferences, "_setAutoplayPolicy:", .{@as(objc.NSInteger, 1)});

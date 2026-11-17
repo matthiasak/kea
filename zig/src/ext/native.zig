@@ -10,11 +10,7 @@ const objc = @import("nanoui").objc;
 const value = @import("value.zig");
 const disk = @import("../data/disk.zig");
 const HostPipe = @import("native_pipe.zig").HostPipe;
-
-extern "c" fn getenv(name: [*:0]const u8) ?[*:0]const u8;
-extern "c" fn access(path: [*:0]const u8, mode: c_int) c_int;
-const X_OK = 1;
-
+const platform = @import("../sys/platform.zig");
 const gpa = std.heap.c_allocator;
 
 pub const Error = error{ InvalidName, Forbidden, NotFound, NoHost, TooLong, Exited, Unsaved };
@@ -78,7 +74,13 @@ fn kind(o: objc.Object, comptime cls: [:0]const u8) bool {
 /// extension in.
 fn host(name: []const u8, ext_id: []const u8) Error![:0]u8 {
     if (!validName(name)) return error.InvalidName;
-    const home: []const u8 = if (getenv("HOME")) |h| std.mem.span(h) else "";
+    if (comptime platform.is_ios) return error.NotFound;
+    const M = struct {
+        extern "c" fn getenv(n: [*:0]const u8) ?[*:0]const u8;
+        extern "c" fn access(p: [*:0]const u8, mode: c_int) c_int;
+    };
+    const X_OK = 1;
+    const home: []const u8 = if (M.getenv("HOME")) |h| std.mem.span(h) else "";
     const origin = std.fmt.allocPrint(gpa, "chrome-extension://{s}/", .{ext_id}) catch return error.NotFound;
     defer gpa.free(origin);
     const pool = objc.Pool.push();
@@ -108,7 +110,7 @@ fn host(name: []const u8, ext_id: []const u8) Error![:0]u8 {
         if (!allowed) return error.Forbidden;
         const path = objc.fromNSString(path_obj);
         const program = (if (std.mem.startsWith(u8, path, "/")) gpa.dupeSentinel(u8, path, 0) else std.fmt.allocPrintSentinel(gpa, "{s}/{s}", .{ folder, path }, 0)) catch return error.NotFound;
-        if (access(program, X_OK) != 0) {
+        if (M.access(program, X_OK) != 0) {
             gpa.free(program);
             return error.NotFound;
         }

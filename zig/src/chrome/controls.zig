@@ -8,6 +8,8 @@ const ui = @import("nanoui").ui;
 const Palette = @import("../design/palette.zig").Palette;
 const motion = @import("../design/motion.zig");
 const card = @import("../design/card.zig");
+const metrics = @import("../design/metrics.zig");
+const is_ios = @import("builtin").os.tag == .ios;
 
 /// A `.menu` `Picker`: the system's `NSPopUpButton`, drawn by AppKit.
 pub const popUpButton = @import("pop_up_button.zig").popUpButton;
@@ -35,7 +37,8 @@ pub const DoorOptions = struct {
 
 /// `Door`: a 26-point square holding one symbol, lit when what it opens is.
 pub fn door(c: *ui.Context, p: *const Palette, icon: []const u8, opts: DoorOptions) ui.Interaction {
-    const i = c.open(.{ .width = px(26), .height = px(26), .radius = 8, .align_items = .center, .justify = .center, .control = true }, null);
+    const d = metrics.door_size;
+    const i = c.open(.{ .width = px(d), .height = px(d), .radius = if (is_ios) 10 else 8, .align_items = .center, .justify = .center, .control = true }, null);
     defer c.end();
     const it = c.interact(i, .{});
     if (opts.help.len > 0) c.help(i, opts.help);
@@ -47,7 +50,7 @@ pub fn door(c: *ui.Context, p: *const Palette, icon: []const u8, opts: DoorOptio
     const press = if (c.reduce_motion) 0 else motion.liftTo(c, it.id, 7, if (it.pressed) 1 else 0);
     c.node(i).style.scale *= 1 + 0.08 * lift - 0.10 * press;
     c.node(i).style.background = p.side_hover.alpha(h).mix(p.side_wash, o);
-    ui.icon(c, icon, .{ .size = 11, .weight = .medium, .color = p.muted.mix(p.ink.alpha(0.7), h).mix(p.ink, o) });
+    ui.icon(c, icon, .{ .size = if (is_ios) 15 else 11, .weight = .medium, .color = p.muted.mix(p.ink.alpha(0.7), h).mix(p.ink, o) });
     return it;
 }
 
@@ -67,7 +70,8 @@ pub fn quiet(c: *ui.Context, p: *const Palette, icon: []const u8, title: []const
 
 /// `Speaker`: the sound of a tab, pressed to mute it or let it be heard.
 pub fn speaker(c: *ui.Context, p: *const Palette, muted: bool) ui.Interaction {
-    const i = c.open(.{ .width = px(15), .height = px(15), .radius = 7.5, .align_items = .center, .justify = .center, .control = true }, null);
+    const sp_d: f32 = if (is_ios) 32 else 15;
+    const i = c.open(.{ .width = px(sp_d), .height = px(sp_d), .radius = sp_d / 2, .align_items = .center, .justify = .center, .control = true }, null);
     defer c.end();
     const it = c.interact(i, .{});
     const say = if (muted) "Unmute Tab" else "Mute Tab";
@@ -89,7 +93,7 @@ pub const PillOptions = struct {
 
 /// `Pill`: a small capsule that does one thing.
 pub fn pill(c: *ui.Context, p: *const Palette, title: []const u8, opts: PillOptions) ui.Interaction {
-    const i = c.open(.{ .padding = .xy(10, 5), .radius = capsule, .align_items = .center, .control = true }, null);
+    const i = c.open(.{ .padding = if (is_ios) .xy(14, 10) else .xy(10, 5), .radius = capsule, .align_items = .center, .control = true }, null);
     defer c.end();
     const it = c.interact(i, .{});
     c.addA11y(i, .button, title, "", false, true);
@@ -104,7 +108,10 @@ pub fn pill(c: *ui.Context, p: *const Palette, title: []const u8, opts: PillOpti
 
 /// `Switch`: on or off, in feather rather than blue; true when flipped.
 pub fn switch_(c: *ui.Context, p: *const Palette, on: *bool, label: []const u8) bool {
-    const i = c.open(.{ .width = px(30), .height = px(18), .radius = capsule, .control = true }, null);
+    const sw_w: f32 = if (is_ios) 44 else 30;
+    const sw_h: f32 = if (is_ios) 26 else 18;
+    const knob: f32 = sw_h - 4;
+    const i = c.open(.{ .width = px(sw_w), .height = px(sw_h), .radius = capsule, .control = true }, null);
     defer c.end();
     const it = c.interact(i, .{});
     c.addA11y(i, .switch_toggle, label, "", on.*, true);
@@ -116,10 +123,10 @@ pub fn switch_(c: *ui.Context, p: *const Palette, on: *bool, label: []const u8) 
     c.node(i).style.background = p.faint.mix(p.feather, std.math.clamp(t, 0, 1));
     _ = c.leaf(.{
         .absolute = true,
-        .offset = .{ .x = 2 + 12 * t, .y = 2 },
-        .width = px(14),
-        .height = px(14),
-        .radius = 7,
+        .offset = .{ .x = 2 + (sw_w - sw_h) * t, .y = 2 },
+        .width = px(knob),
+        .height = px(knob),
+        .radius = knob / 2,
         .background = p.ground,
         .shadow = card.swiftShadow(0.18, 1.5, 1),
     }, .none, null);
@@ -182,7 +189,7 @@ pub fn steps(c: *ui.Context, p: *const Palette, stops: []const f64, value: *f64,
         if (s < value.* - 0.001) below = s;
         if (above == null and s > value.* + 0.001) above = s;
     }
-    _ = c.open(.{ .direction = .row, .padding = .{ .left = 2, .right = 2 }, .height = px(24), .align_items = .center, .radius = capsule, .background = p.ground, .border = p.hairline }, null);
+    _ = c.open(.{ .direction = .row, .padding = .{ .left = 2, .right = 2 }, .height = px(if (is_ios) 36 else 24), .align_items = .center, .radius = capsule, .background = p.ground, .border = p.hairline }, null);
     defer c.end();
     var changed = step(c, p, "minus", "Remove", below, value);
     const i = c.open(.{ .min_width = 36, .height = .fill, .align_items = .center, .justify = .center, .control = true }, null);
@@ -202,7 +209,8 @@ pub fn steps(c: *ui.Context, p: *const Palette, stops: []const f64, value: *f64,
 }
 
 fn step(c: *ui.Context, p: *const Palette, icon: []const u8, say: []const u8, to: ?f64, value: *f64) bool {
-    const i = c.open(.{ .width = px(20), .height = px(20), .radius = 10, .align_items = .center, .justify = .center, .control = true }, null);
+    const st_d: f32 = if (is_ios) 32 else 20;
+    const i = c.open(.{ .width = px(st_d), .height = px(st_d), .radius = st_d / 2, .align_items = .center, .justify = .center, .control = true }, null);
     defer c.end();
     c.addA11y(i, .button, say, "", false, to != null);
     var h: f32 = 0;
@@ -234,8 +242,8 @@ const no_press: ui.Interaction = .{ .id = 0, .rect = null, .hovered = false, .pr
 /// fading with `Motion.quick`. What is hit is `zone` around it (30×28 in
 /// a titled tab, 22×22 in a compact one), and only while armed, by a
 /// plain left click released over it (`CloseClick`).
-pub const close_zone: ui.Size = .{ .w = 30, .h = 28 };
-pub const close_zone_compact: ui.Size = .{ .w = 22, .h = 22 };
+pub const close_zone: ui.Size = if (is_ios) .{ .w = 44, .h = 40 } else .{ .w = 30, .h = 28 };
+pub const close_zone_compact: ui.Size = if (is_ios) .{ .w = 36, .h = 36 } else .{ .w = 22, .h = 22 };
 
 pub fn closeDisc(c: *ui.Context, p: *const Palette, armed: bool, zone_size: ui.Size) ui.Interaction {
     return closeDiscIcon(c, p, armed, zone_size, "xmark");

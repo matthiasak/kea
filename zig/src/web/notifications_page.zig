@@ -8,13 +8,10 @@ const std = @import("std");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;
 const notifications = @import("notifications.zig");
+const platform = @import("../sys/platform.zig");
 
 const Ref = *anyopaque;
 const gpa = std.heap.c_allocator;
-
-extern "c" fn dlopen(path: [*:0]const u8, mode: c_int) ?*anyopaque;
-extern "c" fn dlsym(handle: ?*anyopaque, name: [*:0]const u8) ?*anyopaque;
-
 /// WebKit's C functions, each looked up by name (`WebKitC`).
 const C = struct {
     pageContext: *const fn (Ref) callconv(.c) ?Ref,
@@ -71,6 +68,11 @@ const C = struct {
 var loaded: union(enum) { unknown, missing, found: C } = .unknown;
 
 fn webkit() ?*const C {
+    if (comptime platform.is_ios) return null;
+    const M = struct {
+        extern "c" fn dlopen(path: [*:0]const u8, mode: c_int) ?*anyopaque;
+        extern "c" fn dlsym(handle: ?*anyopaque, name: [*:0]const u8) ?*anyopaque;
+    };
     switch (loaded) {
         .found => return &loaded.found,
         .missing => return null,
@@ -78,13 +80,13 @@ fn webkit() ?*const C {
     }
     loaded = .missing;
     // RTLD_NOW
-    const lib = dlopen("/System/Library/Frameworks/WebKit.framework/WebKit", 2) orelse return null;
+    const lib = M.dlopen("/System/Library/Frameworks/WebKit.framework/WebKit", 2) orelse return null;
     var c: C = undefined;
     inline for (C.names) |pair| {
-        const f = dlsym(lib, pair[1]) orelse return null;
+        const f = M.dlsym(lib, pair[1]) orelse return null;
         @field(c, pair[0]) = @ptrCast(@alignCast(f));
     }
-    c.persistent = if (dlsym(lib, "WKNotificationGetIsPersistent")) |f| @ptrCast(@alignCast(f)) else null;
+    c.persistent = if (M.dlsym(lib, "WKNotificationGetIsPersistent")) |f| @ptrCast(@alignCast(f)) else null;
     loaded = .{ .found = c };
     return &loaded.found;
 }
@@ -111,16 +113,19 @@ var shown: std.AutoHashMapUnmanaged(u64, Ref) = .empty;
 
 /// The Kea it answered for went away.
 pub fn forget() void {
+    if (comptime platform.is_ios) return;
     shown.clearAndFree(gpa);
 }
 
 fn pageOf(web: objc.Object) ?Ref {
+    if (comptime platform.is_ios) return null;
     if (!objc.msg(objc.BOOL, web, "respondsToSelector:", .{objc.sel("_pageRefForTransitionToWKWebView")})) return null;
     return objc.msg(?*anyopaque, web, "_pageRefForTransitionToWKWebView", .{});
 }
 
 /// Set on the manager of a (not private) tab's page, once.
 pub fn provide(web: objc.Object) void {
+    if (comptime platform.is_ios) return;
     const c = webkit() orelse return;
     const page = pageOf(web) orelse return;
     const context = c.pageContext(page) orelse return;
@@ -260,12 +265,14 @@ fn delivered(g: *Gone, list: objc.Object) void {
 }
 
 pub fn clicked(id: u64) void {
+    if (comptime platform.is_ios) return;
     const c = webkit() orelse return;
     const manager = shown.get(id) orelse return;
     c.didClick(manager, id);
 }
 
 pub fn closed(id: u64) void {
+    if (comptime platform.is_ios) return;
     const c = webkit() orelse return;
     const kv = shown.fetchRemove(id) orelse return;
     const one = c.uint64(id) orelse return;

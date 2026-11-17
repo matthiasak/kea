@@ -7,6 +7,7 @@
 //! they open. A key moved in Settings › Shortcuts moves on the bar at once.
 const std = @import("std");
 const nanoui = @import("nanoui");
+const platform = @import("../sys/platform.zig");
 const MenuItem = nanoui.MenuItem;
 const Item = nanoui.menu.Item;
 const kea_mod = @import("kea.zig");
@@ -53,7 +54,7 @@ pub fn install(kea: *Kea) void {
 
 /// The app's own bar back: the menus' clicks are this `Kea`'s.
 pub fn uninstall(kea: *Kea) void {
-    if (kea.menus.installed) if (kea.ui_app) |app| app.setMenu(&nanoui.App.default_menu) catch {};
+    if (kea.menus.installed) if (kea.ui_app) |app| app.setMenu(if (comptime platform.is_ios) &.{} else &nanoui.App.default_menu) catch {};
     kea.menus.installed = false;
     kea.shortcuts.on_change = null;
     for (&kea.menus.arenas) |*slot| if (slot.*) |a| {
@@ -103,6 +104,7 @@ fn title(top: Top) []const u8 {
 /// A menu of the bar is about to show, or be searched for a key: made
 /// again as things stand now.
 fn opened(kea: *Kea, item: *Item) void {
+    if (comptime platform.is_ios) return;
     const top = std.meta.stringToEnum(Top, item.id["menu.".len..]) orelse return;
     const b = browsers.acting(kea) orelse return;
     const arena = fresh(kea) orelse return;
@@ -120,6 +122,7 @@ fn drop(kea: *Kea, a: *std.heap.ArenaAllocator) void {
 }
 
 fn setServices(app: *nanoui.App, _: *Kea) void {
+    if (comptime platform.is_ios) return;
     if (app.menuItem("menu.services")) |it| if (it.submenu) |sub|
         nanoui.objc.msg(void, app.nsapp, "setServicesMenu:", .{sub});
 }
@@ -384,10 +387,11 @@ pub fn items(a: std.mem.Allocator, kea: *Kea, b: *Browser, top: Top) ![]const Me
             try m.command("view.zoomOut", .{});
             try m.command("view.actualSize", .{});
             try m.line();
-            try m.command("view.inspector", .{});
-            try m.command("view.console", .{});
-            try m.command("view.inspect", .{});
-            try m.command("view.source", .{});
+            const no_inspector = !@import("../web/inspector.zig").canInspect(b);
+            try m.command("view.inspector", .{ .disabled = no_inspector });
+            try m.command("view.console", .{ .disabled = no_inspector });
+            try m.command("view.inspect", .{ .disabled = no_inspector });
+            try m.command("view.source", .{ .disabled = no_inspector });
             try m.command("view.debugHud", .{ .checked = b.debug_hud.shown });
             try m.line();
             try m.role(.toggle_full_screen);

@@ -55,6 +55,7 @@ const swift_defaults = .{
     .{ "media.click", "waits_for_play", false },
     .{ "links.peek", "peeks_links", true },
     .{ "links.little", "little_links", false },
+    .{ "bookmarks.auto_sort", "bookmarks_auto_sort", true },
     .{ "bookmarks.bar", "bookmarks_bar", false },
     .{ "bookmarks.sidebar", "bookmarks_sidebar", false },
     .{ "ai.zoom", "chat_zoom", @as(f64, 1) },

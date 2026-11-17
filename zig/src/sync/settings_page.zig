@@ -6,6 +6,7 @@ const std = @import("std");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;
 const ui = nanoui.ui;
+const platform = @import("../sys/platform.zig");
 const Browser = @import("../model/browser.zig").Browser;
 const Kea = @import("../app/kea.zig").Kea;
 const app_name = @import("../app/kea.zig").app_name;
@@ -205,13 +206,24 @@ fn choose(b: *Browser) void {
 
 fn chooseLater(ctx: ?*anyopaque) callconv(.c) void {
     const kea: *Kea = @ptrCast(@alignCast(ctx.?));
+    if (comptime platform.is_ios) {
+        const paths = (nanoui.dialog.open(kea.gpa, .{
+            .title = "Sync here",
+            .files = false,
+            .directories = true,
+            .directory = kea.sync.folder,
+        }) catch null) orelse return;
+        defer nanoui.dialog.freePaths(kea.gpa, paths);
+        if (paths.len > 0) kea.sync.chooseFolder(paths[0]);
+        return;
+    }
     const pool = objc.Pool.push();
     defer pool.pop();
     const panel = objc.msg(objc.Object, objc.class("NSOpenPanel"), "openPanel", .{});
     objc.msg(void, panel, "setCanChooseDirectories:", .{objc.YES});
     objc.msg(void, panel, "setCanChooseFiles:", .{objc.NO});
     objc.msg(void, panel, "setCanCreateDirectories:", .{objc.YES});
-    const home = NSHomeDirectory();
+    const home = objc.nsString(platform.homeDir());
     const cloud_storage = objc.msg(objc.Object, home, "stringByAppendingPathComponent:", .{objc.nsString("Library/CloudStorage")});
     const icloud = objc.msg(objc.Object, home, "stringByAppendingPathComponent:", .{objc.nsString("Library/Mobile Documents/com~apple~CloudDocs")});
     var is_dir: objc.BOOL = objc.NO;
@@ -231,5 +243,3 @@ fn chooseLater(ctx: ?*anyopaque) callconv(.c) void {
     const url = objc.msg(?objc.Object, panel, "URL", .{}) orelse return;
     kea.sync.chooseFolder(objc.fromNSString(objc.msg(objc.Object, url, "path", .{})));
 }
-
-extern "c" fn NSHomeDirectory() objc.Object;

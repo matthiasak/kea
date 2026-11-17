@@ -15,6 +15,7 @@ pub const parseAccelerator = menu_types.parseAccelerator;
 pub const Item = struct {
     menu: *Menu,
     id: []const u8,
+    label: []u8,
     kind: Kind,
     checked: bool,
     disabled: bool,
@@ -43,20 +44,27 @@ pub const Menu = struct {
         const m = try gpa.create(Menu);
         m.* = .{ .gpa = gpa };
         errdefer m.destroy();
-        try m.add(template);
+        try m.add(template, "");
         return m;
     }
 
-    fn add(m: *Menu, template: []const MenuItem) !void {
+    fn add(m: *Menu, template: []const MenuItem, prefix: []const u8) !void {
         for (template) |t| {
             if (t.is_separator or t.hidden) continue;
+            const full = if (prefix.len > 0 and t.label.len > 0)
+                try std.fmt.allocPrint(m.gpa, "{s} \u{203A} {s}", .{ prefix, t.label })
+            else
+                try m.gpa.dupe(u8, t.label);
             if (t.submenu) |sub| {
-                try m.add(sub);
+                defer m.gpa.free(full);
+                try m.add(sub, full);
                 continue;
             }
+            errdefer m.gpa.free(full);
             try m.items.append(m.gpa, .{
                 .menu = m,
                 .id = t.id,
+                .label = full,
                 .kind = t.kind,
                 .checked = t.checked,
                 .disabled = t.disabled,
@@ -68,6 +76,7 @@ pub const Menu = struct {
     }
 
     pub fn destroy(m: *Menu) void {
+        for (m.items.items) |it| m.gpa.free(it.label);
         m.items.deinit(m.gpa);
         m.gpa.destroy(m);
     }
@@ -99,5 +108,12 @@ pub const Menu = struct {
             .normal => {},
         }
         if (it.click) |c| c.func(c.ctx, it);
+    }
+
+    /// Context/popup trigger on platforms without AppKit NSMenu.
+    pub fn popup(m: *Menu, view: anytype, x: f32, y: f32) void {
+        if (comptime @import("builtin").os.tag == .ios) {
+            @import("ios/dialog.zig").popupMenu(m, view, x, y);
+        }
     }
 };

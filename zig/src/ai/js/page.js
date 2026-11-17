@@ -1,6 +1,6 @@
 (function () {
   if (document.contentType === 'application/pdf' || document.contentType === 'text/pdf') return { pdf: true, title: document.title || '' };
-  var seen = 0, limit = 150000;
+  var seen = 0, limit = 600000;
   var skip = { SCRIPT: 1, STYLE: 1, NOSCRIPT: 1, TEMPLATE: 1, OBJECT: 1, EMBED: 1, VIDEO: 1, AUDIO: 1, HEAD: 1 };
 
   // Whether a person could see this element, and so everything in it.

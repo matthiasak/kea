@@ -10,6 +10,7 @@ const frames = @import("controller_delegate_frames.zig");
 const browsers = @import("../app/browsers.zig");
 const WindowRecord = @import("../data/windows_file.zig").WindowRecord;
 const Uuid = @import("../data/json.zig").Uuid;
+const platform = @import("../sys/platform.zig");
 
 const C = objc.Object;
 const Sel = objc.SEL;
@@ -101,9 +102,11 @@ pub fn openNewWindow(d: objc.Object, _: Sel, _: C, configuration: objc.Object, c
             if (i < fresh.tabs.items.len and fresh.tabs.items[i].isBlank()) fresh.close(fresh.tabs.items[i]);
         }
     }
-    if (!objc.msg(objc.BOOL, configuration, "shouldBeFocused", .{})) if (browsers.acting(self.kea)) |f| if (f.window) |w| {
-        objc.msg(void, w.nswindow, "makeKeyAndOrderFront:", .{@as(?objc.Object, null)});
-    };
+    if (comptime !platform.is_ios) {
+        if (!objc.msg(objc.BOOL, configuration, "shouldBeFocused", .{})) if (browsers.acting(self.kea)) |f| if (f.window) |w| {
+            objc.msg(void, w.nswindow, "makeKeyAndOrderFront:", .{@as(?objc.Object, null)});
+        };
+    }
     reply.ok(adapters.windowOf(self, fresh));
 }
 
@@ -113,6 +116,10 @@ fn at(arr: objc.Object, i: usize) objc.Object {
 
 /// The front window's screen's visible frame, else the main screen's.
 fn screenOf(front: anytype) ?objc.CGRect {
+    if (comptime platform.is_ios) {
+        const sc = objc.msg(?objc.Object, objc.class("UIScreen"), "mainScreen", .{}) orelse return null;
+        return objc.msg(objc.CGRect, sc, "bounds", .{});
+    }
     const screen = blk: {
         if (front) |f| if (f.window) |w| if (objc.msg(?objc.Object, w.nswindow, "screen", .{})) |s| break :blk s;
         break :blk objc.msg(?objc.Object, objc.class("NSScreen"), "mainScreen", .{}) orelse return null;

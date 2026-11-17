@@ -3,6 +3,7 @@ const std = @import("std");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;
 const ui = nanoui.ui;
+const platform = @import("../sys/platform.zig");
 const Browser = @import("../model/browser.zig").Browser;
 const Tab = @import("../web/tab.zig").Tab;
 const menu = @import("../design/menu.zig");
@@ -94,6 +95,7 @@ pub fn certify(t: *Tab) void {
 
 /// The system's own certificate sheet, over the window. Never in tests.
 pub fn showCertificate(t: *Tab) void {
+    if (comptime platform.is_ios) return;
     const b = t.browser orelse return;
     if (b.kea.opts.root != null or b.kea.opts.hidden) return;
     const w = b.window orelse return;

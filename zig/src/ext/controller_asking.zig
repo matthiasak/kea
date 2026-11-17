@@ -7,6 +7,7 @@ const Extensions = @import("controller.zig").Extensions;
 const app_name = @import("../app/kea.zig").app_name;
 const appkit = @import("../sys/appkit.zig");
 const json = @import("../data/json.zig");
+const platform = @import("../sys/platform.zig");
 
 pub const Callback = *const fn (ctx: *anyopaque, yes: bool) void;
 
@@ -132,6 +133,7 @@ fn next(self: *Extensions) void {
     const p = if (self.del.questions.items.len > 0) self.del.questions.items[0] else return;
     if (self.gpa.dupe(u8, p.title)) |t| self.del.asked.append(self.gpa, t) catch self.gpa.free(t) else |_| {}
     if (self.kea.opts.root != null) if (self.del.answer_for_tests) |a| return p.finish(if (a) 1000 else 1001);
+    if (comptime platform.is_ios) return nextIos(self, p);
     const pool = objc.Pool.push();
     defer pool.pop();
     const alert = objc.new("NSAlert");
@@ -155,6 +157,45 @@ fn sheetWindow() ?objc.Object {
         if (objc.msg(objc.BOOL, w, "isVisible", .{}) and objc.msg(objc.BOOL, w, "canBecomeMainWindow", .{})) return w;
     }
     return null;
+}
+
+fn nextIos(self: *Extensions, p: *Pending) void {
+    if (self.kea.opts.headless) return p.finish(1001);
+    const vc = platform.topViewController() orelse return p.finish(1001);
+    const pool = objc.Pool.push();
+    defer pool.pop();
+    const ac = objc.retain(objc.msg(objc.Object, objc.class("UIAlertController"), "alertControllerWithTitle:message:preferredStyle:", .{
+        objc.nsString(p.title),
+        if (p.detail.len > 0) objc.nsString(p.detail) else @as(?objc.Object, null),
+        @as(objc.NSInteger, 1),
+    }));
+    p.alert = ac;
+    const Choice = struct {
+        pending: *Pending,
+        code: objc.NSInteger,
+        other: ?*@This() = null,
+        fn pick(c: *@This(), _: objc.Object) void {
+            const pend = c.pending;
+            const code = c.code;
+            if (c.other) |o| std.heap.c_allocator.destroy(o);
+            std.heap.c_allocator.destroy(c);
+            pend.finish(code);
+        }
+    };
+    const yes_c = std.heap.c_allocator.create(Choice) catch return p.finish(1001);
+    const no_c = std.heap.c_allocator.create(Choice) catch {
+        std.heap.c_allocator.destroy(yes_c);
+        return p.finish(1001);
+    };
+    yes_c.* = .{ .pending = p, .code = 1000, .other = no_c };
+    no_c.* = .{ .pending = p, .code = 1001, .other = yes_c };
+    var no_blk = objc.Block(Choice, &.{objc.Object}).init(no_c, Choice.pick);
+    var yes_blk = objc.Block(Choice, &.{objc.Object}).init(yes_c, Choice.pick);
+    const no_act = objc.msg(objc.Object, objc.class("UIAlertAction"), "actionWithTitle:style:handler:", .{ objc.nsString(p.no), @as(objc.NSInteger, 1), &no_blk });
+    const yes_act = objc.msg(objc.Object, objc.class("UIAlertAction"), "actionWithTitle:style:handler:", .{ objc.nsString(p.yes), @as(objc.NSInteger, 0), &yes_blk });
+    objc.msg(void, ac, "addAction:", .{no_act});
+    objc.msg(void, ac, "addAction:", .{yes_act});
+    objc.msg(void, vc, "presentViewController:animated:completion:", .{ ac, objc.YES, @as(?*anyopaque, null) });
 }
 
 // MARK: when it was last used (Extensions.swift 1240-1280)

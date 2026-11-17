@@ -8,6 +8,7 @@ const std = @import("std");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;
 const ui = nanoui.ui;
+const platform = @import("../sys/platform.zig");
 const Browser = @import("../model/browser.zig").Browser;
 const Tab = @import("../web/tab.zig").Tab;
 const Palette = @import("../design/palette.zig").Palette;
@@ -92,10 +93,10 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette, area: ui.Rect, opts:
     defer st.shown = showing;
     if (showing) keys(b, c, st);
 
-    const w = if (opts.fitted) @min(metrics.field_width, @max(0, area.w - 28)) else metrics.field_width;
+    const w = @min(metrics.field_width, @max(0, area.w - 28));
     const x = (area.w - w) / 2;
-    // Lifted a little above centre (`padding(.bottom, 60)`).
-    const y = (area.h - field_height - 60) / 2;
+    // Lifted a little above centre (`padding(.bottom, 60)`), clamped on short touch screens.
+    const y = @max(12, (area.h - field_height - @min(60, area.h * 0.15)) / 2);
     // The whole of it arrives at .97 and grows to size (`settle`), and goes
     // the same way (`quick`).
     ui.key(c, "kea.omnibox");
@@ -180,6 +181,9 @@ fn giveKeysRetry(ctx: ?*anyopaque) callconv(.c) void {
 }
 
 fn applyKeys(ctx: ?*anyopaque, retry: bool) void {
+    const inspector = @import("../web/inspector.zig");
+    const from_inspector = inspector.had_keys_on_click;
+    inspector.had_keys_on_click = false;
     const t = Tab.alive(@intFromPtr(ctx)) orelse return;
     const b = t.browser orelse return;
     if (b.fieldShowing() or b.editing_tab != null) return;
@@ -191,10 +195,21 @@ fn applyKeys(ctx: ?*anyopaque, retry: bool) void {
         if (retry) objc.dispatchAfter(50 * std.time.ns_per_ms, ctx, giveKeysRetry);
         return;
     };
-    if (objc.msg(?objc.Object, window, "firstResponder", .{})) |r| {
-        if (r == wv or (objc.msg(objc.BOOL, r, "isKindOfClass:", .{objc.class("NSView")}) and objc.msg(objc.BOOL, r, "isDescendantOf:", .{wv}))) return;
+    if (comptime platform.is_ios) {
+        if (!objc.msg(objc.BOOL, wv, "isFirstResponder", .{}))
+            _ = objc.msg(objc.BOOL, wv, "becomeFirstResponder", .{});
+        return;
     }
-    _ = objc.msg(objc.BOOL, window, "makeFirstResponder:", .{wv});
+    // In the page or its docked inspector already: left where they are. In
+    // the inspector when the click came that took them: back to it.
+    const docked = if (inspector.isAttachedFor(wv)) inspector.inspectorWebViewFor(wv) else null;
+    if (objc.msg(?objc.Object, window, "firstResponder", .{})) |r| {
+        const is_view = objc.msg(objc.BOOL, r, "isKindOfClass:", .{objc.class("NSView")});
+        for ([_]?objc.Object{ wv, docked }) |home| if (home) |v| {
+            if (r == v or (is_view and objc.msg(objc.BOOL, r, "isDescendantOf:", .{v}))) return;
+        };
+    }
+    _ = objc.msg(objc.BOOL, window, "makeFirstResponder:", .{if (from_inspector) docked orelse wv else wv});
 }
 
 fn offered(c: *ui.Context, want: ui.Shortcut) bool {

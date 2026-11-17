@@ -16,6 +16,7 @@ const palette = @import("../design/palette.zig");
 const controls = @import("../chrome/controls.zig");
 const capture = @import("../ext/capture.zig");
 const watch = @import("../ext/capture_watch.zig");
+const platform = @import("../sys/platform.zig");
 
 const heap = std.heap.c_allocator;
 
@@ -37,6 +38,7 @@ var hosted: std.ArrayList(Hosted) = .empty;
 
 /// The capture model's hooks (`RecordingIndicator.shared`).
 pub fn install() void {
+    if (comptime platform.is_ios) return;
     watch.pill = lend;
     watch.on_change = settle;
 }
@@ -73,6 +75,7 @@ fn release(web: objc.Object) void {
 
 /// Up while anything records or a page is lent to it; down otherwise.
 fn settle() void {
+    if (comptime platform.is_ios) return;
     const wanted = watch.recordings.items.len > 0 or hosted.items.len > 0;
     if (!wanted) {
         if (panel) |p| objc.msg(void, p.window.nswindow, "orderOut:", .{@as(?objc.Object, null)});
@@ -87,6 +90,7 @@ fn settle() void {
 /// The panel: borderless, never key or main, over every space and full
 /// screen app.
 fn own() ?*Pill {
+    if (comptime platform.is_ios) return null;
     if (panel) |p| return p;
     const kea = capture.kea() orelse return null;
     const app = kea.ui_app orelse return null;
@@ -135,6 +139,7 @@ const pill_key = "kea.recording.pill";
 
 /// Its size for what it says, at the foot of the screen, centred.
 fn fit(p: *Pill) void {
+    if (comptime platform.is_ios) return;
     const s = p.window.surface orelse return;
     // Laid out, then read back by the next frame's view.
     s.frame();
@@ -209,6 +214,7 @@ fn stopLater(ctx: ?*anyopaque) callconv(.c) void {
 
 /// `Kea.destroy`: lent pages go back, the panel goes.
 pub fn closeFor(kea: *Kea) void {
+    if (comptime platform.is_ios) return;
     const p = panel orelse return;
     if (p.kea != kea) return;
     while (hosted.items.len > 0) release(hosted.items[hosted.items.len - 1].web);

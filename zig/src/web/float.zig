@@ -14,6 +14,7 @@ const Tab = @import("tab.zig").Tab;
 const Store = @import("../data/store.zig").Store;
 const Parts = @import("../data/url.zig").Parts;
 const panel = @import("float_panel.zig");
+const platform = @import("../sys/platform.zig");
 
 const isolate_on = @embedFile("js/float_on.js");
 const isolate_off = @embedFile("js/float_off.js");
@@ -131,6 +132,7 @@ fn otherPane(b: *Browser) ?*Tab {
 /// `lift(_:quietly:otherwise:)`. `otherwise`: the other page of a pair,
 /// tried when this one has nothing playing.
 fn lift(b: *Browser, tab: ?*Tab, quietly: bool, otherwise: ?*Tab) void {
+    if (comptime platform.is_ios) return;
     const t = tab orelse return if (otherwise) |o| lift(b, o, quietly, null);
     if (t.isBlank() or t.asleep() or showing() or t.web == null)
         return if (otherwise) |o| lift(b, o, quietly, null);
@@ -216,7 +218,9 @@ fn onReturn(ctx: *anyopaque) void {
     // Never a test run's: a probe started hidden stays off every screen.
     if (b.kea.opts.root != null or b.kea.opts.hidden) return;
     @import("../app/browsers.zig").show(b);
-    if (b.kea.ui_app) |a| objc.msg(void, a.nsapp, "activateIgnoringOtherApps:", .{objc.YES});
+    if (comptime !platform.is_ios) {
+        if (b.kea.ui_app) |a| objc.msg(void, a.nsapp, "activateIgnoringOtherApps:", .{objc.YES});
+    }
 }
 
 /// Step over the bit you missed, or back to it.

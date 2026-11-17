@@ -5,6 +5,7 @@
 const std = @import("std");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;
+const platform = @import("../sys/platform.zig");
 const ai = @import("ai.zig");
 const client = @import("client.zig");
 const page = @import("page_text.zig");
@@ -77,9 +78,10 @@ pub fn opening(a: std.mem.Allocator, reads: []const page.Read, question: []const
     return out.items;
 }
 
-/// How many characters of pages one question may carry.
-pub fn budget(_: ai.Provider) usize {
-    return 60_000;
+/// How many characters of pages one question may carry: local models keep to
+/// 60k (~15k tokens) for RAM; cloud providers carry full papers and manuals.
+pub fn budget(p: ai.Provider) usize {
+    return if (p.isLocal()) 60_000 else 600_000;
 }
 
 /// How many earlier turns go with a question.
@@ -128,6 +130,10 @@ pub fn markdown(a: std.mem.Allocator, chat: cs.Chat) ![]u8 {
 
 /// On the clipboard: the HTML made from it, and the Markdown as written.
 pub fn copy(gpa: std.mem.Allocator, md: []const u8) void {
+    if (comptime platform.is_ios) {
+        platform.writePasteboardString(md);
+        return;
+    }
     var arena: std.heap.ArenaAllocator = .init(gpa);
     defer arena.deinit();
     const html = @import("markdown_html.zig").html(arena.allocator(), md) catch return;

@@ -2,6 +2,7 @@
 //! title and cross, hairline cards with rules between lines, the line, the
 //! caption, the field for narrowing a list, the empty text and the small
 //! text action.
+const std = @import("std");
 const ui = @import("nanoui").ui;
 const Palette = @import("../design/palette.zig").Palette;
 const card = @import("../design/card.zig");
@@ -33,8 +34,10 @@ pub const Plate = struct {
 /// the panel is about (opened here, padded 22 either side) and an optional
 /// foot. Width 560 unless the panel says.
 pub fn plate(c: *ui.Context, p: *const Palette, title: []const u8, width: f32) Plate {
+    const fit_w = if (c.size.w > 0) @min(width, @max(280, c.size.w - 20)) else width;
     _ = c.open(.{
-        .width = .{ .px = width },
+        .width = .{ .px = fit_w },
+        .max_height = if (c.size.h > 0) @max(240, c.size.h - 24) else std.math.inf(f32),
         .radius = 16,
         .clip = true,
         .background = p.ground,

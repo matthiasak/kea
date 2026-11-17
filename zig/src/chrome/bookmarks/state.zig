@@ -95,6 +95,7 @@ pub const FlatRow = struct {
     index: usize,
     is_open: bool,
     empty_placeholder: bool = false,
+    category_header: ?[]const u8 = null,
 };
 
 pub const FlatCache = struct {
@@ -253,16 +254,30 @@ pub const State = struct {
     }
 
     fn buildFlat(fc: *FlatCache, gpa: std.mem.Allocator, nodes: []const Bookmark, open: *const Ids, depth: usize, parent: ?Uuid) void {
+        var prev_cat: ?[]const u8 = null;
         for (nodes, 0..) |*node, index| {
-            const is_open = node.isFolder() and open.has(node.id);
-            fc.rows.append(gpa, .{ .node = node, .depth = depth, .parent = parent, .index = index, .is_open = is_open }) catch return;
-            fc.ids.append(gpa, node.id) catch return;
-            if (!is_open) continue;
-            const kids = node.kids();
-            if (kids.len > 0) {
-                buildFlat(fc, gpa, kids, open, depth + 1, node.id);
+            if (node.isFolder()) {
+                prev_cat = null;
+                const is_open = open.has(node.id);
+                fc.rows.append(gpa, .{ .node = node, .depth = depth, .parent = parent, .index = index, .is_open = is_open }) catch return;
+                fc.ids.append(gpa, node.id) catch return;
+                if (!is_open) continue;
+                const kids = node.kids();
+                if (kids.len > 0) {
+                    buildFlat(fc, gpa, kids, open, depth + 1, node.id);
+                } else {
+                    fc.rows.append(gpa, .{ .node = node, .depth = depth + 1, .parent = node.id, .index = 0, .is_open = false, .empty_placeholder = true }) catch return;
+                }
             } else {
-                fc.rows.append(gpa, .{ .node = node, .depth = depth + 1, .parent = node.id, .index = 0, .is_open = false, .empty_placeholder = true }) catch return;
+                if (depth == 0) {
+                    const cat = bm.Bookmarks.cat.norm(node.category);
+                    if (cat != null and !bm.Bookmarks.cat.optEq(prev_cat, cat)) {
+                        fc.rows.append(gpa, .{ .node = node, .depth = 0, .parent = null, .index = index, .is_open = false, .category_header = cat.? }) catch return;
+                    }
+                    prev_cat = cat;
+                }
+                fc.rows.append(gpa, .{ .node = node, .depth = depth, .parent = parent, .index = index, .is_open = false }) catch return;
+                fc.ids.append(gpa, node.id) catch return;
             }
         }
     }

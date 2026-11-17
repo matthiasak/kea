@@ -421,9 +421,10 @@ fn decorations(c: *Context, out: *std.ArrayList(metal.Instance), t: *const ctx_m
         // A pill keeps to the room its kerning made (`Span.pad_x`).
         const pad = sp.pad_x;
         if (sp.background != null or sp.border != null) push(c, out, .{
-            .rect = if (pad > 0)
-                .{ x0 - pad + 0.5, baseline - f.ascent * 0.92 - 2, x1 - x0 + pad - 1, (f.ascent + f.descent) * 0.92 + 4 }
-            else
+            .rect = if (pad > 0) blk: {
+                const lead = if (a > 0) pad - 0.5 else 2.0;
+                break :blk .{ x0 - lead, baseline - f.ascent * 0.92 - 2, x1 - x0 + lead - 0.5, (f.ascent + f.descent) * 0.92 + 4 };
+            } else
                 .{ x0 - 3, baseline - f.ascent * 0.92 - 2, x1 - x0 + 6, (f.ascent + f.descent) * 0.92 + 4 },
             .color = metal.color4((sp.background orelse types.Color.transparent).alpha(opacity)),
             .border_color = metal.color4((sp.border orelse types.Color.transparent).alpha(opacity)),

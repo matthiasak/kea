@@ -47,6 +47,9 @@ pub const State = struct {
     math_cache: std.AutoHashMapUnmanaged(u64, math_layout.Box) = .empty,
     /// How much of each streaming answer is shown, by `Options.stream_id`.
     streams: std.AutoHashMapUnmanaged(u64, stream.Cursor) = .empty,
+    /// Cached syntax-highlighted code spans (`cache_arena`), by language + look + source.
+    code_spans_cache: std.AutoHashMapUnmanaged(u64, []const ui.Span) = .empty,
+    last_win_w: f32 = 0,
 
     pub const Picture = struct { bytes: []u8, used: f64 };
     pub const BoxState = struct {
@@ -57,6 +60,7 @@ pub const State = struct {
         col_scale: f32 = 1.0,
         drag_start: f32 = 0,
         drag_base: f32 = 0,
+        packed_w: f32 = 0,
     };
 
     pub fn boxState(s: *State, gpa: std.mem.Allocator, id: u64) *BoxState {
@@ -81,6 +85,7 @@ pub const State = struct {
         s.diagrams_cache.deinit(gpa);
         s.boxes.deinit(gpa);
         s.math_cache.deinit(gpa);
+        s.code_spans_cache.deinit(gpa);
         s.streams.deinit(gpa);
         if (s.cache_arena) |*ca| ca.deinit();
         s.* = .{};
@@ -98,6 +103,7 @@ pub const State = struct {
         s.inlines_cache.clearRetainingCapacity();
         s.diagrams_cache.clearRetainingCapacity();
         s.math_cache.clearRetainingCapacity();
+        s.code_spans_cache.clearRetainingCapacity();
         s.streams.clearRetainingCapacity();
     }
 
@@ -150,12 +156,19 @@ pub fn cachedBlocks(st: *State, gpa: std.mem.Allocator, text: []const u8, cache:
 
 /// `AnswerView(text:zoom:drawn:)`.
 pub fn answer(b: *Browser, c: *ui.Context, p: *const Palette, st: *State, full: []const u8, o: Options) void {
+    if (st.last_win_w != c.size.w) {
+        if (st.last_win_w != 0) c.animationFrame();
+        st.last_win_w = c.size.w;
+    }
     var x: Ctx = .{ .b = b, .c = c, .p = p, .st = st, .o = o };
-    ui.column(c, .{ .gap = 10 * o.zoom, .width = .fill });
+    ui.column(c, .{ .gap = 12 * o.zoom, .width = .fill });
     defer ui.end(c);
     const sid = o.stream_id orelse {
         const parsed = cachedBlocks(st, b.gpa, full, o.cache, c.alloc()) orelse return;
-        for (parsed) |blk| block(&x, blk, 0, .{ .join = "\n\n" });
+        for (parsed, 0..) |blk, idx| {
+            if (idx > 0 and blk == .heading) _ = c.leaf(.{ .height = .{ .px = 6 * o.zoom } }, .none, null);
+            block(&x, blk, 0, .{ .join = "\n\n" });
+        }
         return;
     };
     // The finished blocks parsed once and kept; only the tail each frame, as it will look done.
@@ -175,16 +188,18 @@ pub fn answer(b: *Browser, c: *ui.Context, p: *const Palette, st: *State, full: 
         const v = std.math.clamp(presence.presenceFrom(c, sid ^ (i + 1), if (fresh) 0 else 1, true, motion.settle, null) orelse 1, 0, 1);
         ui.column(c, .{ .width = .fill, .opacity = 0.18 + 0.82 * v, .offset = .{ .y = (1 - v) * 5 } });
         defer ui.end(c);
+        const cur_blk = if (fresh) tail[i - settled.len] else settled[i];
+        if (i > 0 and cur_blk == .heading) _ = c.leaf(.{ .height = .{ .px = 6 * o.zoom } }, .none, null);
         if (fresh) block(&tail_x, tail[i - settled.len], 0, .{ .join = "\n\n" }) else block(&x, settled[i], 0, .{ .join = "\n\n" });
     }
 }
 
 fn headingSize(level: u8, zoom: f32) f32 {
     return zoom * @as(f32, switch (level) {
-        1 => 18,
-        2 => 16,
+        1 => 19,
+        2 => 16.5,
         3 => 14.5,
-        else => 13,
+        else => 13.5,
     });
 }
 
@@ -192,7 +207,7 @@ fn headingSize(level: u8, zoom: f32) f32 {
 fn spaced(c: *ui.Context, style: ui.TextStyle, zoom: f32) ui.TextStyle {
     var s = style;
     const lh = c.text.font(style).lineHeight();
-    s.leading = (lh + 3.6 * zoom) / lh;
+    s.leading = (lh + 4.2 * zoom) / lh;
     return s;
 }
 
@@ -203,21 +218,21 @@ fn block(x: *const Ctx, blk: markdown.Block, depth: usize, cp: rich_.Copy) void 
     const z = x.o.zoom;
     const th = theme.MdTheme.of(c.theme.dark, p);
     switch (blk) {
-        .heading => |h| rich_.rich(x, h.text, .{ .size = headingSize(h.level, z), .weight = .semibold, .color = th.strong, .wrap = true }, true, .{ .prefix = c.print("{s}{s} ", .{ cp.prefix, "######"[0..h.level] }), .join = cp.join }),
+        .heading => |h| rich_.rich(x, h.text, spaced(c, .{ .size = headingSize(h.level, z), .weight = .semibold, .color = th.strong, .wrap = true }, z * 0.6), true, .{ .prefix = c.print("{s}{s} ", .{ cp.prefix, "######"[0..h.level] }), .join = cp.join }),
         .paragraph => |t| rich_.rich(x, t, spaced(c, .{ .size = 13 * z, .color = th.body, .wrap = true }, z), true, cp),
         .list => |l| {
-            ui.column(c, .{ .gap = 5 * z, .width = .fill });
+            ui.column(c, .{ .gap = 7 * z, .width = .fill });
             defer ui.end(c);
             for (l.items, 0..) |item, i| {
-                ui.row(c, .{ .gap = 6, .width = .fill });
+                ui.row(c, .{ .gap = 8, .width = .fill });
                 defer ui.end(c);
                 const bullets = [_][]const u8{ "•", "◦", "▪" };
                 const marker = if (l.ordered) c.print("{d}.", .{l.start + @as(i64, @intCast(i))}) else bullets[@min(depth, 2)];
                 // `.frame(minWidth: 14 * zoom, alignment: .trailing)`, on the first line's baseline.
-                ui.column(c, .{ .min_width = 14 * z, .align_items = .end });
+                ui.column(c, .{ .min_width = 18 * z, .align_items = .end });
                 ui.text(c, marker, spaced(c, .{ .size = 13 * z, .tabular = true, .color = p.muted }, z));
                 ui.end(c);
-                ui.column(c, .{ .gap = 6 * z, .grow = 1, .min_width = 0 });
+                ui.column(c, .{ .width = .fill, .gap = 6 * z, .grow = 1, .min_width = 0 });
                 defer ui.end(c);
                 // Copied as written: `1. ` or `- ` before the item, its later blocks indented under it.
                 const lead = c.print("{s}{s} ", .{ cp.prefix, if (l.ordered) marker else "-" });
@@ -234,10 +249,10 @@ fn block(x: *const Ctx, blk: markdown.Block, depth: usize, cp: rich_.Copy) void 
         },
         .quote => |inner| {
             // The VStack's muted foreground yields to each Text's own ink.
-            ui.row(c, .{ .gap = 10, .width = .fill, .align_items = .stretch, .background = th.quote_bg, .radius = 4, .padding = .{ .right = 10, .top = 6 * z, .bottom = 6 * z } });
+            ui.row(c, .{ .gap = 12, .width = .fill, .align_items = .stretch, .background = th.quote_bg, .radius = 6, .padding = .{ .left = 2, .right = 12, .top = 8 * z, .bottom = 8 * z } });
             defer ui.end(c);
             _ = c.leaf(.{ .width = .{ .px = 3 }, .radius = 1.5, .background = th.quote_bar }, .none, null);
-            ui.column(c, .{ .gap = 6 * z, .grow = 1, .min_width = 0 });
+            ui.column(c, .{ .width = .fill, .gap = 6 * z, .grow = 1, .min_width = 0 });
             defer ui.end(c);
             const lead = c.print("{s}> ", .{cp.prefix});
             for (inner, 0..) |sub, k| block(x, sub, depth + 1, .{ .prefix = lead, .join = if (k == 0) cp.join else "\n>\n" });

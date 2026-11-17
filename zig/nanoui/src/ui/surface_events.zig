@@ -107,10 +107,10 @@ fn resignFirstResponder(obj: objc.Object, _: objc.SEL) callconv(.c) objc.BOOL {
     return objc.YES;
 }
 
-/// A press of `button`: the view takes the keyboard, the box under the
-/// pointer the press.
+/// A press of `button`: the view takes the keyboard, the box under the pointer the press; no box wanting the keys, they go back to the view that had them.
 fn press(obj: objc.Object, event: objc.Object, button: input.Button) void {
     const s = surfaceOf(obj) orelse return;
+    const prev_resp = objc.msg(?objc.Object, s.window.nswindow, "firstResponder", .{});
     _ = objc.msg(objc.BOOL, s.window.nswindow, "makeFirstResponder:", .{obj});
     setMouse(s, event);
     s.ctx.updateHot();
@@ -133,7 +133,10 @@ fn press(obj: objc.Object, event: objc.Object, button: input.Button) void {
     if (s.ctx.focus == 0) {
         if (s.ctx.selection.hit != null or s.ctx.selection.dragging or s.ctx.selection.text.items.len > 0) {
             _ = objc.msg(objc.BOOL, s.window.nswindow, "makeFirstResponder:", .{obj});
-        } else if (s.keys_released) |kr| kr.func(kr.ctx, s);
+        } else {
+            if (prev_resp) |p| if (p != obj and objc.msg(?objc.Object, s.window.nswindow, "firstResponder", .{}) == obj and objc.msg(objc.BOOL, p, "isKindOfClass:", .{objc.class("NSView")}) and objc.msg(?objc.Object, p, "window", .{}) == s.window.nswindow) { _ = objc.msg(objc.BOOL, s.window.nswindow, "makeFirstResponder:", .{p}); };
+            if (s.keys_released) |kr| kr.func(kr.ctx, s);
+        }
     }
     if (s.ctx.text_menu) {
         s.ctx.text_menu = false;

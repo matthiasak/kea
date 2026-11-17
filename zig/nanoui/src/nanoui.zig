@@ -84,7 +84,7 @@ pub const http = @import("http.zig");
 /// Components after GPUI Kit: buttons, overlays, tabs, forms, toasts.
 pub const kit = @import("kit/kit.zig");
 pub const tsgen = @import("tsgen.zig");
-pub const Surface = if (mac) @import("ui/surface.zig").Surface else void;
+pub const Surface = switch (builtin.os.tag) { .macos => @import("ui/surface.zig").Surface, .ios => @import("ios/surface.zig").Surface, else => void };
 pub const a11y = if (mac) @import("ui/a11y.zig") else struct {};
 
 pub const App = plat.app.App;
@@ -140,7 +140,7 @@ test {
         return;
     }
     if (builtin.os.tag == .ios) {
-        inline for (.{ plat.app, plat.window, plat.dialog, plat.desktop, plat.fdwatch, @import("ios/surface.zig"), @import("ios/keys.zig"), @import("ios/touch.zig") }) |m| std.testing.refAllDecls(m);
+        inline for (.{ plat.app, @import("ios/app_delegates.zig"), plat.window, plat.dialog, plat.desktop, plat.fdwatch, @import("ios/surface.zig"), @import("ios/keys.zig"), @import("ios/touch.zig") }) |m| std.testing.refAllDecls(m);
         inline for (.{ plat.app.App, plat.window.Window, plat.desktop.clipboard, plat.desktop.shell, @import("ios/surface.zig").Surface }) |T| std.testing.refAllDecls(T);
         return;
     }

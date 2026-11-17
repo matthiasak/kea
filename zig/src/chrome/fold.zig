@@ -10,6 +10,7 @@ const std = @import("std");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;
 const ui = nanoui.ui;
+const platform = @import("../sys/platform.zig");
 const Browser = @import("../model/browser.zig").Browser;
 const Palette = @import("../design/palette.zig").Palette;
 const metrics = @import("../design/metrics.zig");
@@ -218,6 +219,7 @@ fn watch(b: *Browser) void {
 }
 
 fn start(b: *Browser) void {
+    if (comptime platform.is_ios) return;
     const st = &b.fold;
     if (st.local != null) return;
     const w = b.window orelse return;
@@ -231,6 +233,7 @@ fn start(b: *Browser) void {
 
 /// The browser is going, or nothing is folded: the monitors go.
 pub fn stop(b: *Browser) void {
+    if (comptime platform.is_ios) return;
     const st = &b.fold;
     if (st.local == null and st.global == null) return;
     if (st.local) |m| appkit.removeMonitor(m);
@@ -251,6 +254,7 @@ fn globalMoved(b: *Browser, _: objc.Object) void {
 
 /// From the pointer's actual place, on every move.
 fn follow(b: *Browser) void {
+    if (comptime platform.is_ios) return;
     const w = b.window orelse return pass(b);
     const ns = w.nswindow;
     if (!folding(b) or !objc.msg(objc.BOOL, ns, "isVisible", .{})) return pass(b);
@@ -352,6 +356,7 @@ fn peek(b: *Browser, out: bool) void {
 /// The title bar's own view, which holds the three buttons and the resting
 /// circles: hidden or slid away with the column.
 fn hideLights(b: *Browser, reduced: bool) void {
+    if (comptime platform.is_ios) return;
     const w = b.window orelse return;
     const st = &b.fold;
     const want: @TypeOf(st.lights.?) = .{

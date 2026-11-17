@@ -100,10 +100,13 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette) void {
     if (on.page != .shortcuts) @import("shortcuts.zig").leave(&b.settings.shortcuts);
     // Sync's bucket fields fill again each time its page appears (`onAppear`).
     if (on.page != .sync) b.settings.sync.appeared = false;
+    const fit_w = if (c.size.w > 0) @min(width, @max(300, c.size.w - 16)) else width;
+    const fit_h = if (c.size.h > 0) @min(height, @max(300, c.size.h - 24)) else height;
+    const narrow = fit_w < 520;
     _ = c.open(.{
-        .direction = .row,
-        .width = .{ .px = width },
-        .height = .{ .px = height },
+        .direction = if (narrow) .column else .row,
+        .width = .{ .px = fit_w },
+        .height = .{ .px = fit_h },
         .radius = 16,
         .clip = true,
         .background = p.ground,
@@ -111,8 +114,18 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette) void {
         .shadow = card.swiftShadow(0.16, 34, 12),
     }, null);
     defer c.end();
-    railView(b, c, p, on.page);
-    _ = c.leaf(.{ .width = .{ .px = 1 }, .height = .fill, .background = p.hairline }, .none, null);
+    if (narrow) {
+        ui.row(c, .{ .gap = 4, .padding = .xy(10, 8), .width = .fill, .scroll_x = true, .scroll_bar = false, .background = p.wash.alpha(0.45), .align_items = .center });
+        for (pages) |e| {
+            ui.key(c, @tagName(e.page));
+            if (controls.pill(c, p, e.title, .{ .filled = e.page == on.page }).clicked) pick(b, e.page);
+        }
+        ui.end(c);
+        _ = c.leaf(.{ .width = .fill, .height = .{ .px = 1 }, .background = p.hairline }, .none, null);
+    } else {
+        railView(b, c, p, on.page);
+        _ = c.leaf(.{ .width = .{ .px = 1 }, .height = .fill, .background = p.hairline }, .none, null);
+    }
     content(b, c, p, on);
 }
 
@@ -156,7 +169,7 @@ fn content(b: *Browser, c: *ui.Context, p: *const Palette, on: *const Entry) voi
     ui.end(c);
     // A page of its own opens at its top: one scroll per page.
     ui.key(c, @tagName(on.page));
-    const sc = c.open(.{ .direction = .column, .gap = 18, .width = .fill, .grow = 1, .scroll = true, .scroll_bar = false, .padding = .{ .bottom = 4 } }, null);
+    const sc = c.open(.{ .direction = .column, .gap = 18, .width = .fill, .grow = 1, .scroll = true, .scroll_bar = true, .padding = .{ .bottom = 4 } }, null);
     b.settings.scroll_id = c.node(sc).id;
     defer c.end();
     on.draw(b, c, p);

@@ -28,6 +28,7 @@ const capture = @import("capture.zig");
 const store_relay = @import("store_relay.zig");
 const slot_view = @import("slot_view.zig");
 const inspector = @import("../web/inspector.zig");
+const platform = @import("../sys/platform.zig");
 
 pub const State = struct {
     link: ui.TextBuffer = .{},
@@ -190,7 +191,7 @@ fn errorLines(c: *ui.Context, p: *const Palette, e: *Extensions, id: []const u8,
 }
 
 fn errorLine(c: *ui.Context, p: *const Palette, msg: []const u8) void {
-    const l = c.open(.{ .width = .fill }, null);
+    const l = c.open(.{ .width = .fill, .selectable = true }, null);
     c.help(l, msg);
     ui.text(c, msg, .{ .size = 11, .mono = true, .color = p.muted, .truncate = .ellipsis });
     c.end();
@@ -232,7 +233,7 @@ fn row(b: *Browser, c: *ui.Context, p: *const Palette, e: *Extensions, item: Ins
 const Act = struct {
     b: *Browser,
     id: []const u8,
-    what: enum { pin, new_tab, options, reload, remove, inspect_bg, clear_errors },
+    what: enum { pin, new_tab, options, reload, remove, inspect_bg, inspect_offscreen, copy_errors, clear_errors },
 
     fn fire(self: *Act, _: *nanoui.menu.Item) void {
         const e = self.b.kea.ext orelse return;
@@ -249,8 +250,14 @@ const Act = struct {
             .reload => e.reload(self.id),
             .remove => e.remove(self.id),
             .inspect_bg => inspectBackground(e.context(self.id) orelse return),
+            .inspect_offscreen => inspector.inspectWebView(@import("offscreen.zig").webViewFor(self.id)),
+            .copy_errors => copyErrors(self.b, e, self.id),
             .clear_errors => {
                 e.clearErrors(self.id);
+                if (e.context(self.id)) |ctx| {
+                    if (objc.msg(objc.BOOL, ctx, "respondsToSelector:", .{objc.sel("clearErrors")}))
+                        objc.msg(void, ctx, "clearErrors", .{});
+                }
                 e.changed();
             },
         }
@@ -278,10 +285,33 @@ fn woke(w: *?objc.Object, _: ?objc.Object) void {
 }
 
 fn background(ctx: objc.Object) ?objc.Object {
-    inline for (.{ "_backgroundWebView", "backgroundWebView" }) |name|
+    const names = if (comptime platform.is_ios) .{"backgroundWebView"} else .{ "_backgroundWebView", "backgroundWebView" };
+    inline for (names) |name|
         if (objc.msg(objc.BOOL, ctx, "respondsToSelector:", .{objc.sel(name)})) return objc.msg(?objc.Object, ctx, name, .{});
     return null;
 }
+fn copyErrors(b: *Browser, e: *Extensions, id: []const u8) void {
+    var buf: std.ArrayList(u8) = .empty;
+    defer buf.deinit(b.gpa);
+    if (e.errors.get(id)) |l| for (l.items) |msg| {
+        if (buf.items.len > 0) buf.append(b.gpa, '\n') catch {};
+        buf.appendSlice(b.gpa, msg) catch {};
+    };
+    if (e.context(id)) |ctx| {
+        const pool = objc.Pool.push();
+        defer pool.pop();
+        const errs = objc.msg(objc.Object, ctx, "errors", .{});
+        const n = objc.msg(objc.NSUInteger, errs, "count", .{});
+        for (0..n) |i| {
+            const err = objc.msg(objc.Object, errs, "objectAtIndex:", .{i});
+            const msg = objc.fromNSString(objc.msg(objc.Object, err, "localizedDescription", .{}));
+            if (buf.items.len > 0) buf.append(b.gpa, '\n') catch {};
+            buf.appendSlice(b.gpa, msg) catch {};
+        }
+    }
+    if (buf.items.len > 0) b.kea.writeClipboard(buf.items);
+}
+
 
 /// The row's menu: pin, new tabs, options, background, errors, reload, remove.
 fn actions(arena: std.mem.Allocator, b: *Browser, at: u64) anyerror![]const MenuItem {
@@ -309,9 +339,13 @@ fn actions(arena: std.mem.Allocator, b: *Browser, at: u64) anyerror![]const Menu
         if (objc.msg(?objc.Object, ctx, "optionsPageURL", .{}) != null)
             try out.append(arena, .{ .label = "Options", .click = .of(try Make.act(arena, b, id, .options), Act.fire) });
         try out.append(arena, .{ .label = "Inspect Background", .click = .of(try Make.act(arena, b, id, .inspect_bg), Act.fire) });
+        if (@import("offscreen.zig").webViewFor(id) != null)
+            try out.append(arena, .{ .label = "Inspect Offscreen Document", .click = .of(try Make.act(arena, b, id, .inspect_offscreen), Act.fire) });
     }
-    if (e.errors.get(id)) |l| if (l.items.len > 0)
+    if (errorCount(e, id, e.context(id)) > 0) {
+        try out.append(arena, .{ .label = "Copy Errors", .click = .of(try Make.act(arena, b, id, .copy_errors), Act.fire) });
         try out.append(arena, .{ .label = "Clear Errors", .click = .of(try Make.act(arena, b, id, .clear_errors), Act.fire) });
+    }
     try out.append(arena, .{ .label = "Reload", .click = .of(try Make.act(arena, b, id, .reload), Act.fire) });
     try out.append(arena, .separator);
     try out.append(arena, .{ .label = "Remove", .click = .of(try Make.act(arena, b, id, .remove), Act.fire) });

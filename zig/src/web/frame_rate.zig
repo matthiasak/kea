@@ -7,15 +7,7 @@ const std = @import("std");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;
 const Kea = @import("../app/kea.zig").Kea;
-
-extern "c" fn IOPSCopyPowerSourcesInfo() ?*const anyopaque;
-extern "c" fn IOPSGetProvidingPowerSourceType(snapshot: ?*const anyopaque) ?objc.Object;
-extern "c" fn IOPSNotificationCreateRunLoopSource(callback: *const fn (?*anyopaque) callconv(.c) void, context: ?*anyopaque) ?*anyopaque;
-extern "c" fn CFRunLoopGetMain() ?*anyopaque;
-extern "c" fn CFRunLoopAddSource(rl: ?*anyopaque, source: ?*anyopaque, mode: objc.Object) void;
-extern "c" fn CFRelease(cf: *const anyopaque) void;
-extern "c" const kCFRunLoopCommonModes: objc.Object;
-
+const platform = @import("../sys/platform.zig");
 /// Test override for power-source state (`null` uses IOKit).
 pub var power_override: ?bool = null;
 var watched_kea: ?*Kea = null;
@@ -28,10 +20,7 @@ var flag: union(enum) { unknown, missing, found: objc.Object } = .unknown;
 
 pub fn onPower() bool {
     if (power_override) |ov| return ov;
-    const blob = IOPSCopyPowerSourcesInfo() orelse return true;
-    defer CFRelease(blob);
-    const kind = IOPSGetProvidingPowerSourceType(blob) orelse return true;
-    return std.mem.eql(u8, objc.fromNSString(kind), "AC Power");
+    return platform.isOnPower();
 }
 
 pub fn effectiveFast(kea: *const Kea) bool {
@@ -42,10 +31,17 @@ pub fn effectiveFast(kea: *const Kea) bool {
 fn watchPower(kea: *Kea) void {
     if (kea.opts.headless) return;
     watched_kea = kea;
+    if (comptime platform.is_ios) return;
     if (power_source != null) return;
-    const src = IOPSNotificationCreateRunLoopSource(powerChanged, null) orelse return;
+    const M = struct {
+        extern "c" fn IOPSNotificationCreateRunLoopSource(callback: *const fn (?*anyopaque) callconv(.c) void, context: ?*anyopaque) ?*anyopaque;
+        extern "c" fn CFRunLoopGetMain() ?*anyopaque;
+        extern "c" fn CFRunLoopAddSource(rl: ?*anyopaque, source: ?*anyopaque, mode: objc.Object) void;
+        extern "c" const kCFRunLoopCommonModes: objc.Object;
+    };
+    const src = M.IOPSNotificationCreateRunLoopSource(powerChanged, null) orelse return;
     power_source = src;
-    if (CFRunLoopGetMain()) |rl| CFRunLoopAddSource(rl, src, kCFRunLoopCommonModes);
+    if (M.CFRunLoopGetMain()) |rl| M.CFRunLoopAddSource(rl, src, M.kCFRunLoopCommonModes);
 }
 
 fn powerChanged(_: ?*anyopaque) callconv(.c) void {
@@ -56,6 +52,7 @@ pub fn teardown(kea: *Kea) void {
     if (watched_kea == kea) watched_kea = null;
 }
 fn near60() ?objc.Object {
+    if (comptime platform.is_ios) return null;
     switch (flag) {
         .found => |f| return f,
         .missing => return null,
@@ -77,6 +74,7 @@ fn near60() ?objc.Object {
 }
 
 fn set(on: bool, preferences: objc.Object) void {
+    if (comptime platform.is_ios) return;
     const f = near60() orelse return;
     if (!objc.msg(objc.BOOL, preferences, "respondsToSelector:", .{objc.sel("_setEnabled:forFeature:")})) return;
     objc.msg(void, preferences, "_setEnabled:forFeature:", .{ on, f });
@@ -94,6 +92,7 @@ pub fn apply(kea: *Kea, preferences: objc.Object) void {
 /// Whether a page holds itself near 60, as its WebKit has it; null where
 /// this WebKit has no such flag.
 pub fn prefersNear60(preferences: objc.Object) ?bool {
+    if (comptime platform.is_ios) return null;
     const f = near60() orelse return null;
     if (!objc.msg(objc.BOOL, preferences, "respondsToSelector:", .{objc.sel("_isEnabledForFeature:")})) return null;
     return objc.msg(objc.BOOL, preferences, "_isEnabledForFeature:", .{f});

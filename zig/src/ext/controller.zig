@@ -20,6 +20,7 @@ const follow_ops = @import("controller_follow.zig");
 const install_ops = @import("controller_install.zig");
 const forget_ops = @import("controller_forget.zig");
 const updates_ops = @import("controller_updates.zig");
+const platform = @import("../sys/platform.zig");
 
 pub const Installed = ext.Installed;
 
@@ -128,16 +129,8 @@ pub const Extensions = struct {
         // A test run sits behind other windows (WKInactiveSchedulingPolicyNone).
         if (testing and objc.msg(objc.BOOL, prefs, "respondsToSelector:", .{objc.sel("setInactiveSchedulingPolicy:")}))
             objc.msg(void, prefs, "setInactiveSchedulingPolicy:", .{@as(objc.NSInteger, 2)});
-        self.* = .{
-            .kea = kea,
-            .gpa = kea.gpa,
-            .serial = blk: {
-                serials += 1;
-                break :blk serials;
-            },
-            .controller = undefined,
-            .websites = websites,
-        };
+        serials += 1;
+        self.* = .{ .kea = kea, .gpa = kea.gpa, .serial = serials, .controller = undefined, .websites = websites };
         // Screen recording: an extension's pages ask through this.
         const capture = @import("capture.zig");
         const ucc = objc.msg(objc.Object, views, "userContentController", .{});
@@ -347,6 +340,9 @@ pub const Extensions = struct {
     pub fn tabAtFrame(self: *Extensions, frame: objc.CGRect, index: usize) ?*Tab {
         const pool = objc.Pool.push();
         defer pool.pop();
+        if (comptime platform.is_ios) {
+            return self.nthSeen(self.browser() orelse return null, index);
+        }
         const screens = objc.msg(objc.Object, objc.class("NSScreen"), "screens", .{});
         const height: f64 = if (objc.msg(?objc.Object, screens, "firstObject", .{})) |s| objc.msg(objc.CGRect, s, "frame", .{}).size.height else 0;
         var match: ?*Browser = null;
@@ -570,6 +566,7 @@ pub fn configurationFor(kea: *Kea, url: []const u8) ?objc.Object {
 /// `NSApp.isHidden`: launched hidden (a login item), with no frame to wait for.
 pub fn appHidden(kea: *Kea) bool {
     const a = kea.ui_app orelse return false;
+    if (comptime platform.is_ios) return !a.active;
     return objc.msg(objc.BOOL, a.nsapp, "isHidden", .{});
 }
 

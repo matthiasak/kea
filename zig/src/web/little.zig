@@ -19,6 +19,7 @@ const controls = @import("../chrome/controls.zig");
 const page_layers = @import("../chrome/page_layers.zig");
 const site_card = @import("../chrome/site_card.zig");
 const appkit = @import("../sys/appkit.zig");
+const platform = @import("../sys/platform.zig");
 
 const gpa = std.heap.c_allocator;
 
@@ -38,6 +39,7 @@ pub const Little = struct {
 
     /// Closed as its button closes it.
     pub fn close(self: *Little) void {
+        if (comptime platform.is_ios) return self.window.close();
         objc.msg(void, self.window.nswindow, "performClose:", .{@as(?objc.Object, null)});
     }
 
@@ -99,14 +101,20 @@ pub fn show(b: *Browser, url: []const u8, front: bool) ?*Little {
         self.host = StageHost.create(gpa, s) catch null;
         if (self.host) |h| {
             h.setPage(tab.web, false);
-            if (tab.web) |wv| _ = objc.msg(objc.BOOL, win.nswindow, "makeFirstResponder:", .{wv});
+            if (tab.web) |wv| {
+                if (comptime platform.is_ios) _ = objc.msg(objc.BOOL, wv, "becomeFirstResponder", .{}) else _ = objc.msg(objc.BOOL, win.nswindow, "makeFirstResponder:", .{wv});
+            }
         }
         s.frame();
     }
     // Never a test run's in front: a run started hidden stays off every screen.
     if (front and !kea.opts.hidden and kea.opts.root == null) {
-        objc.msg(void, win.nswindow, "makeKeyAndOrderFront:", .{@as(?objc.Object, null)});
-        objc.msg(void, app.nsapp, "activateIgnoringOtherApps:", .{objc.YES});
+        if (comptime platform.is_ios) {
+            win.show();
+        } else {
+            objc.msg(void, win.nswindow, "makeKeyAndOrderFront:", .{@as(?objc.Object, null)});
+            objc.msg(void, app.nsapp, "activateIgnoringOtherApps:", .{objc.YES});
+        }
     }
     return self;
 }
@@ -142,13 +150,19 @@ pub fn showTab(b: *Browser, tab: *Tab, w_in: f64, h_in: f64) ?*Little {
         self.host = StageHost.create(gpa, s) catch null;
         if (self.host) |sh| {
             sh.setPage(tab.web, false);
-            if (tab.web) |wv| _ = objc.msg(objc.BOOL, win.nswindow, "makeFirstResponder:", .{wv});
+            if (tab.web) |wv| {
+                if (comptime platform.is_ios) _ = objc.msg(objc.BOOL, wv, "becomeFirstResponder", .{}) else _ = objc.msg(objc.BOOL, win.nswindow, "makeFirstResponder:", .{wv});
+            }
         }
         s.frame();
     }
     if (!kea.opts.hidden and kea.opts.root == null) {
-        objc.msg(void, win.nswindow, "makeKeyAndOrderFront:", .{@as(?objc.Object, null)});
-        objc.msg(void, app.nsapp, "activateIgnoringOtherApps:", .{objc.YES});
+        if (comptime platform.is_ios) {
+            win.show();
+        } else {
+            objc.msg(void, win.nswindow, "makeKeyAndOrderFront:", .{@as(?objc.Object, null)});
+            objc.msg(void, app.nsapp, "activateIgnoringOtherApps:", .{objc.YES});
+        }
     }
     return self;
 }
@@ -161,6 +175,7 @@ pub fn of(t: *const Tab) ?*Little {
 
 /// The small window a key was pressed in, if it was one.
 pub fn owning(window: ?objc.Object) ?*Little {
+    if (comptime platform.is_ios) return null;
     const w = window orelse return null;
     for (open.items) |l| if (l.window.nswindow == w) return l;
     return null;
@@ -172,7 +187,9 @@ pub fn changed(t: *const Tab) void {
         if (l.host) |h| if (t.web) |wv| {
             const had = h.slots.items.len > 0 and h.slots.items[0].webview == wv;
             h.setPage(wv, false);
-            if (!had) _ = objc.msg(objc.BOOL, l.window.nswindow, "makeFirstResponder:", .{wv});
+            if (!had) {
+                if (comptime platform.is_ios) _ = objc.msg(objc.BOOL, wv, "becomeFirstResponder", .{}) else _ = objc.msg(objc.BOOL, l.window.nswindow, "makeFirstResponder:", .{wv});
+            }
         };
         l.window.redraw();
     }
@@ -212,6 +229,7 @@ fn keyDown(_: *u8, event: objc.Object) ?objc.Object {
 
 /// `take`: ⌘O keeps it, Escape and ⌘W close it; everything else is the page's.
 pub fn take(l: *Little, event: objc.Object) bool {
+    if (comptime platform.is_ios) return false;
     // NSEventModifierFlagDeviceIndependentFlagsMask.
     const flags = objc.msg(objc.NSUInteger, event, "modifierFlags", .{}) & 0xffff0000;
     const command: objc.NSUInteger = 1 << 20;
@@ -249,7 +267,7 @@ fn view(self: *Little, c: *ui.Context) void {
     // Drawn first inside `newWindow`, before it is filled in.
     if (std.mem.indexOfScalar(*Little, open.items, self) == null) return;
     const p = palette.get(c.theme.dark);
-    applyGround(self.window.nswindow, &self.applied, p.ground);
+    applyGround(self.window, &self.applied, p.ground);
     if (body(c, p, self.tab, true)) objc.dispatchMain(self, keepSoon);
 }
 
@@ -259,7 +277,7 @@ fn view(self: *Little, c: *ui.Context) void {
 pub fn popupView(b: *Browser, c: *ui.Context) void {
     const p = palette.get(c.theme.dark);
     c.title_bar_height = 0;
-    if (b.window) |w| applyGround(w.nswindow, &b.applied_ground, p.ground);
+    if (b.window) |w| applyGround(w, &b.applied_ground, p.ground);
     const tab = b.activeTab() orelse {
         b.stage.count = 0;
         b.syncStageHost();
@@ -298,11 +316,12 @@ fn body(c: *ui.Context, p: *const palette.Palette, tab: *Tab, keeps: bool) bool 
 }
 
 /// The window's ground: hosted, its root is left unpainted.
-fn applyGround(window: objc.Object, applied: *?ui.Color, g: ui.Color) void {
+fn applyGround(window: *nanoui.Window, applied: *?ui.Color, g: ui.Color) void {
+    if (comptime platform.is_ios) return;
     if (applied.*) |a| if (std.meta.eql(a, g)) return;
     applied.* = g;
     const color = objc.msg(objc.Object, objc.class("NSColor"), "colorWithSRGBRed:green:blue:alpha:", .{ @as(f64, g.r), @as(f64, g.g), @as(f64, g.b), @as(f64, g.a) });
-    objc.msg(void, window, "setBackgroundColor:", .{color});
+    objc.msg(void, window.nswindow, "setBackgroundColor:", .{color});
 }
 
 /// After the frame: keeping closes the window the frame is drawing.

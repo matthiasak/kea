@@ -55,7 +55,7 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette, use: Use) void {
     const all = fc.rows.items;
     const sid = enclosingScroll(c);
     if (use.shown) |want| if (b.marks_ui.picks.reveal) if (sid) |id| {
-        for (all, 0..) |r, idx| if (!r.empty_placeholder and r.node.id.eql(want)) {
+        for (all, 0..) |r, idx| if (!r.empty_placeholder and r.category_header == null and r.node.id.eql(want)) {
             const sr_h = if (c.rects.get(id)) |sr| sr.h else 440;
             c.setScroll(id, .y, @max(0, @as(f32, @floatFromInt(idx)) * 28.0 + 13.5 - sr_h / 2));
             break;
@@ -78,6 +78,8 @@ pub fn view(b: *Browser, c: *ui.Context, p: *const Palette, use: Use) void {
             if (carrying and allows(b, c, item.node.id)) if (it.rect) |r| if (r.contains(c.input.mouse)) {
                 b.marks_ui.drag.aimed = .{ .id = item.node.id, .zone = .after, .depth = item.depth, .into = item.node.id, .at = null };
             };
+        } else if (item.category_header) |hdr| {
+            headerRow(b, c, p, use.list, item, hdr, carrying);
         } else {
             row(b, c, p, use, item.node, item.depth, item.parent, item.index, fc.arrows, item.is_open, carrying);
         }
@@ -168,6 +170,25 @@ fn allows(b: *Browser, c: *ui.Context, target: Uuid) bool {
     const path = (b.bookmarks.pathTo(c.alloc(), target) catch null) orelse return true;
     for (path) |n| if (carried.has(n.id)) return false;
     return true;
+}
+
+fn headerRow(b: *Browser, c: *ui.Context, p: *const Palette, list: state.List, item: state.FlatRow, hdr: []const u8, carrying: bool) void {
+    const i = c.open(.{
+        .direction = .row,
+        .gap = 6,
+        .padding = .{ .left = 10, .right = 10, .top = 8, .bottom = 3 },
+        .width = .fill,
+        .height = px(27),
+        .align_items = .center,
+    }, c.print("bm.hdr.{s}.{d}", .{ @tagName(list), item.index }));
+    const rect = c.rects.get(c.node(i).id);
+    ui.text(c, hdr, .{ .size = 11, .weight = .semibold, .color = p.muted, .truncate = .ellipsis });
+    _ = c.leaf(.{ .grow = 1, .min_width = 4, .height = px(1), .background = p.hairline.alpha(0.75) }, .none, null);
+    if (carrying and allows(b, c, item.node.id)) if (rect) |r| if (r.contains(c.input.mouse)) {
+        b.marks_ui.drag.aimed = .{ .id = item.node.id, .zone = .before, .depth = 0, .into = null, .at = item.index };
+        line(c, p, 0, .before, r);
+    };
+    c.end();
 }
 
 fn row(b: *Browser, c: *ui.Context, p: *const Palette, use: Use, node: *const Bookmark, depth: usize, parent: ?Uuid, index: usize, arrows: bool, is_open: bool, carrying: bool) void {

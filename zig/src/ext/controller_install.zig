@@ -17,6 +17,7 @@ const asking = @import("controller_asking.zig");
 const load_ops = @import("controller_load.zig");
 const shims = @import("shims/install.zig");
 const Tab = @import("../web/tab.zig").Tab;
+const platform = @import("../sys/platform.zig");
 
 // MARK: files
 
@@ -247,6 +248,12 @@ fn staged(j: *Job) void {
 
 /// `installFolder()`: an unpacked extension from disk, chosen.
 pub fn installFolder(self: *Extensions) void {
+    if (comptime platform.is_ios) {
+        const picked = (nanoui.dialog.open(self.gpa, .{ .directories = true, .files = false }) catch null) orelse return;
+        defer nanoui.dialog.freePaths(self.gpa, picked);
+        if (picked.len > 0) installFolderAt(self, picked[0], true);
+        return;
+    }
     const pool = objc.Pool.push();
     defer pool.pop();
     const panel = objc.msg(objc.Object, objc.class("NSOpenPanel"), "openPanel", .{});

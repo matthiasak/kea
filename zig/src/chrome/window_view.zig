@@ -8,6 +8,7 @@ const std = @import("std");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;
 const ui = nanoui.ui;
+const platform = @import("../sys/platform.zig");
 const Browser = @import("../model/browser.zig").Browser;
 const Tab = @import("../web/tab.zig").Tab;
 const palette = @import("../design/palette.zig");
@@ -40,6 +41,7 @@ const sheet = @import("sheet.zig");
 const slot_view = @import("../ext/slot_view.zig");
 const welcome = @import("welcome.zig");
 const tab_leaving = @import("tab_leaving.zig");
+const compact_bar = @import("compact_bar.zig");
 
 const px = struct {
     fn v(n: f32) ui.Length {
@@ -51,9 +53,9 @@ const slide_id: u64 = std.hash.Wyhash.hash(0, "kea.room.slide");
 const col_id: u64 = std.hash.Wyhash.hash(0, "kea.room.col");
 const strip_id: u64 = std.hash.Wyhash.hash(0, "kea.room.strip");
 const bar_id: u64 = std.hash.Wyhash.hash(0, "kea.room.bar");
-const panel_w_id: u64 = std.hash.Wyhash.hash(0, "kea.room.panel_w");
 
 pub fn view(b: *Browser, c: *ui.Context) void {
+    b.ensureStageHost();
     // Kea's controls keep the arrow, as AppKit's plain buttons do.
     c.hand_cursor = false;
     b.web_panel_hole_node = null;
@@ -75,6 +77,7 @@ pub fn view(b: *Browser, c: *ui.Context) void {
     @import("popped.zig").followBookmarks(b.kea);
     @import("../model/browser_chat.zig").followChatWindow(b);
 
+    side_panels.followEdgeDrag(b, c);
     const r = room(b, c);
     applyGround(b, p, r);
     const chrome = r.chrome();
@@ -94,9 +97,20 @@ pub fn view(b: *Browser, c: *ui.Context) void {
     // Placed by its own side, so a column leaving the right goes out on the right.
     const right = r.sideOnRight();
     const sw = b.prefs.effectiveSideWidth();
-    const col_target: f32 = if (r.sidebar()) sw else 0;
+    const show_side = r.sidebar() or r.overlaySidebar();
+    const col_target: f32 = if (show_side) sw else 0;
     const col_w = if (swapping) swapTo(c, col_id, 0, col_target) else motion.glideTo(c, col_id, b.room.still +% 1, col_target);
-    if (r.sidebar() or col_w > 0.5) {
+    const strip_shown = (!b.prefs.sidebar or r.narrowOverlay()) and !r.compactPhone() and (!r.folded or r.narrowOverlay()) and !r.fullscreen;
+    drawBookmarksBar(b, c, p, r, swapping);
+    drawStrip(b, c, p, strip_shown, swapping);
+    if (r.overlaySidebar() and col_w > 0.5) {
+        const scrim = c.leaf(.{ .absolute = true, .width = .fill, .height = .fill, .background = ui.Color.black.alpha(0.18 * (col_w / @max(sw, 1))) }, .none, "kea.side.scrim");
+        if (c.interact(scrim, .{}).clicked) {
+            b.folded = true;
+            b.redraw();
+        }
+    }
+    if (show_side or col_w > 0.5) {
         const on_right = b.prefs.side_position == .right;
         const x = if (on_right) c.size.w - col_w else col_w - sw;
         side_bar.sideBar(b, c, p, r.cards(), x);
@@ -104,8 +118,7 @@ pub fn view(b: *Browser, c: *ui.Context) void {
         tab_leaving.release(&b.column.leaving, &b.column.snaps, b.gpa);
         tab_leaving.release(&b.column.pin_leaving, &b.column.pin_snaps, b.gpa);
     }
-    drawStrip(b, c, p, !b.prefs.sidebar and !r.folded and !r.fullscreen, swapping);
-    drawBookmarksBar(b, c, p, r, swapping);
+    if (r.compactPhone() and !r.fullscreen) compact_bar.view(b, c, p);
     // On the page, as Swift's `Page` overlay: under the fold, bars and sheets.
     @import("../passwords/accounts_view.zig").view(b, c, p);
     if (!r.fullscreen) fold.view(b, c, p);
@@ -119,10 +132,16 @@ pub fn view(b: *Browser, c: *ui.Context) void {
     // sheets, the tab switcher and the import's card come with their phases.
     // The field is centred on the page, not on the window: the column of
     // tabs is not what it stands over.
-    const lead: f32 = if (r.sidebar() and !right) sw else 0;
-    const trail: f32 = if (r.sidebar() and right) sw else 0;
+    const chat_left = side_panels.panelOnLeft(b, .chat);
+    const marks_left = side_panels.panelOnLeft(b, .bookmarks);
+    const web_left = side_panels.panelOnLeft(b, .web);
+    const panel_left: f32 = (if (r.chatShown() and chat_left) r.chatWidth() else 0) + (if (r.marksShown() and marks_left) r.marksWidth() else 0) + (if (r.webShown() and web_left) r.webWidth() else 0);
+    const panel_right: f32 = (if (r.chatShown() and !chat_left) r.chatWidth() else 0) + (if (r.marksShown() and !marks_left) r.marksWidth() else 0) + (if (r.webShown() and !web_left) r.webWidth() else 0);
+    const lead: f32 = (if (r.sidebar() and !right) sw else 0) + panel_left;
+    const trail: f32 = (if (r.sidebar() and right) sw else 0) + panel_right;
     // With Split View on, each page has its own, fitted (chrome/split_stage.zig).
-    if (!b.prefs.split_view) omnibox.view(b, c, p, .{ .x = lead, .y = 0, .w = c.size.w - lead - trail, .h = c.size.h }, .{});
+    const page_h = @max(0, c.size.h - (if (r.compactPhone() and !r.fullscreen) compact_bar.height else 0));
+    if (!b.prefs.split_view) omnibox.view(b, c, p, .{ .x = lead, .y = 0, .w = @max(0, c.size.w - lead - trail), .h = page_h }, .{});
     site_card.follow(b);
     sheet.view(b, c, p);
     welcome.view(b, c, p);
@@ -137,6 +156,7 @@ pub fn view(b: *Browser, c: *ui.Context) void {
 /// This frame's window, as ContentView reads it.
 fn room(b: *Browser, c: *ui.Context) Room {
     const prefs = b.prefs;
+    const narrow = compact_bar.isNarrowOverlay(c.size.w);
     return .{
         .sidebar_pref = prefs.sidebar,
         .folded = b.folded,
@@ -147,14 +167,14 @@ fn room(b: *Browser, c: *ui.Context) Room {
         .has_bookmarks = b.bookmarks.roots.len > 0,
         .marks_asked = prefs.bookmarks_sidebar,
         .marks_popped = prefs.marks_popped,
-        .marks_expanded = b.expanded_panel == .bookmarks,
+        .marks_expanded = b.expanded_panel == .bookmarks or narrow,
         .chat_asked = b.assisting != null,
-        .chat_expanded = b.expanded_panel == .chat,
+        .chat_expanded = b.expanded_panel == .chat or narrow,
         .chat_popped = prefs.chat_popped,
         .chat_width_pref = prefs.chat_width,
         .marks_width_pref = prefs.marks_width,
         .web_asked = b.web_panel_tab != null,
-        .web_expanded = b.expanded_panel == .web,
+        .web_expanded = b.expanded_panel == .web or narrow,
         .web_width_pref = prefs.web_width,
         .window_width = c.size.w,
     };
@@ -211,10 +231,22 @@ fn applyGround(b: *Browser, p: *const Palette, r: Room) void {
     const w = b.window orelse return;
     const pool = objc.Pool.push();
     defer pool.pop();
-    const color = objc.msg(objc.Object, objc.class("NSColor"), "colorWithSRGBRed:green:blue:alpha:", .{
-        @as(f64, g.r), @as(f64, g.g), @as(f64, g.b), @as(f64, g.a),
-    });
-    objc.msg(void, w.nswindow, "setBackgroundColor:", .{color});
+    if (comptime platform.is_ios) {
+        const s = w.surface orelse {
+            b.applied_ground = null;
+            return;
+        };
+        const color = objc.msg(objc.Object, objc.class("UIColor"), "colorWithRed:green:blue:alpha:", .{
+            @as(f64, g.r), @as(f64, g.g), @as(f64, g.b), @as(f64, g.a),
+        });
+        if (s.host_view) |hv| objc.msg(void, hv, "setBackgroundColor:", .{color});
+        if (w.app.uiwindow) |uw| objc.msg(void, uw, "setBackgroundColor:", .{color});
+    } else {
+        const color = objc.msg(objc.Object, objc.class("NSColor"), "colorWithSRGBRed:green:blue:alpha:", .{
+            @as(f64, g.r), @as(f64, g.g), @as(f64, g.b), @as(f64, g.a),
+        });
+        objc.msg(void, w.nswindow, "setBackgroundColor:", .{color});
+    }
 }
 
 /// The panels on their sides and the stage between them, inside the room
@@ -226,7 +258,7 @@ fn drawStageRow(b: *Browser, c: *ui.Context, p: *const Palette, r: Room, roomed:
         .left = if (right) far else roomed.w,
         .right = if (right) roomed.w else far,
         .top = roomed.h,
-        .bottom = far,
+        .bottom = if (r.compactPhone() and !r.fullscreen) compact_bar.height else far,
     };
     ui.row(c, .{
         .absolute = true,
@@ -239,10 +271,8 @@ fn drawStageRow(b: *Browser, c: *ui.Context, p: *const Palette, r: Room, roomed:
     side_panels.beside(b, c, p, r, true);
     // The stage's own size, from what is beside it, so the pages are laid
     // out in this frame for this window, never the last one's.
-    const beside_target: f32 = (if (r.chatShown()) r.chatWidth() else 0) + (if (r.marksShown()) r.marksWidth() else 0);
-    if (b.edge_drag != null or b.let_out == null or (b.column.panel_win_w != 0 and b.column.panel_win_w != r.window_width)) ui.jump(c, panel_w_id, 0, beside_target);
-    const beside: f32 = motion.glideTo(c, panel_w_id, 0, beside_target);
-    drawStage(b, c, p, r, .{ .w = @max(0, c.size.w - pad.left - pad.right - beside), .h = @max(0, c.size.h - pad.top - pad.bottom) });
+    const beside_target: f32 = (if (r.chatShown()) r.chatWidth() else 0) + (if (r.marksShown()) r.marksWidth() else 0) + (if (r.webShown()) r.webWidth() else 0);
+    drawStage(b, c, p, r, .{ .w = @max(0, c.size.w - pad.left - pad.right - beside_target), .h = @max(0, c.size.h - pad.top - pad.bottom) });
     side_panels.beside(b, c, p, r, false);
 }
 
@@ -261,13 +291,17 @@ fn drawStage(b: *Browser, c: *ui.Context, p: *const Palette, r: Room, size: ui.S
 fn drawBookmarksBar(b: *Browser, c: *ui.Context, p: *const Palette, r: Room, swapping: bool) void {
     const t = arrival(b, c, bar_id, r.barShown(), swapping) orelse return;
     const at = &b.room.bar;
+    const right = r.sideOnRight();
+    const lead = if (right) r.farGap() else r.chrome().w;
+    const trail = if (right) r.chrome().w else r.farGap();
     if (r.barShown()) {
-        const right = r.sideOnRight();
-        const lead = if (right) r.farGap() else r.chrome().w;
-        const trail = if (right) r.chrome().w else r.farGap();
-        at.* = .{ .x = lead, .y = r.band(), .w = c.size.w - lead - trail, .cards = r.cards() };
+        at.* = .{ .x = lead, .y = r.band(), .w = @max(0, c.size.w - lead - trail), .cards = r.cards() };
+    } else {
+        at.x = lead;
+        at.w = @max(0, c.size.w - lead - trail);
     }
-    _ = c.open(.{ .absolute = true, .width = .fill, .height = .fill, .offset = .{ .y = (t - 1) * room_mod.bar_height }, .opacity = std.math.clamp(t, 0, 1) }, "kea.bar.fade");
+    const a = std.math.clamp(t, 0, 1);
+    _ = c.open(.{ .absolute = true, .width = .fill, .height = .fill, .offset = .{ .y = (t - 1) * room_mod.bar_height }, .opacity = a, .group = a < 0.999 }, "kea.bar.fade");
     defer c.end();
     @import("bookmarks/bar.zig").view(b, c, p, at.x, at.y, at.w, at.cards);
 }

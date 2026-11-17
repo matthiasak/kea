@@ -174,7 +174,7 @@ pub fn request(m: *const ai.Ai, a: std.mem.Allocator, q: Ask) (error{ RefusedHos
                 .contents = contents,
                 .tools = try client_messages.toolsForWithPlugins(a, .gemini, q.tools, q.web_search),
                 .generationConfig = .{
-                    .maxOutputTokens = if (q.thinking) |t| (if (t > 1024 and q.max_tokens < t + 2048) t + 2048 else q.max_tokens) else q.max_tokens,
+                    .maxOutputTokens = if (q.thinking) |t| (if (t > 1024 and q.max_tokens < t + 8192) t + 8192 else q.max_tokens) else q.max_tokens,
                     .thinkingConfig = if (q.thinking) |t| @as(?struct { thinkingBudget: u32 }, .{ .thinkingBudget = t }) else null,
                 },
             });

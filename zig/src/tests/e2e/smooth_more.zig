@@ -26,6 +26,7 @@ pub const all = [_]ScenarioDef{
     .{ .id = "S14", .name = "Scroll a long page (surface must stay idle)", .run = s14PageScroll },
     .{ .id = "S15", .name = "Switch tabs x10 (page transition)", .run = s15SwitchTabs },
     .{ .id = "S16", .name = "Signature tour", .run = s16SignatureTour },
+    .{ .id = "S17", .name = "Panels, Bookmarks Bar & DevTools HUD choreography", .run = s17PanelsBarHud },
 };
 
 fn sendWebScroll(wv: objc.Object, dy: i32) void {
@@ -164,6 +165,45 @@ fn s16SignatureTour(h: *Harness, b: *app.Browser, s: *ui.Surface, fl: *ui.FrameL
         }
         smooth.mouseMovedTo(s, 500.0, 300.0);
         smooth.waitUntilSettled(s, 0.4);
+        spans[iter] = .{ .start = m0, .end = fl.mark() };
+    }
+    return spans;
+}
+
+fn s17PanelsBarHud(h: *Harness, b: *app.Browser, s: *ui.Surface, fl: *ui.FrameLog) ![3]SpanMark {
+    _ = try web.open(h, b, "kea-test://site/page?title=Choreo");
+    _ = b.bookmarks.add("https://ziglang.org/", "Zig");
+    _ = b.bookmarks.add("https://www.example.com/", "Example");
+    _ = b.bookmarks.add("https://github.com/", "GitHub");
+    _ = b.bookmarks.add("https://news.ycombinator.com/", "HN");
+    b.prefs.set("sidebar", true);
+    b.redraw();
+    smooth.waitUntilSettled(s, 0.4);
+
+    var spans: [3]SpanMark = undefined;
+    for (0..3) |iter| {
+        const m0 = fl.mark();
+        b.prefs.set("bookmarks_bar", true);
+        b.redraw();
+        smooth.waitLoop(0.36);
+
+        b.prefs.set("bookmarks_sidebar", true);
+        b.redraw();
+        smooth.waitLoop(0.32);
+
+        _ = b.openChat();
+        smooth.waitLoop(0.32);
+
+        app.debug_hud.toggle(b);
+        smooth.waitLoop(0.28);
+
+        app.debug_hud.toggle(b);
+        b.closeAssistant();
+        b.prefs.set("bookmarks_sidebar", false);
+        b.prefs.set("bookmarks_bar", false);
+        b.redraw();
+        smooth.waitLoop(0.38);
+        smooth.waitUntilSettled(s, 0.25);
         spans[iter] = .{ .start = m0, .end = fl.mark() };
     }
     return spans;

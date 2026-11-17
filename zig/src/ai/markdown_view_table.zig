@@ -24,7 +24,7 @@ pub fn table(x: *const view.Ctx, header: []const []const u8, rows: []const []con
     const id = c.node(outer).id;
     const box = x.st.boxState(x.b.gpa, id);
     const head_style: ui.TextStyle = .{ .size = 11.5 * z, .weight = .medium, .color = th.table_head };
-    const cell_style: ui.TextStyle = .{ .size = 12.5 * z, .color = th.body };
+    const cell_style: ui.TextStyle = .{ .size = 12.5 * z, .color = th.body, .leading = 1.22 };
     var columns = header.len;
     for (rows) |r| columns = @max(columns, r.len);
     const widths = a.alloc(f32, columns) catch return;

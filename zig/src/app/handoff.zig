@@ -4,6 +4,7 @@
 const std = @import("std");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;
+const platform = @import("../sys/platform.zig");
 const Browser = @import("../model/browser.zig").Browser;
 const Tab = @import("../web/tab.zig").Tab;
 
@@ -14,7 +15,7 @@ extern "c" var NSUserActivityTypeBrowsingWeb: objc.Object;
 pub fn handOff(b: *Browser) void {
     if (b.kea.opts.root != null or b.kea.opts.hidden) return;
     const w = b.window orelse return;
-    if (!objc.msg(objc.BOOL, w.nswindow, "isKeyWindow", .{})) return;
+    if (if (comptime platform.is_ios) !w.isFocused() else !objc.msg(objc.BOOL, w.nswindow, "isKeyWindow", .{})) return;
     if (activity(b)) |a| objc.msg(void, a, "becomeCurrent", .{});
 }
 
@@ -76,6 +77,25 @@ pub fn share(b: *Browser) void {
     const pool = objc.Pool.push();
     defer pool.pop();
     const url = objc.msg(?objc.Object, objc.class("NSURL"), "URLWithString:", .{objc.nsString(address)}) orelse return;
+    if (comptime platform.is_ios) {
+        const vc = platform.topViewController() orelse return;
+        const items = objc.msg(objc.Object, objc.class("NSArray"), "arrayWithObject:", .{url});
+        const avc = objc.msg(objc.Object, objc.alloc("UIActivityViewController"), "initWithActivityItems:applicationActivities:", .{ items, @as(?objc.Object, null) });
+        defer objc.release(avc);
+        if (objc.msg(?objc.Object, avc, "popoverPresentationController", .{})) |pop| {
+            const web_in_win = if (t.web) |wv| (if (objc.msg(?objc.Object, wv, "window", .{}) != null) wv else null) else null;
+            if (web_in_win orelse platform.nativeView(w.surface) orelse objc.msg(?objc.Object, vc, "view", .{})) |sv| {
+                objc.msg(void, pop, "setSourceView:", .{sv});
+                const bnd = objc.msg(objc.CGRect, sv, "bounds", .{});
+                objc.msg(void, pop, "setSourceRect:", .{objc.CGRect{
+                    .origin = .{ .x = @max(0, bnd.origin.x + bnd.size.width - 24), .y = bnd.origin.y + 12 },
+                    .size = .{ .width = 1, .height = 1 },
+                }});
+            }
+        }
+        objc.msg(void, vc, "presentViewController:animated:completion:", .{ avc, objc.YES, @as(?*anyopaque, null) });
+        return;
+    }
     const in_window = if (t.web) |wv| objc.msg(?objc.Object, wv, "window", .{}) == w.nswindow else false;
     const view = if (in_window) t.web.? else objc.msg(?objc.Object, w.nswindow, "contentView", .{}) orelse return;
     const bounds = objc.msg(objc.CGRect, view, "bounds", .{});
@@ -100,10 +120,16 @@ pub fn printPage(b: *Browser) void {
     const t = b.tabById(b.active_id) orelse return;
     if (t.isBlank()) return;
     const wv = t.web orelse return;
-    const app = objc.msg(objc.Object, objc.class("NSApplication"), "sharedApplication", .{});
-    const window = objc.msg(?objc.Object, app, "keyWindow", .{}) orelse return;
     const pool = objc.Pool.push();
     defer pool.pop();
+    if (comptime platform.is_ios) {
+        const pic = objc.msg(objc.Object, objc.class("UIPrintInteractionController"), "sharedPrintController", .{});
+        objc.msg(void, pic, "setPrintFormatter:", .{objc.msg(objc.Object, wv, "viewPrintFormatter", .{})});
+        _ = objc.msg(objc.BOOL, pic, "presentAnimated:completionHandler:", .{ objc.YES, @as(?*anyopaque, null) });
+        return;
+    }
+    const app = objc.msg(objc.Object, objc.class("NSApplication"), "sharedApplication", .{});
+    const window = objc.msg(?objc.Object, app, "keyWindow", .{}) orelse return;
     objc.msg(void, printing(wv, null), "runOperationModalForWindow:delegate:didRunSelector:contextInfo:", .{
         window, @as(?objc.Object, null), @as(?objc.SEL, null), @as(?*anyopaque, null),
     });
@@ -114,6 +140,11 @@ pub fn printPage(b: *Browser) void {
 /// The frame's printing is outside the public framework, so it is asked
 /// for first, and a WebKit without it prints the whole page.
 pub fn printing(wv: objc.Object, frame: ?objc.Object) objc.Object {
+    if (comptime platform.is_ios) {
+        const pic = objc.msg(objc.Object, objc.class("UIPrintInteractionController"), "sharedPrintController", .{});
+        objc.msg(void, pic, "setPrintFormatter:", .{objc.msg(objc.Object, wv, "viewPrintFormatter", .{})});
+        return pic;
+    }
     const info = objc.msg(objc.Object, objc.class("NSPrintInfo"), "sharedPrintInfo", .{});
     objc.msg(void, info, "setHorizontalPagination:", .{@as(objc.NSInteger, 1)}); // NSPrintingPaginationModeFit
     objc.msg(void, info, "setHorizontallyCentered:", .{objc.NO});

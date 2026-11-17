@@ -4,6 +4,7 @@ const std = @import("std");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;
 const ui = nanoui.ui;
+const platform = @import("../../sys/platform.zig");
 const Browser = @import("../../model/browser.zig").Browser;
 const Kea = @import("../../app/kea.zig").Kea;
 const Palette = @import("../../design/palette.zig").Palette;
@@ -35,6 +36,20 @@ fn homeShort(c: *ui.Context, path: []const u8) []const u8 {
 /// loop (its modal loop must not run inside a frame).
 fn chooseFolder(ctx: ?*anyopaque) callconv(.c) void {
     const kea: *Kea = @ptrCast(@alignCast(ctx.?));
+    if (comptime platform.is_ios) {
+        const paths = (nanoui.dialog.open(kea.gpa, .{
+            .title = "Save Downloads To",
+            .files = false,
+            .directories = true,
+            .directory = kea.prefs.downloads,
+        }) catch null) orelse return;
+        defer nanoui.dialog.freePaths(kea.gpa, paths);
+        if (paths.len > 0) {
+            kea.prefs.set("downloads", paths[0]);
+            for (kea.browsers.items) |b| b.redraw();
+        }
+        return;
+    }
     const pool = objc.Pool.push();
     defer pool.pop();
     const panel = objc.msg(objc.Object, objc.class("NSOpenPanel"), "openPanel", .{});

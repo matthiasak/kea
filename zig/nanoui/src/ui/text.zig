@@ -28,7 +28,6 @@ pub const ellipsis = "…";
 const fits_head = std.math.maxInt(u32);
 const max_truncates = 4096;
 const max_layouts = 4096;
-const max_wraps = 2048;
 
 pub const Cut = struct {
     head: u32,
@@ -38,7 +37,15 @@ pub const Cut = struct {
 pub fn warmCaches(ts: *TextSystem) void {
     if (ts.layouts.capacity() < 8192) ts.layouts.ensureTotalCapacity(ts.gpa, 8192) catch {};
     if (ts.previous.capacity() < 8192) ts.previous.ensureTotalCapacity(ts.gpa, 8192) catch {};
-    if (ts.wraps.current.capacity() < 4096) ts.wraps.current.ensureTotalCapacity(ts.gpa, 4096) catch {};
+    ts.wraps.warm(ts.gpa);
+    if (ts.scratch_lines.capacity < 256) ts.scratch_lines.ensureTotalCapacity(ts.gpa, 256) catch {};
+    if (!portable) {
+        ts.cur_glyphs.warm(ts.gpa);
+        ts.prev_glyphs.warm(ts.gpa);
+        inline for (.{ &ts.scratch_bytes_of, &ts.scratch_glyphs, &ts.scratch_points, &ts.scratch_indices, &ts.scratch_out }) |l| {
+            if (l.capacity < 1024) l.ensureTotalCapacity(ts.gpa, 1024) catch {};
+        }
+    }
     if (ts.atlas.sprites.capacity() < 4096) ts.atlas.sprites.ensureTotalCapacity(ts.gpa, 4096) catch {};
     if (ts.atlas.symbols.capacity() < 512) ts.atlas.symbols.ensureTotalCapacity(ts.gpa, 512) catch {};
     if (!portable and ts.atlas.pixels.capacity < 16384) ts.atlas.pixels.ensureTotalCapacity(ts.gpa, 16384) catch {};

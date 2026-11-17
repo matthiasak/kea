@@ -16,6 +16,7 @@ const mark = @import("mark.zig");
 const tab_width = @import("tab_width.zig");
 const pin_grid = @import("pin_grid.zig");
 const tab_address = @import("tab_address.zig");
+const is_ios = @import("builtin").os.tag == .ios;
 
 const px = struct {
     fn v(n: f32) ui.Length {
@@ -114,13 +115,14 @@ pub fn pill(b: *Browser, c: *ui.Context, p: *const Palette, tab: *Tab, o: Option
         style.background = chip.background;
         style.shadow = chip.shadow;
     }
+    const vpad: f32 = if (is_ios) 10 else 6;
     if (is_pin) {
-        style.padding = .xy(7, 6);
+        style.padding = .xy(if (is_ios) 11 else 7, vpad);
     } else if (small) {
-        style.padding = .{ .top = 6, .bottom = 6 };
+        style.padding = .{ .top = vpad, .bottom = vpad };
         style.justify = .center;
     } else {
-        style.padding = .{ .left = 11, .right = if (edit) 11 else 7, .top = 6, .bottom = 6 };
+        style.padding = .{ .left = 11, .right = if (edit) 11 else 7, .top = vpad, .bottom = vpad };
         style.gap = 6;
     }
     const i = c.open(style, null);
@@ -208,7 +210,7 @@ fn squareContent(b: *Browser, c: *ui.Context, p: *const Palette, tab: *Tab, colo
 fn compactContent(b: *Browser, c: *ui.Context, p: *const Palette, tab: *Tab, live: bool, hovered: bool) bool {
     _ = c.open(.{ .width = px(16), .height = px(16), .align_items = .center, .justify = .center }, null);
     defer c.end();
-    const crossed = live and hovered;
+    const crossed = live and (hovered or is_ios);
     if (!crossed) {
         if (tab.loading) {
             ring.ring(c, 10);
@@ -259,12 +261,13 @@ fn titledContent(b: *Browser, c: *ui.Context, p: *const Palette, tab: *Tab, live
     // the page is still coming, never both.
     const slot = c.open(.{ .width = px(15), .height = px(15) }, null);
     defer c.end();
-    const ring_o = motion.quickTo(c, pill_id, 4, if (tab.loading and !hovered) 1 else 0);
+    const show_close = if (is_ios) (live and !tab.loading) else hovered;
+    const ring_o = motion.quickTo(c, pill_id, 4, if (tab.loading and !show_close) 1 else 0);
     if (ring_o > 0.001) {
         _ = c.open(.{ .absolute = true, .width = px(15), .height = px(15), .align_items = .center, .justify = .center, .opacity = ring_o }, null);
         ring.ring(c, 10);
         c.end();
     }
     _ = slot;
-    return controls.closeDisc(c, p, hovered, controls.close_zone).clicked;
+    return controls.closeDisc(c, p, show_close, controls.close_zone).clicked;
 }

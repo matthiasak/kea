@@ -10,6 +10,7 @@ const objc = @import("nanoui").objc;
 const urlsession = @import("../sys/urlsession.zig");
 const dispatch = @import("../sys/dispatch.zig");
 const Parts = @import("../data/url.zig").Parts;
+const platform = @import("../sys/platform.zig");
 
 pub const Refused = error{ NotAnID, Download, Empty, NotCrx, UnsignedOrWrong, Unpack };
 
@@ -225,10 +226,12 @@ const Fields = struct {
     }
 };
 
-const SecExternalFormatOpenSSL: u32 = 1;
-const SecExternalItemTypePublicKey: u32 = 2;
+extern "c" const kSecAttrKeyType: objc.Object;
+extern "c" const kSecAttrKeyTypeRSA: objc.Object;
+extern "c" const kSecAttrKeyClass: objc.Object;
+extern "c" const kSecAttrKeyClassPublic: objc.Object;
 extern "c" const kSecKeyAlgorithmRSASignatureMessagePKCS1v15SHA256: objc.Object;
-extern "c" fn SecItemImport(data: objc.Object, name: ?objc.Object, format: *u32, item_type: *u32, flags: u32, params: ?*const anyopaque, keychain: ?*anyopaque, out: *?objc.Object) i32;
+extern "c" fn SecKeyCreateWithData(keyData: objc.Object, attributes: objc.Object, err: ?*?objc.Object) ?objc.Object;
 extern "c" fn SecKeyVerifySignature(key: objc.Object, alg: objc.Object, data: objc.Object, signature: objc.Object, err: ?*?objc.Object) u8;
 extern "c" fn CFRelease(cf: objc.Object) void;
 
@@ -239,14 +242,12 @@ fn nsData(b: []const u8) objc.Object {
 /// An RSA public key as Chrome writes it (SubjectPublicKeyInfo DER),
 /// checked against a PKCS#1 v1.5 SHA-256 signature.
 fn verify(spki: []const u8, signature: []const u8, message: objc.Object) bool {
-    var format = SecExternalFormatOpenSSL;
-    var kind = SecExternalItemTypePublicKey;
-    var items: ?objc.Object = null;
-    if (SecItemImport(nsData(spki), null, &format, &kind, 0, null, null, &items) != 0) return false;
-    const list = items orelse return false;
-    defer CFRelease(list);
-    if (objc.msg(objc.NSUInteger, list, "count", .{}) == 0) return false;
-    const key = objc.msg(objc.Object, list, "objectAtIndex:", .{@as(objc.NSUInteger, 0)});
+    var keys = [_]objc.Object{ kSecAttrKeyType, kSecAttrKeyClass };
+    var vals = [_]objc.Object{ kSecAttrKeyTypeRSA, kSecAttrKeyClassPublic };
+    const attrs = objc.msg(objc.Object, objc.class("NSDictionary"), "dictionaryWithObjects:forKeys:count:", .{ &vals, &keys, @as(objc.NSUInteger, 2) });
+    const key = SecKeyCreateWithData(nsData(spki), attrs, null) orelse
+        (if (spki.len > 24) SecKeyCreateWithData(nsData(spki[24..]), attrs, null) else null) orelse return false;
+    defer CFRelease(key);
     return SecKeyVerifySignature(key, kSecKeyAlgorithmRSASignatureMessagePKCS1v15SHA256, message, nsData(signature), null) != 0;
 }
 
@@ -289,6 +290,7 @@ pub fn verifiedZip(gpa: std.mem.Allocator, crx: []const u8, ext_id: []const u8) 
 
 /// Runs /usr/bin/ditto with `args`; true when it exited 0.
 pub fn ditto(args: []const []const u8) bool {
+    if (comptime platform.is_ios) return false;
     const pool = objc.Pool.push();
     defer pool.pop();
     const list = objc.msg(objc.Object, objc.class("NSMutableArray"), "array", .{});
@@ -304,7 +306,7 @@ pub fn ditto(args: []const []const u8) bool {
 
 /// Unpacks a zip into `folder`, which is replaced whole. Safe off the main
 /// thread; `gpa` unused (Foundation does the work).
-pub fn unpack(_: std.mem.Allocator, zip: []const u8, folder: []const u8) !void {
+pub fn unpack(gpa: std.mem.Allocator, zip: []const u8, folder: []const u8) !void {
     const pool = objc.Pool.push();
     defer pool.pop();
     const files = objc.msg(objc.Object, objc.class("NSFileManager"), "defaultManager", .{});
@@ -313,12 +315,17 @@ pub fn unpack(_: std.mem.Allocator, zip: []const u8, folder: []const u8) !void {
     const scratch = objc.msg(objc.Object, tmp, "stringByAppendingPathComponent:", .{objc.msg(objc.Object, objc.nsString("kea-crx-"), "stringByAppendingString:", .{uuid})});
     if (!objc.msg(objc.BOOL, files, "createDirectoryAtPath:withIntermediateDirectories:attributes:error:", .{ scratch, true, @as(?objc.Object, null), @as(?*anyopaque, null) })) return error.Unpack;
     defer _ = objc.msg(objc.BOOL, files, "removeItemAtPath:error:", .{ scratch, @as(?*anyopaque, null) });
-    const archive = objc.msg(objc.Object, scratch, "stringByAppendingPathComponent:", .{objc.nsString("x.zip")});
-    if (!objc.msg(objc.BOOL, nsData(zip), "writeToFile:atomically:", .{ archive, false })) return error.Unpack;
     const out = objc.msg(objc.Object, scratch, "stringByAppendingPathComponent:", .{objc.nsString("out")});
     const manifest = objc.msg(objc.Object, out, "stringByAppendingPathComponent:", .{objc.nsString("manifest.json")});
-    if (!ditto(&.{ "-x", "-k", objc.fromNSString(archive), objc.fromNSString(out) }) or
-        !objc.msg(objc.BOOL, files, "fileExistsAtPath:", .{manifest})) return error.Unpack;
+    if (comptime platform.is_ios) {
+        @import("../sys/zip_extract.zig").extractBytes(gpa, zip, objc.fromNSString(out)) catch return error.Unpack;
+        if (!objc.msg(objc.BOOL, files, "fileExistsAtPath:", .{manifest})) return error.Unpack;
+    } else {
+        const archive = objc.msg(objc.Object, scratch, "stringByAppendingPathComponent:", .{objc.nsString("x.zip")});
+        if (!objc.msg(objc.BOOL, nsData(zip), "writeToFile:atomically:", .{ archive, false })) return error.Unpack;
+        if (!ditto(&.{ "-x", "-k", objc.fromNSString(archive), objc.fromNSString(out) }) or
+            !objc.msg(objc.BOOL, files, "fileExistsAtPath:", .{manifest})) return error.Unpack;
+    }
     // `ditto` keeps a symbolic link as a link, and the shim rewrites the
     // pages a package ships: a link would have that land wherever it points.
     const carried = objc.msg(objc.Object, files, "enumeratorAtPath:", .{out});

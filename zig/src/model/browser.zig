@@ -3,6 +3,7 @@ const std = @import("std");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;
 const ui = nanoui.ui;
+const platform = @import("../sys/platform.zig");
 const Kea = @import("../app/kea.zig").Kea;
 const Store = @import("../data/store.zig").Store;
 const Prefs = @import("../data/prefs.zig").Prefs;
@@ -505,15 +506,24 @@ pub const Browser = struct {
         self.gpa.destroy(self);
     }
 
+    pub fn attachSurface(self: *Browser, s: *nanoui.Surface) !void {
+        if (self.stage_host != null) return;
+        const sh = try StageHost.create(self.gpa, s);
+        sh.on_rects_ctx = self;
+        sh.on_rects = onStageRects;
+        self.stage_host = sh;
+        s.keys_released = .{ .ctx = self, .func = @import("../app/browsers.zig").keysReleased };
+        self.syncStageHost();
+    }
+    pub fn ensureStageHost(self: *Browser) void {
+        if (comptime platform.is_ios) if (self.stage_host == null) if (self.window) |w| if (!w.closed) if (w.surface) |s| self.attachSurface(s) catch {};
+    }
+
     pub fn bindWindow(self: *Browser, w: *nanoui.Window) !void {
         self.window = w;
-        self.lights = try Lights.keep(self.gpa, w.nswindow, self.prefs);
+        if (comptime !platform.is_ios) self.lights = try Lights.keep(self.gpa, w.nswindow, self.prefs);
         if (w.surface) |s| {
-            const sh = try StageHost.create(self.gpa, s);
-            sh.on_rects_ctx = self;
-            sh.on_rects = onStageRects;
-            self.stage_host = sh;
-            self.syncStageHost();
+            try self.attachSurface(s);
             s.frame();
         }
     }

@@ -26,6 +26,20 @@ fn titles(a: std.mem.Allocator, nodes: []const Bookmark) ![]const u8 {
     return out.items;
 }
 
+/// Each run's category as the list reads: "-" for the unsorted, "/" for a folder.
+fn runs(a: std.mem.Allocator, nodes: []const Bookmark) ![]const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    var last: []const u8 = "";
+    for (nodes) |b| {
+        const c: []const u8 = if (b.isFolder()) "/" else b.category orelse "-";
+        if (std.mem.eql(u8, c, last)) continue;
+        if (last.len > 0) try out.append(a, ',');
+        try out.appendSlice(a, c);
+        last = c;
+    }
+    return out.items;
+}
+
 const World = struct {
     temp: Temp,
     store: Store,
@@ -202,4 +216,130 @@ test "an empty list takes another browser's at the top" {
     defer gpa.free(top);
     try std.testing.expectEqualStrings("Safari", top);
     try std.testing.expect(m.roots[0].id.eql(id(30)));
+}
+
+test "categories round-trip through bookmarks.json as written, the unsorted without a key" {
+    var w: World = undefined;
+    try w.open();
+    defer w.close();
+    const flat = [_]Bookmark{
+        .{ .id = id(40), .title = "Magnesium", .url = "https://health.example/mg", .category = "Health & Supplements" },
+        .{ .id = id(41), .title = "BPC-157", .url = "https://peptides.example/bpc", .category = "Peptides & Longevity" },
+        .{ .id = id(42), .title = "Attention", .url = "https://arxiv.org/abs/1706.03762", .category = "AI/ML Research" },
+        .{ .id = id(43), .title = "RISC-V", .url = "https://riscv.org/", .category = "EE \"Chip\" Engineering — 設計" },
+        .{ .id = id(44), .title = "Loose", .url = "https://loose.example/" },
+        .{ .id = id(45), .title = "Stray", .url = "https://stray.example/" },
+    };
+    w.marks.replace(&flat);
+    w.store.disk.drain();
+    const saved = w.store.readFile(Bookmarks.file).?;
+    defer gpa.free(saved);
+    try std.testing.expect(std.mem.indexOf(u8, saved, "\"url\":\"https://health.example/mg\",\"category\":\"Health & Supplements\"}") != null);
+    try std.testing.expect(std.mem.indexOf(u8, saved, "\"category\":\"Peptides & Longevity\"}") != null);
+    try std.testing.expect(std.mem.indexOf(u8, saved, "\"category\":\"AI/ML Research\"}") != null);
+    try std.testing.expect(std.mem.indexOf(u8, saved, "\"category\":\"EE \\\"Chip\\\" Engineering") != null);
+    // One key for each filed site; an unsorted one ends at its address, with no key and no null.
+    try std.testing.expectEqual(@as(usize, 4), std.mem.count(u8, saved, "\"category\":"));
+    try std.testing.expect(std.mem.indexOf(u8, saved, "\"title\":\"Loose\",\"url\":\"https://loose.example/\"}") != null);
+    try std.testing.expect(std.mem.indexOf(u8, saved, "\"title\":\"Stray\",\"url\":\"https://stray.example/\"}") != null);
+    try std.testing.expect(std.mem.indexOf(u8, saved, "null") == null);
+    // As at the next launch: every category byte for byte, the unsorted still without one.
+    var again = Bookmarks.init(gpa, &w.store);
+    defer again.deinit();
+    try std.testing.expectEqual(flat.len, again.roots.len);
+    for (flat, again.roots) |want, got| {
+        try std.testing.expect(got.id.eql(want.id));
+        if (want.category) |c| try std.testing.expectEqualStrings(c, got.category.?) else try std.testing.expect(got.category == null);
+    }
+    try std.testing.expectEqual(@as(usize, 4), Bookmarks.cat.countCategories(again.roots));
+    // Cleared by hand: its key goes too.
+    Bookmarks.cat.setCategory(&w.marks, id(41), null);
+    w.store.disk.drain();
+    const cleared = w.store.readFile(Bookmarks.file).?;
+    defer gpa.free(cleared);
+    try std.testing.expectEqual(@as(usize, 3), std.mem.count(u8, cleared, "\"category\":"));
+    try std.testing.expect(std.mem.indexOf(u8, cleared, "null") == null);
+}
+
+test "union files a site kept unsorted under the other side's category, without a second copy" {
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const remote = [_]Bookmark{
+        .{ .id = id(50), .title = "BPC-157", .url = "https://peptides.example/bpc" },
+        .{ .id = id(51), .title = "Zig", .url = "https://ziglang.org/", .category = "Dev" },
+        .{ .id = id(52), .title = "Loose", .url = "https://loose.example/" },
+    };
+    const local = [_]Bookmark{
+        .{ .id = id(53), .title = "BPC-157 dosing", .url = "https://peptides.example/bpc", .category = "Peptides & Longevity" },
+        .{ .id = id(54), .title = "Zig home", .url = "https://ziglang.org/", .category = "Languages" },
+        .{ .id = id(55), .title = "Loose too", .url = "https://loose.example/" },
+        .{ .id = id(56), .title = "Magnesium", .url = "https://health.example/mg", .category = "Health & Supplements" },
+    };
+    const merged = try Bookmarks.@"union"(a, &remote, &local);
+    // Three already here and one new, each where it was: no address twice.
+    try std.testing.expectEqual(@as(usize, 4), merged.len);
+    try std.testing.expectEqual(@as(usize, 4), Bookmarks.count(merged));
+    // The one already here keeps its id and name, and takes the category.
+    try std.testing.expect(merged[0].id.eql(id(50)));
+    try std.testing.expectEqualStrings("BPC-157", merged[0].title);
+    try std.testing.expectEqualStrings("Peptides & Longevity", merged[0].category.?);
+    // Filed on this side already: its own category stays. Unsorted on both: still unsorted.
+    try std.testing.expect(merged[1].id.eql(id(51)));
+    try std.testing.expectEqualStrings("Dev", merged[1].category.?);
+    try std.testing.expect(merged[2].id.eql(id(52)) and merged[2].category == null);
+    try std.testing.expect(merged[3].id.eql(id(56)));
+    try std.testing.expectEqualStrings("Health & Supplements", merged[3].category.?);
+    // What was merged is as it was.
+    try std.testing.expect(remote[0].category == null);
+}
+
+test "sorting a categorized top level sorts inside each category and keeps the categories in order" {
+    var w: World = undefined;
+    try w.open();
+    defer w.close();
+    const m = &w.marks;
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const health = "Health & Supplements";
+    const peptides = "Peptides & Longevity";
+    const housing = "Housing Search";
+    var held = [_]Bookmark{
+        .{ .id = id(71), .title = "Zebra", .url = "https://a.example/zebra" },
+        .{ .id = id(72), .title = "Aardvark", .url = "https://z.example/aardvark" },
+    };
+    const flat = [_]Bookmark{
+        .{ .id = id(60), .title = "Zinc", .url = "https://www.a-labs.example/zinc", .category = health },
+        .{ .id = id(61), .title = "Magnesium", .url = "https://c-labs.example/mg", .category = health },
+        .{ .id = id(62), .title = "Ashwagandha", .url = "https://b-labs.example/ash", .category = health },
+        .{ .id = id(63), .title = "TB-500", .url = "https://alpha.example/tb", .category = peptides },
+        .{ .id = id(64), .title = "Ipamorelin", .url = "https://peptides.example/ipa", .category = peptides },
+        .{ .id = id(65), .title = "BPC-157", .url = "https://peptides.example/bpc", .category = peptides },
+        .{ .id = id(66), .title = "Zillow", .url = "https://homes.example/z", .category = housing },
+        .{ .id = id(67), .title = "Apartments", .url = "https://rent.example/a", .category = housing },
+        .{ .id = id(70), .title = "Reading", .children = &held },
+        .{ .id = id(68), .title = "Yak", .url = "https://b.example/yak" },
+        .{ .id = id(69), .title = "Bee", .url = "https://y.example/bee" },
+    };
+    m.replace(&flat);
+    const order = health ++ "," ++ peptides ++ "," ++ housing ++ ",/,-";
+    try std.testing.expectEqualStrings(order, try runs(a, m.roots));
+    m.sort(null, .name);
+    try std.testing.expectEqualStrings("Ashwagandha,Magnesium,Zinc,BPC-157,Ipamorelin,TB-500,Apartments,Zillow,Reading,Bee,Yak", try titles(a, m.roots));
+    try std.testing.expectEqualStrings(order, try runs(a, m.roots));
+    // By site, www aside, then by name on one site.
+    m.sort(null, .site);
+    try std.testing.expectEqualStrings("Zinc,Ashwagandha,Magnesium,TB-500,BPC-157,Ipamorelin,Zillow,Apartments,Reading,Yak,Bee", try titles(a, m.roots));
+    try std.testing.expectEqualStrings(order, try runs(a, m.roots));
+    // No site left its category, the folder is where it was with what it held, and sorting again changes nothing.
+    for (flat) |b| try std.testing.expect(Bookmarks.cat.optEq(b.category, m.bookmark(b.id).?.category));
+    try std.testing.expectEqualStrings("Zebra,Aardvark", try titles(a, m.bookmark(id(70)).?.children.?));
+    const rev = m.revision;
+    m.sort(null, .site);
+    try std.testing.expectEqual(rev, m.revision);
+    // Nothing filed: folders first, as ever.
+    m.replace(&.{ flat[9], flat[8], flat[10] });
+    m.sort(null, .name);
+    try std.testing.expectEqualStrings("Reading,Bee,Yak", try titles(a, m.roots));
 }

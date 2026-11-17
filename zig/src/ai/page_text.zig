@@ -19,8 +19,8 @@ const pdf_text = @import("pdf_text.zig");
 
 pub const script = @embedFile("js/page.js");
 
-/// About 6,000 tokens: the start and the end of a longer page.
-pub const limit = 24_000;
+/// Up to ~150,000 tokens before provider-specific shaping (`ubi.budget`).
+pub const limit = 600_000;
 
 pub const Read = struct {
     title: []const u8,

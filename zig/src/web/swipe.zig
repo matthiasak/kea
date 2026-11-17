@@ -9,6 +9,7 @@ const objc = nanoui.objc;
 const ui = nanoui.ui;
 const Page = @import("page_view.zig").Page;
 const Tab = @import("tab.zig").Tab;
+const platform = @import("../sys/platform.zig");
 
 /// A page in the list a held swipe shows.
 pub const Stop = struct { title: []u8, url: []u8 };
@@ -64,6 +65,7 @@ pub const phase_may_begin: objc.NSUInteger = 32;
 /// `Swipe.calm`: no rubber-banding at the top and bottom; left and right
 /// keep theirs (`_WKRectEdge` bits for CGRectMinXEdge and MaxXEdge).
 pub fn calm(wv: objc.Object) void {
+    if (comptime platform.is_ios) return;
     if (!objc.msg(objc.BOOL, wv, "respondsToSelector:", .{objc.sel("_setRubberBandingEnabled:")})) return;
     objc.msg(void, wv, "_setRubberBandingEnabled:", .{@as(objc.NSUInteger, (1 << 0) | (1 << 2))});
 }
@@ -79,6 +81,7 @@ fn clearList(s: *State) void {
 
 /// The view let go mid-gesture.
 pub fn reset(page: *Page) void {
+    if (comptime platform.is_ios) return;
     clearList(&page.swipe);
     page.swipe.held = false;
 }
@@ -91,6 +94,7 @@ const alignment: objc.NSInteger = 1;
 const level_change: objc.NSInteger = 2;
 
 pub fn wheel(page: *Page, wv: objc.Object, event: objc.Object) void {
+    if (comptime platform.is_ios) return;
     const s = &page.swipe;
     // Only a live trackpad gesture: not its glide, not a mouse wheel.
     if (objc.msg(objc.NSUInteger, event, "momentumPhase", .{}) != 0) return;
@@ -136,6 +140,7 @@ pub fn wheel(page: *Page, wv: objc.Object, event: objc.Object) void {
 
 /// `answer(free:)`: the page has said whether the swipe would scroll.
 pub fn answer(page: *Page, wv: objc.Object, yes: bool) void {
+    if (comptime platform.is_ios) return;
     const s = &page.swipe;
     if (s.axis == .down or s.spent) return;
     if (!yes) {

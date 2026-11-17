@@ -2,6 +2,7 @@
 const std = @import("std");
 const objc = @import("nanoui").objc;
 const f = @import("favicons.zig");
+const platform = @import("../sys/platform.zig");
 const t = std.testing;
 
 test "site keeps a port the scheme doesn't have anyway" {
@@ -68,14 +69,21 @@ test "square fits an icon into 64 pt and refuses other kinds" {
     try t.expectEqual(@as(u32, 128), std.mem.readInt(u32, png[20..24], .big));
 
     // The same picture as a TIFF: a kind a site's icon may not be.
-    const pool = objc.Pool.push();
-    defer pool.pop();
-    const data = objc.msg(objc.Object, objc.class("NSData"), "dataWithBytes:length:", .{ icon.ptr, @as(objc.NSUInteger, icon.len) });
-    const rep = objc.msg(objc.Object, objc.class("NSBitmapImageRep"), "imageRepWithData:", .{data});
-    const tiff = objc.msg(objc.Object, rep, "TIFFRepresentation", .{});
-    const n = objc.msg(objc.NSUInteger, tiff, "length", .{});
+    const cf_in = cg.CFDataCreate(null, icon.ptr, @intCast(icon.len)).?;
+    defer cg.CFRelease(cf_in);
+    const img_src = cg.CGImageSourceCreateWithData(cf_in, null).?;
+    defer cg.CFRelease(img_src);
+    const cg_img = cg.CGImageSourceCreateImageAtIndex(img_src, 0, null).?;
+    defer cg.CGImageRelease(cg_img);
+    const cf_tiff = cg.CFDataCreateMutable(null, 0).?;
+    defer cg.CFRelease(cf_tiff);
+    const dest = cg.CGImageDestinationCreateWithData(cf_tiff, @ptrCast(objc.nsString("public.tiff")), 1, null).?;
+    defer cg.CFRelease(dest);
+    cg.CGImageDestinationAddImage(dest, cg_img, null);
+    try t.expect(cg.CGImageDestinationFinalize(dest));
+    const n: usize = @intCast(cg.CFDataGetLength(cf_tiff));
     try t.expect(n > 60);
-    try t.expect(f.square(t.allocator, objc.msg([*]const u8, tiff, "bytes", .{})[0..n]) == null);
+    try t.expect(f.square(t.allocator, cg.CFDataGetBytePtr(cf_tiff)[0..n]) == null);
     try t.expect(f.square(t.allocator, "not a picture at all") == null);
 }
 
@@ -122,7 +130,7 @@ fn expectNear(got: u8, want: u8) !void {
 }
 
 test "square decodes 16px, 48px, multi-frame ico, 32x16 letterbox and SVG into 128x128" {
-    _ = objc.msg(objc.Object, objc.class("NSApplication"), "sharedApplication", .{});
+    if (comptime !platform.is_ios) _ = objc.msg(objc.Object, objc.class("NSApplication"), "sharedApplication", .{});
     // 16 px solid colour
     const p16 = try solidPng(t.allocator, 16, 16, 30, 140, 220);
     defer t.allocator.free(p16);
@@ -186,21 +194,23 @@ test "square decodes 16px, 48px, multi-frame ico, 32x16 letterbox and SVG into 1
     try expectNear(d_wide.px[mid + 1], 110);
     try expectNear(d_wide.px[mid + 0], 40);
 
-    // SVG fixture
-    const svg =
-        \\<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
-        \\  <rect width="64" height="64" fill="#ff0000"/>
-        \\</svg>
-    ;
-    const sq_svg = f.square(t.allocator, svg) orelse return error.NotDecoded;
-    defer t.allocator.free(sq_svg);
-    const d_svg = try decodeBgra(t.allocator, sq_svg);
-    defer t.allocator.free(d_svg.px);
-    try t.expectEqual(@as(usize, 128), d_svg.w);
-    try t.expectEqual(@as(usize, 128), d_svg.h);
-    try expectNear(d_svg.px[mid + 2], 255);
-    try expectNear(d_svg.px[mid + 1], 0);
-    try expectNear(d_svg.px[mid + 0], 0);
+    if (comptime !platform.is_ios) {
+        // SVG fixture
+        const svg =
+            \\<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+            \\  <rect width="64" height="64" fill="#ff0000"/>
+            \\</svg>
+        ;
+        const sq_svg = f.square(t.allocator, svg) orelse return error.NotDecoded;
+        defer t.allocator.free(sq_svg);
+        const d_svg = try decodeBgra(t.allocator, sq_svg);
+        defer t.allocator.free(d_svg.px);
+        try t.expectEqual(@as(usize, 128), d_svg.w);
+        try t.expectEqual(@as(usize, 128), d_svg.h);
+        try expectNear(d_svg.px[mid + 2], 255);
+        try expectNear(d_svg.px[mid + 1], 0);
+        try expectNear(d_svg.px[mid + 0], 0);
+    }
 }
 
 test "setDark flips cached and clears missing" {

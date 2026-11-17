@@ -12,6 +12,7 @@ const adapters = @import("adapters.zig");
 const answer = @import("shims/answer.zig");
 const appkit = @import("../sys/appkit.zig");
 const json = @import("../data/json.zig");
+const platform = @import("../sys/platform.zig");
 
 /// Where a popup hangs when its extension isn't pinned: the puzzle button.
 pub const menu_anchor = "__menu";
@@ -74,6 +75,7 @@ pub fn watchTouches(self: *Extensions) void {
 }
 
 fn touchedBy(self: *Extensions, event: objc.Object) ?objc.Object {
+    if (comptime platform.is_ios) return event;
     const pool = objc.Pool.push();
     defer pool.pop();
     const window = objc.msg(?objc.Object, event, "window", .{}) orelse return event;
@@ -164,6 +166,12 @@ pub fn popupURL(self: *Extensions, context: objc.Object) ?[]u8 {
 
 /// `take(_:)`: a keystroke an extension registered.
 pub fn take(self: *Extensions, event: objc.Object) bool {
+    if (comptime platform.is_ios) {
+        for (self.contexts.values()) |context| {
+            if (objc.msg(objc.BOOL, context, "performCommandForKeyCommand:", .{event})) return true;
+        }
+        return false;
+    }
     for (self.contexts.values()) |context| {
         if (objc.msg(?objc.Object, context, "commandForEvent:", .{event}) != null)
             return objc.msg(objc.BOOL, context, "performCommandForEvent:", .{event});

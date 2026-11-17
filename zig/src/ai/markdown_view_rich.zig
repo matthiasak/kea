@@ -39,13 +39,21 @@ pub fn cachedShown(x: *const Ctx, src: []const u8) inline_.Shown {
 }
 
 /// The width of `src` shown on one line in `style`.
-// ponytail: inline math counts as its source's width; lay it out if tables with formulas run wide.
 pub fn measure(x: *const Ctx, src: []const u8, style: ui.TextStyle) f32 {
     const shown = cachedShown(x, src);
     var st = style;
     st.mono_scale = theme.MdTheme.of(x.c.theme.dark, x.p).mono_scale;
     const spans = toSpans(x, shown) catch return x.c.text.width(shown.text, st);
-    return @ceil(width(x.c, shown.text, spans, st, 0, shown.text.len));
+    if (shown.maths.len == 0) return @ceil(width(x.c, shown.text, spans, st, 0, shown.text.len));
+    var total: f32 = 0;
+    var pos: usize = 0;
+    for (shown.maths) |m| {
+        if (m.start > pos) total += width(x.c, shown.text, spans, st, pos, m.start);
+        if (math_view.mathBox(x, m.tex, .text, st.size)) |b| total += b.w + 4;
+        pos = m.end;
+    }
+    if (pos < shown.text.len) total += width(x.c, shown.text, spans, st, pos, shown.text.len);
+    return @ceil(total);
 }
 
 /// The width of `str[from..to]` drawn with `spans` in `style`.

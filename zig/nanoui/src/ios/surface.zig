@@ -25,11 +25,16 @@ extern "c" const NSRunLoopCommonModes: objc.Object;
 
 /// UIEdgeInsets.
 const Insets = extern struct { top: f64, left: f64, bottom: f64, right: f64 };
+pub const KeysReleased = struct {
+    ctx: ?*anyopaque = null,
+    func: *const fn (ctx: ?*anyopaque, s: *Surface) void,
+};
 
 pub const Surface = struct {
     gpa: std.mem.Allocator,
     window: *Window,
     uiview: objc.Object,
+    host_view: ?objc.Object = null,
     renderer: metal.Renderer,
     text: text.TextSystem,
     ctx: Context,
@@ -47,6 +52,13 @@ pub const Surface = struct {
     in_frame: bool = false,
     theme_override: ?Theme = null,
     full_bleed: bool,
+    transparent: bool = false,
+    hosted: bool = false,
+    reduce_motion: bool = false,
+    last_focus: u64 = 0,
+    after_frame_ctx: ?*anyopaque = null,
+    after_frame: ?*const fn (ctx: ?*anyopaque, s: *Surface) bool = null,
+    keys_released: ?KeysReleased = null,
     /// What the system covers: the view's safe area insets, and the
     /// keyboard's height over the view's bottom.
     insets: types.Edges = .{},
@@ -85,11 +97,16 @@ pub const Surface = struct {
             .superclass = "UIView",
             .methods = &(view_methods ++ touch.methods ++ keys.view_methods),
         });
+        const host = objc.msg(objc.Object, objc.alloc("UIView"), "initWithFrame:", .{objc.CGRect{}});
+        objc.msg(void, host, "setAutoresizingMask:", .{@as(objc.NSUInteger, 2 | 16)});
         const uiview = objc.msg(objc.Object, objc.msg(objc.Object, view_class, "alloc", .{}), "initWithFrame:", .{objc.CGRect{}});
+        objc.msg(void, uiview, "setAutoresizingMask:", .{@as(objc.NSUInteger, 2 | 16)});
+        objc.msg(void, host, "addSubview:", .{uiview});
         self.* = .{
             .gpa = gpa,
             .window = window,
             .uiview = uiview,
+            .host_view = host,
             .renderer = renderer,
             .text = .init(gpa, renderer.device),
             .ctx = undefined,
@@ -136,6 +153,7 @@ pub const Surface = struct {
 
     fn free(self: *Surface) void {
         objc.msg(void, self.renderer.layer, "removeFromSuperlayer", .{});
+        if (self.host_view) |hv| objc.release(hv);
         objc.release(self.uiview);
         self.instances.deinit(self.gpa);
         self.keys.deinit(self.gpa);
@@ -185,6 +203,10 @@ pub const Surface = struct {
         return if (objc.msg(objc.NSInteger, traits, "userInterfaceStyle", .{}) == 2) Theme.dark_theme else Theme.light;
     }
 
+    pub fn visible(self: *const Surface) bool {
+        return self.window.isVisible() and self.window.app.active;
+    }
+
     fn canDraw(self: *Surface) bool {
         if (!self.window.app.active or self.size.w <= 0 or self.size.h <= 0) return false;
         return objc.msg(?objc.Object, self.uiview, "window", .{}) != null;
@@ -209,7 +231,8 @@ pub const Surface = struct {
         const now = cf.CACurrentMediaTime();
         const dt: f32 = if (self.last_frame_time > 0) @floatCast(@min(now - self.last_frame_time, 0.1)) else 1.0 / 60.0;
         self.last_frame_time = now;
-        c.reduced_motion = UIAccessibilityIsReduceMotionEnabled();
+        self.reduce_motion = UIAccessibilityIsReduceMotionEnabled();
+        c.reduced_motion = self.reduce_motion;
         c.safe_area = self.safeArea();
         const root: ui.View = if (self.full_bleed) self.view else .init(self, insideSafeArea);
         const r = frame_mod.run(c, root, &self.text, &self.instances, self.size, self.scale, self.theme(), dt, now - self.start_time);
@@ -221,9 +244,15 @@ pub const Surface = struct {
             if (self.depth == 0) self.free();
             return;
         }
+        if (self.after_frame) |af| _ = af(self.after_frame_ctx, self);
         self.renderer.syncImages(&self.text.images);
         self.renderer.textures = c.textures.items;
-        self.renderer.draw(self.instances.items, self.text.texture(), self.size, c.theme.background);
+        const clear = if (self.transparent) types.Color.transparent else c.theme.background;
+        self.renderer.draw(self.instances.items, self.text.texture(), self.size, clear);
+        if (self.last_focus != 0 and c.focus == 0 and c.selection.hit == null and !c.selection.dragging and c.selection.text.items.len == 0) {
+            if (self.keys_released) |kr| kr.func(kr.ctx, self);
+        }
+        self.last_focus = c.focus;
         pool.pop();
         self.in_frame = false;
         // No hover on a touch screen: what changed under a finger already drew.
@@ -237,13 +266,37 @@ pub const Surface = struct {
 
     /// The app's view inside the safe area; the view sees none left.
     fn insideSafeArea(self: *Surface, c: *Context) void {
+        const sa = self.safeArea();
+        const saved = c.size;
         const box = ui.div(c).column().sizeFull().safeArea();
         defer box.end();
         c.safe_area = .{};
-        defer c.safe_area = self.safeArea();
+        c.size = .{ .w = @max(0, saved.w - sa.left - sa.right), .h = @max(0, saved.h - sa.top - sa.bottom) };
+        defer {
+            c.size = saved;
+            c.safe_area = sa;
+        }
         self.view.build(self.view.ptr, c);
     }
 
+    pub fn setTransparent(self: *Surface, on: bool) void {
+        self.transparent = on;
+        self.ctx.transparent_root = on;
+        self.renderer.setOpaque(!on);
+        objc.msg(void, self.uiview, "setOpaque:", .{if (on) objc.NO else objc.YES});
+        if (on) objc.msg(void, self.uiview, "setBackgroundColor:", .{objc.msg(objc.Object, objc.class("UIColor"), "clearColor", .{})});
+    }
+
+    /// Places `stage_view` behind `self.uiview` inside `host_view` so
+    /// transparent viewport holes (`inStageHoleAt`) expose live `WKWebView` panes.
+    pub fn attachBackdrop(self: *Surface, stage_view: objc.Object) void {
+        const host = self.host_view orelse return;
+        objc.msg(void, stage_view, "setFrame:", .{objc.msg(objc.CGRect, host, "bounds", .{})});
+        objc.msg(void, stage_view, "setAutoresizingMask:", .{@as(objc.NSUInteger, 2 | 16)});
+        objc.msg(void, host, "insertSubview:belowSubview:", .{ stage_view, self.uiview });
+        self.setTransparent(true);
+        self.hosted = true;
+    }
     /// Draws a frame at the display's next refresh: for changes from
     /// outside the view (a process's output, a network reply).
     pub fn requestFrame(self: *Surface) void {
@@ -283,12 +336,21 @@ pub const Surface = struct {
 };
 
 const view_methods = [_]objc.Method{
+    .{ .name = "pointInside:withEvent:", .imp = &pointInside, .types = "B@:{CGPoint=dd}@" },
     .{ .name = "layoutSubviews", .imp = &layoutSubviews, .types = "v@:" },
     .{ .name = "safeAreaInsetsDidChange", .imp = &safeAreaChanged, .types = "v@:" },
     .{ .name = "traitCollectionDidChange:", .imp = &traitsChanged, .types = "v@:@" },
     .{ .name = "didMoveToWindow", .imp = &didMoveToWindow, .types = "v@:" },
     .{ .name = "displayLinkFired:", .imp = &displayLinkFired, .types = "v@:@" },
 };
+
+fn pointInside(obj: objc.Object, _: objc.SEL, point: objc.CGPoint, _: ?objc.Object) callconv(.c) objc.BOOL {
+    const s = objc.getZig(Surface, obj) orelse return objc.NO;
+    const p: types.Point = .{ .x = @floatCast(point.x), .y = @floatCast(point.y) };
+    if (p.x < 0 or p.y < 0 or p.x >= s.size.w or p.y >= s.size.h) return objc.NO;
+    if (s.transparent and s.ctx.inStageHoleAt(p)) return objc.NO;
+    return objc.YES;
+}
 
 fn layoutSubviews(obj: objc.Object, _: objc.SEL) callconv(.c) void {
     objc.msgSuper(void, obj, objc.class("UIView"), "layoutSubviews", .{});

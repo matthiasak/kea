@@ -6,6 +6,7 @@ const std = @import("std");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;
 const ui = nanoui.ui;
+const platform = @import("../sys/platform.zig");
 const MenuItem = nanoui.MenuItem;
 const Browser = @import("../model/browser.zig").Browser;
 const Kea = @import("../app/kea.zig").Kea;
@@ -49,9 +50,15 @@ fn show(b: *Browser, at: ui.Point, id: u64, build: Build) void {
     defer arena.deinit();
     const template = build(arena.allocator(), b, id) catch return;
     if (template.len == 0) return;
-    const m = nanoui.Menu.create(b.gpa, @import("../app/kea.zig").app_name, template) catch return;
-    defer m.destroy();
-    m.popup(s.nsview, at.x, at.y);
+    if (comptime platform.is_ios) {
+        const m = nanoui.Menu.create(b.gpa, template) catch return;
+        defer m.destroy();
+        if (platform.nativeView(s)) |v| m.popup(v, at.x, at.y);
+    } else {
+        const m = nanoui.Menu.create(b.gpa, @import("../app/kea.zig").app_name, template) catch return;
+        defer m.destroy();
+        m.popup(s.nsview, at.x, at.y);
+    }
 }
 
 /// The tab's menu where the pointer is.

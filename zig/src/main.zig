@@ -44,7 +44,7 @@ pub fn main(init: std.process.Init) !void {
     app.options.on_active = onActive;
     app.options.on_open_urls = links.onOpenURLs;
     app.options.on_continue_activity = links.onContinueActivity;
-    app.options.dock_menu = browsers.dockMenu(k);
+    if (comptime !@import("sys/platform.zig").is_ios) app.options.dock_menu = browsers.dockMenu(k);
     _ = try k.newBrowser();
     // The menu bar and the app's keys, for the window in front.
     menus.install(k);
@@ -69,6 +69,7 @@ fn onTerminate(ctx: ?*anyopaque) void {
 }
 
 fn shouldTerminate(ctx: ?*anyopaque) bool {
+    if (comptime @import("sys/platform.zig").is_ios) return true;
     const k: *kea.Kea = @ptrCast(@alignCast(ctx.?));
     if (!k.prefs.confirm_quit or k.opts.headless or k.opts.hidden) return true;
     const objc = nanoui.objc;
@@ -107,6 +108,7 @@ fn absolute(a: std.mem.Allocator, dir: []const u8) ![]const u8 {
 /// Another Kea already running (the same bundle id from another place): both would write the same folder, so this one says so and quits.
 /// A hidden run (a snapshot, a script) says so on stderr: no one would see the alert.
 fn refuseSecondCopy(hidden: bool) void {
+    if (comptime @import("sys/platform.zig").is_ios) return;
     const objc = nanoui.objc;
     const pool = objc.Pool.push();
     defer pool.pop();
@@ -158,6 +160,7 @@ test {
     _ = @import("model/address.zig");
     _ = @import("model/engine.zig");
     _ = @import("data/bookmarks.zig");
+    _ = @import("data/bookmarks_category.zig");
     _ = @import("data/site_search.zig");
     _ = @import("data/loot.zig");
     _ = @import("data/curtain.zig");
@@ -223,6 +226,7 @@ test {
     _ = @import("ai/ubi_chat.zig");
     _ = @import("passwords/passwords_tests.zig");
     _ = @import("ai/organize.zig");
+    _ = @import("ai/organize_auto.zig");
     _ = @import("ai/chat_sections.zig");
     _ = @import("ai/mermaid/mermaid.zig");
     _ = @import("ai/math/symbols.zig");
@@ -231,6 +235,8 @@ test {
     _ = @import("ai/markdown_view.zig");
     _ = @import("sys/keychain.zig");
     _ = @import("sys/urlsession.zig");
+    _ = @import("sys/platform.zig");
+    _ = @import("sys/zip_extract.zig");
     _ = @import("sync/core.zig");
     _ = @import("sync/sigv4.zig");
     _ = @import("sync/drop.zig");
@@ -252,4 +258,7 @@ test {
     _ = @import("ext/files.zig");
     _ = @import("ext/external.zig");
     _ = @import("import/tests.zig");
+    _ = @import("chrome/compact_bar.zig");
+    _ = @import("chrome/debug_hud.zig");
+    _ = @import("chrome/debug_hud_tools.zig");
 }

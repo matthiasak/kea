@@ -20,6 +20,7 @@ const scripts = @import("tab_scripts.zig");
 const state = @import("tab_state.zig");
 const dialogs = @import("dialogs.zig");
 const delegates = @import("delegates_nav.zig");
+const platform = @import("../sys/platform.zig");
 
 /// `touched`'s clock: each look a step after the last.
 var touches: u64 = 0;
@@ -231,8 +232,8 @@ pub const Tab = struct {
         if (self.configuration == null) self.configuration = config.configuration(self.kea, self.shy, self.data_store);
         @import("frame_rate.zig").apply(self.kea, objc.msg(objc.Object, self.configuration.?, "preferences", .{}));
         const view = page_view.make(self.configuration.?, self);
-        objc.msg(void, view, "setAllowsMagnification:", .{objc.YES});
-        objc.msg(void, view, "setAllowsBackForwardNavigationGestures:", .{objc.NO});
+        if (comptime !platform.is_ios) objc.msg(void, view, "setAllowsMagnification:", .{objc.YES});
+        objc.msg(void, view, "setAllowsBackForwardNavigationGestures:", .{if (comptime platform.is_ios) objc.YES else objc.NO});
         swipe.calm(view);
         if (objc.msg(objc.BOOL, view, "respondsToSelector:", .{objc.sel("setInspectable:")}))
             objc.msg(void, view, "setInspectable:", .{objc.YES});
@@ -557,7 +558,7 @@ pub fn open(wv: objc.Object, target: []const u8) void {
     if (objc.msg(objc.BOOL, nsurl, "isFileURL", .{})) {
         const folder = objc.msg(objc.Object, objc.msg(objc.Object, nsurl, "URLByDeletingLastPathComponent", .{}), "URLByStandardizingPath", .{});
         const path = objc.fromNSString(objc.msg(?objc.Object, folder, "path", .{}));
-        const home = objc.fromNSString(objc.msg(?objc.Object, objc.msg(objc.Object, objc.msg(objc.Object, objc.class("NSFileManager"), "defaultManager", .{}), "homeDirectoryForCurrentUser", .{}), "path", .{}));
+        const home = platform.homeDir();
         const parent = std.fs.path.dirname(path) orelse "";
         const too_wide = std.mem.eql(u8, path, home) or std.mem.eql(u8, path, "/") or std.mem.eql(u8, path, "/Users") or
             std.mem.eql(u8, path, "/Volumes") or std.mem.eql(u8, parent, "/Volumes");

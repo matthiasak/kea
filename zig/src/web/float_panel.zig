@@ -13,13 +13,11 @@ const Kea = @import("../app/kea.zig").Kea;
 const StageHost = @import("stage_host.zig").StageHost;
 const appkit = @import("../sys/appkit.zig");
 const moves = @import("float_moves.zig");
+const platform = @import("../sys/platform.zig");
 
 const gpa = std.heap.c_allocator;
 const CGRect = objc.CGRect;
 const CGPoint = objc.CGPoint;
-
-extern fn NSStringFromRect(rect: CGRect) objc.Object;
-extern fn NSRectFromString(string: objc.Object) CGRect;
 
 /// What the buttons and the ticker ask of the window whose video it is.
 pub const Calls = struct {
@@ -54,7 +52,7 @@ pub const Panel = struct {
     m: moves.State = .{},
 
     pub fn ns(p: *const Panel) objc.Object {
-        return p.window.nswindow;
+        return platform.nativeWindow(p.window).?;
     }
 
     pub fn hidden(p: *const Panel) bool {
@@ -63,6 +61,7 @@ pub const Panel = struct {
 
     /// Where the window is, or was before it was docked at a side.
     pub fn restingFrame(p: *const Panel) CGRect {
+        if (comptime platform.is_ios) return .{};
         var f = objc.msg(CGRect, p.ns(), "frame", .{});
         if (p.m.docked_from) |home| f.origin = home;
         return f;
@@ -87,6 +86,7 @@ pub const min_size: objc.CGSize = .{ .width = 260, .height = 146 };
 /// `lift`: the page out of its window and into a new floating one, at
 /// the place and size it had last if a screen still shows it.
 pub fn lift(kea: *Kea, page: objc.Object, calls: Calls) void {
+    if (comptime platform.is_ios) return;
     if (current != null) return;
     const app = kea.ui_app orelse return;
     const pool = objc.Pool.push();
@@ -167,6 +167,7 @@ pub fn lift(kea: *Kea, page: objc.Object, calls: Calls) void {
 /// Puts the page down and closes; whoever owns the page takes it back on
 /// their next layout.
 pub fn drop() void {
+    if (comptime platform.is_ios) return;
     const p = current orelse return;
     p.dropping = true;
     release(p);
@@ -175,6 +176,7 @@ pub fn drop() void {
 
 /// The page let go and everything listening stopped, once.
 fn release(p: *Panel) void {
+    if (comptime platform.is_ios) return;
     if (p.released) return;
     p.released = true;
     remember(p.kea, p.restingFrame());
@@ -212,7 +214,7 @@ fn tick(ctx: ?*anyopaque) callconv(.c) void {
     if (@intFromPtr(ctx) != ticks) return;
     const p = current orelse return;
     const host = p.host orelse return;
-    if (objc.msg(?objc.Object, p.page, "superview", .{}) != host.stage_view) return p.calls.close(p.calls.ctx);
+    if (host.boxOf(p.page) == null) return p.calls.close(p.calls.ctx);
     p.calls.progress(p.calls.ctx);
     objc.dispatchAfter(std.time.ns_per_s / 2, @ptrFromInt(ticks), tick);
 }
@@ -239,9 +241,13 @@ pub fn played(playing: bool) void {
 /// The window's last place and size, given back only while a screen still
 /// shows most of it (`float.frame`).
 fn remembered(kea: *Kea) ?CGRect {
+    if (comptime platform.is_ios) return null;
+    const M = struct {
+        extern fn NSRectFromString(string: objc.Object) CGRect;
+    };
     const text = kea.store.string("float.frame") orelse return null;
     defer kea.store.gpa.free(text);
-    const frame = NSRectFromString(objc.nsString(text));
+    const frame = M.NSRectFromString(objc.nsString(text));
     if (frame.size.width <= 100) return null;
     const screens = objc.msg(objc.Object, objc.class("NSScreen"), "screens", .{});
     for (0..objc.msg(objc.NSUInteger, screens, "count", .{})) |i| {
@@ -252,10 +258,14 @@ fn remembered(kea: *Kea) ?CGRect {
 }
 
 fn remember(kea: *Kea, frame: CGRect) void {
+    if (comptime platform.is_ios) return;
+    const M = struct {
+        extern fn NSStringFromRect(rect: CGRect) objc.Object;
+    };
     if (kea.opts.hidden) return;
     const pool = objc.Pool.push();
     defer pool.pop();
-    kea.store.setString("float.frame", objc.fromNSString(NSStringFromRect(frame)));
+    kea.store.setString("float.frame", objc.fromNSString(M.NSStringFromRect(frame)));
 }
 
 fn keep(self: objc.Object, _: objc.SEL, _: objc.Object) callconv(.c) void {
@@ -270,6 +280,7 @@ fn watchClass() objc.Class {
 /// A wash at the top and bottom, so white buttons hold against a bright
 /// frame of film without covering it; faded in with the controls.
 fn makeScrim() objc.Object {
+    if (comptime platform.is_ios) return objc.msg(objc.Object, objc.class("CALayer"), "new", .{});
     const layer = objc.msg(objc.Object, objc.class("CAGradientLayer"), "new", .{});
     const colors = objc.msg(objc.Object, objc.class("NSMutableArray"), "array", .{});
     for ([_]f64{ 0.45, 0, 0, 0.5 }) |a| {

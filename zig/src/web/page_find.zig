@@ -14,6 +14,7 @@ const objc = nanoui.objc;
 const Tab = @import("tab.zig").Tab;
 const Browser = @import("../model/browser.zig").Browser;
 const config = @import("config.zig");
+const platform = @import("../sys/platform.zig");
 
 const script = @embedFile("js/page_find_a.js") ++ "\n" ++ @embedFile("js/page_find_b.js");
 
@@ -126,12 +127,16 @@ pub fn closeFind(b: *Browser) void {
     if (!f.finding and f.needle.len == 0 and f.result == null) return;
     resetFindState(b);
     // The keyboard back to the page, as in Safari.
-    if (b.activeTab()) |t| if (t.web) |wv| if (objc.msg(?objc.Object, wv, "window", .{})) |window| {
-        const first = objc.msg(?objc.Object, window, "firstResponder", .{});
-        const nsview = if (b.window) |w| if (w.surface) |s| s.nsview else null else null;
-        if (first == null or first.? == window or first == nsview or objc.msg(objc.BOOL, first.?, "isKindOfClass:", .{objc.class("NSText")}))
-            _ = objc.msg(objc.BOOL, window, "makeFirstResponder:", .{wv});
-    };
+    if (comptime platform.is_ios) {
+        if (b.activeTab()) |t| if (t.web) |wv| { _ = objc.msg(objc.BOOL, wv, "becomeFirstResponder", .{}); };
+    } else {
+        if (b.activeTab()) |t| if (t.web) |wv| if (objc.msg(?objc.Object, wv, "window", .{})) |window| {
+            const first = objc.msg(?objc.Object, window, "firstResponder", .{});
+            const nsview = if (b.window) |w| if (w.surface) |s| s.nsview else null else null;
+            if (first == null or first.? == window or first == nsview or objc.msg(objc.BOOL, first.?, "isKindOfClass:", .{objc.class("NSText")}))
+                _ = objc.msg(objc.BOOL, window, "makeFirstResponder:", .{wv});
+        };
+    }
     b.redraw();
 }
 

@@ -6,6 +6,7 @@
 //! still reaches everyone who never touched it.
 const std = @import("std");
 const objc = @import("nanoui").objc;
+const platform = @import("../sys/platform.zig");
 const json = @import("../data/json.zig");
 const Store = @import("../data/store.zig").Store;
 const commands = @import("commands.zig");
@@ -91,6 +92,7 @@ pub const flag = struct {
 /// nothing held — ⇧⌘] is "]" with shift — and the top row by place. The
 /// key's text goes in `buf` when it isn't a name.
 pub fn fromEvent(event: objc.Object, buf: []u8) ?KeyCombo {
+    if (comptime platform.is_ios) return null;
     const code = objc.msg(u16, event, "keyCode", .{});
     const flags: u64 = objc.msg(objc.NSUInteger, event, "modifierFlags", .{});
     const m: Mods = .{

@@ -3,6 +3,7 @@
 const std = @import("std");
 const objc = @import("nanoui").objc;
 const CGRect = objc.CGRect;
+const platform = @import("../sys/platform.zig");
 
 /// `Extensions.mayOpen`: not javascript: (its code in whatever page the tab
 /// shows) nor a file on this Mac. Null: allowed; else the error's text.
@@ -60,6 +61,11 @@ pub fn onScreenOf(asked: CGRect, screens: []const CGRect, main: ?CGRect) CGRect 
 pub fn onScreen(asked: CGRect) CGRect {
     const pool = objc.Pool.push();
     defer pool.pop();
+    if (comptime platform.is_ios) {
+        const m = objc.msg(?objc.Object, objc.class("UIScreen"), "mainScreen", .{}) orelse return asked;
+        const b = objc.msg(CGRect, m, "bounds", .{});
+        return onScreenOf(asked, &.{b}, b);
+    }
     var buf: [16]CGRect = undefined;
     const list = objc.msg(objc.Object, objc.class("NSScreen"), "screens", .{});
     const n = @min(buf.len, objc.msg(objc.NSUInteger, list, "count", .{}));

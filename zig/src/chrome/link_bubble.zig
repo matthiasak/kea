@@ -7,6 +7,7 @@ const std = @import("std");
 const nanoui = @import("nanoui");
 const objc = nanoui.objc;
 const ui = nanoui.ui;
+const platform = @import("../sys/platform.zig");
 const Browser = @import("../model/browser.zig").Browser;
 const Tab = @import("../web/tab.zig").Tab;
 const Palette = @import("../design/palette.zig").Palette;
@@ -92,6 +93,7 @@ pub fn dismiss(b: *Browser) void {
 
 /// The pointer, asked once as the link changes rather than followed.
 fn pointerInCorner(page: objc.Object) bool {
+    if (comptime platform.is_ios) return false;
     const window = objc.msg(?objc.Object, page, "window", .{}) orelse return false;
     const at = objc.msg(objc.CGPoint, window, "mouseLocationOutsideOfEventStream", .{});
     const point = objc.msg(objc.CGPoint, page, "convertPoint:fromView:", .{ at, @as(?objc.Object, null) });
